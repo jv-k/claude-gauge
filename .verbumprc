@@ -1,0 +1,6 @@
+# VerBump config — gate every release on the test suite.
+#
+# VerBump runs PRE_BUMP_CMD after its own preflights and before it touches a
+# file; a failing test stops the release before any bump, commit or tag.
+# Skip it for one run with --no-hooks.
+PRE_BUMP_CMD="pnpm test"

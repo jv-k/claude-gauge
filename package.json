@@ -1,0 +1,17 @@
+{
+  "name": "claude-gauge",
+  "version": "0.0.0",
+  "description": "A status line and a token line for Claude Code: context, 5-hour and weekly usage with pace markers.",
+  "license": "MIT",
+  "author": "John Valai",
+  "repository": "github:jv-k/claude-gauge",
+  "private": true,
+  "packageManager": "pnpm@10.27.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "bump-release": "verbump --release --push origin"
+  }
+}
