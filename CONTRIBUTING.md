@@ -56,7 +56,7 @@ Name a branch after the type of change and its topic, for example `feat/instruct
 
 ## Commits
 
-Commit subjects follow [Conventional Commits](https://www.conventionalcommits.org): `type: summary`, or `type(scope): summary`. The types in use are `feat`, `fix`, `docs`, `refactor`, `test` and `chore`. A scope is optional.
+Commit subjects follow [Conventional Commits](https://www.conventionalcommits.org): `type: summary`, or `type(scope): summary`. The types in use are `feat`, `fix`, `docs`, `refactor` and `chore`. Use `test` for a change to the tests only. A scope is optional.
 
 Write the summary in the imperative and in lower case, with no full stop at the end. Name the effect a user sees, not the code you changed:
 
@@ -65,7 +65,7 @@ feat: show the status line where Claude Code runs none, with --latest
 fix: quote forwarded switches in the --instruct command
 ```
 
-Put one change in each commit. Close an issue from the commit body or the pull request body with `Closes #123`. For two issues, write `Closes #1, closes #2`, because GitHub reads `Closes #1, #2` as a close of #1 only.
+Put one change in each commit. Close an issue with `Closes #123` in the footer of the commit, or in the pull request body. For two issues, write `Closes #1, closes #2`, because GitHub reads `Closes #1, #2` as a close of #1 only.
 
 These subjects matter after the merge. Pull requests merge with a merge commit, so each commit lands in the history of `main`, and [VerBump](https://github.com/jv-k/VerBump) reads them to suggest the next version and to write the changelog.
 

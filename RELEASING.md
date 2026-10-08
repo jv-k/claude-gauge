@@ -1,6 +1,6 @@
 # Releasing claude-gauge
 
-A release puts a version on `main`. It sets the version in `package.json`, adds a section to `CHANGELOG.md`, tags the commit `vX.Y.Z`, and publishes a GitHub release for the tag. [VerBump](https://github.com/jv-k/VerBump) does all four in one run.
+A release puts a version on `main`. It sets the version in `package.json`, adds a section to `CHANGELOG.md` (the first release creates the file), tags the commit `vX.Y.Z`, and publishes a GitHub release for the tag. [VerBump](https://github.com/jv-k/VerBump) does all four in one run.
 
 The package is private, so a release publishes nothing to npm. Installs clone `main` and update with `git pull`, so users get a change when it merges into `main`, not when a release is cut.
 
@@ -42,7 +42,7 @@ pnpm bump-release
 4. It writes the version to `package.json`, adds the new section to `CHANGELOG.md`, commits, and tags `vX.Y.Z`.
 5. It pushes the commit and the tag to `origin`, and publishes the GitHub release with `gh`.
 
-To set the version yourself, give it to the task. For the first release, which goes from `0.0.0` to `1.0.0`:
+To set the version yourself, add `-v` to `pnpm bump-release`. For the first release, which goes from `0.0.0` to `1.0.0`:
 
 ```sh
 pnpm bump-release --dry-run -v 1.0.0

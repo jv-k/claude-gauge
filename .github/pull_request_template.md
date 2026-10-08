@@ -6,13 +6,23 @@
 
 ## Checklist
 
-- [ ] The base branch is the one CONTRIBUTING.md names: `integration/1.0` while 1.0 is in progress.
+- [ ] The base branch is the one that CONTRIBUTING.md names.
 - [ ] Commit subjects follow Conventional Commits, and each one names the effect a user sees.
 - [ ] `pnpm typecheck` and `pnpm test` pass.
 - [ ] A change to `src/` has a rebuilt `dist/` (`pnpm build`) in the same commit.
 - [ ] New behaviour has a test.
 - [ ] A new or changed part or switch updates the tables in `README.md`, and `INSTALL-WITH-CLAUDE.md` where it applies.
 - [ ] The runtime still has no dependencies.
+
+For a feature, also tick this item:
+
+- [ ] The pull request links the issue that it implements, and the acceptance criteria of that issue have tests.
+
+For a fix, also tick this item:
+
+- [ ] A test fails without the fix and passes with it.
+
+Delete the blocks that do not apply.
 
 ## Notes for the reviewer
 
