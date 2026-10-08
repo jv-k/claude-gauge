@@ -14,9 +14,9 @@ Done when you know the Node.js version is 18 or later, and whether git is presen
 
 - If `~/.claude/claude-gauge/.git` exists, update it: `git -C ~/.claude/claude-gauge pull`.
 - Otherwise, with git: `git clone https://github.com/jv-k/claude-gauge.git ~/.claude/claude-gauge`.
-- Without git, download `statusline.js`, `tokenline.js` and `README.md` into `~/.claude/claude-gauge/` with `curl -fsSL https://raw.githubusercontent.com/jv-k/claude-gauge/main/<file>`.
+- Without git, download `dist/statusline.js`, `dist/tokenline.js` and `README.md` into `~/.claude/claude-gauge/`, keeping the `dist/` folder, with `curl -fsSL https://raw.githubusercontent.com/jv-k/claude-gauge/main/<file>`.
 
-Done when `~/.claude/claude-gauge/statusline.js`, `tokenline.js` and `README.md` exist.
+Done when `~/.claude/claude-gauge/dist/statusline.js`, `dist/tokenline.js` and `README.md` exist.
 
 ## 3. Learn the switches
 
@@ -39,15 +39,15 @@ Done when every question that applies has an answer.
 
 ## 5. Build the commands and check they run
 
-Build each command from the answers, for example `node ~/.claude/claude-gauge/statusline.js --show ctx,5h,7d`.
+Build each command from the answers, for example `node ~/.claude/claude-gauge/dist/statusline.js --show ctx,5h,7d`.
 
 Check the status line with a sample payload:
 
 ```sh
-echo '{"model":{"display_name":"Opus"},"workspace":{"current_dir":"'"$PWD"'"},"context_window":{"used_percentage":25}}' | node ~/.claude/claude-gauge/statusline.js <switches>
+echo '{"model":{"display_name":"Opus"},"workspace":{"current_dir":"'"$PWD"'"},"context_window":{"used_percentage":25}}' | node ~/.claude/claude-gauge/dist/statusline.js <switches>
 ```
 
-Check the token line on this session: `node ~/.claude/claude-gauge/tokenline.js --latest <switches>`.
+Check the token line on this session: `node ~/.claude/claude-gauge/dist/tokenline.js --latest <switches>`.
 
 Done when both commands print one line each.
 
@@ -56,7 +56,7 @@ Done when both commands print one line each.
 Read `~/.claude/settings.json` (treat a missing file as `{}`), and copy it to `~/.claude/settings.json.claude-gauge-bak` before you change it. Then merge with Edit, keeping every existing key:
 
 - **Status line:** set `statusLine` to `{ "type": "command", "command": "<status line command>" }`. If `statusLine` already holds a different command, show it to the user and replace it only with their consent.
-- **Token line:** append `{ "hooks": [ { "type": "command", "command": "<token line command>" } ] }` to the `hooks.Stop` array, creating `hooks` and `Stop` as needed. Keep the user's other hooks. If an entry already runs `claude-gauge/tokenline.js`, update that entry instead of adding a second one.
+- **Token line:** append `{ "hooks": [ { "type": "command", "command": "<token line command>" } ] }` to the `hooks.Stop` array, creating `hooks` and `Stop` as needed. Keep the user's other hooks. If an entry already runs `claude-gauge/dist/tokenline.js`, update that entry instead of adding a second one.
 
 Confirm the result parses: `node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" ~/.claude/settings.json`.
 
@@ -66,12 +66,12 @@ Done when settings.json parses and holds the entries the user chose, or the user
 
 ## 7. Add the SessionStart hooks (if chosen)
 
-For each bar the user wants in VS Code and the desktop app, append `{ "hooks": [ { "type": "command", "command": "<command>" } ] }` to the `hooks.SessionStart` array of `~/.claude/settings.json`, creating `hooks` and `SessionStart` as needed. The command is the bar's step 5 command with `--instruct` added, for example `node ~/.claude/claude-gauge/statusline.js --instruct --window 1m`. If an entry already runs that script with `--instruct`, update it instead of adding a second one. Keep the user's other hooks, and confirm the file parses as in step 6.
+For each bar the user wants in VS Code and the desktop app, append `{ "hooks": [ { "type": "command", "command": "<command>" } ] }` to the `hooks.SessionStart` array of `~/.claude/settings.json`, creating `hooks` and `SessionStart` as needed. The command is the bar's step 5 command with `--instruct` added, for example `node ~/.claude/claude-gauge/dist/statusline.js --instruct --window 1m`. If an entry already runs that script with `--instruct`, update it instead of adding a second one. Keep the user's other hooks, and confirm the file parses as in step 6.
 
 Check each hook:
 
 ```sh
-CLAUDE_CODE_ENTRYPOINT=claude-vscode node ~/.claude/claude-gauge/statusline.js --instruct <switches>
+CLAUDE_CODE_ENTRYPOINT=claude-vscode node ~/.claude/claude-gauge/dist/statusline.js --instruct <switches>
 ```
 
 prints an instruction that names the `--latest` command. The same command without the variable prints nothing.

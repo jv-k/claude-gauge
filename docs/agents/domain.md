@@ -19,8 +19,10 @@ This is a single-context repo:
 ├── docs/adr/
 │   ├── 0001-example-decision.md
 │   └── 0002-another-decision.md
-├── statusline.js
-└── tokenline.js
+├── src/
+│   ├── statusline.ts
+│   └── tokenline.ts
+└── dist/            # built by pnpm build, committed
 ```
 
 ## Use the glossary's vocabulary

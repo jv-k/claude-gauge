@@ -15,7 +15,7 @@ ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓
 12:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
 ```
 
-Both are single Node.js files with no dependencies, and both use the same parts: `│` between segments, short lowercase labels, and `▓░` bars. Switches choose what each line shows and how (see [Options](#options)). For example, `--show 5h,7d --segments 10` gives a status line with only your usage, in 10-cell bars:
+Both are TypeScript modules built to single Node.js files with no dependencies, and both use the same parts: `│` between segments, short lowercase labels, and `▓░` bars. Switches choose what each line shows and how (see [Options](#options)). For example, `--show 5h,7d --segments 10` gives a status line with only your usage, in 10-cell bars:
 
 ```text
 5h 9% ▓░░░┃░░░░░ → 14:10 │ 7d 41% ▓▓▓▓░░┃░░░ → 3d
@@ -135,7 +135,7 @@ Then add one or both bars to `~/.claude/settings.json`. If the file already has 
 {
   "statusLine": {
     "type": "command",
-    "command": "node ~/.claude/claude-gauge/statusline.js"
+    "command": "node ~/.claude/claude-gauge/dist/statusline.js"
   }
 }
 ```
@@ -148,7 +148,7 @@ Then add one or both bars to `~/.claude/settings.json`. If the file already has 
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "node ~/.claude/claude-gauge/tokenline.js" }
+          { "type": "command", "command": "node ~/.claude/claude-gauge/dist/tokenline.js" }
         ]
       }
     ]
@@ -158,12 +158,12 @@ Then add one or both bars to `~/.claude/settings.json`. If the file already has 
 
 Start a new Claude Code session to pick up the changes.
 
-To install without git, download the two files instead:
+To install without git, download the two built files instead:
 
 ```sh
-mkdir -p ~/.claude/claude-gauge
-curl -fsSL https://raw.githubusercontent.com/jv-k/claude-gauge/main/statusline.js -o ~/.claude/claude-gauge/statusline.js
-curl -fsSL https://raw.githubusercontent.com/jv-k/claude-gauge/main/tokenline.js -o ~/.claude/claude-gauge/tokenline.js
+mkdir -p ~/.claude/claude-gauge/dist
+curl -fsSL https://raw.githubusercontent.com/jv-k/claude-gauge/main/dist/statusline.js -o ~/.claude/claude-gauge/dist/statusline.js
+curl -fsSL https://raw.githubusercontent.com/jv-k/claude-gauge/main/dist/tokenline.js -o ~/.claude/claude-gauge/dist/tokenline.js
 ```
 
 ### In VS Code and the desktop app
@@ -178,8 +178,8 @@ For the second way, keep the settings entries above and add one hook per bar you
 ```json
 "hooks": {
   "SessionStart": [
-    { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/statusline.js --instruct" } ] },
-    { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/tokenline.js --instruct" } ] }
+    { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/dist/statusline.js --instruct" } ] },
+    { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/dist/tokenline.js --instruct" } ] }
   ]
 }
 ```
@@ -228,7 +228,7 @@ A row with nothing to show is left out, and a `--show` that names no known part 
 
 #### Examples
 
-Put the switches after the script in the `command` of your settings, for example `"command": "node ~/.claude/claude-gauge/statusline.js --show 5h,7d"`.
+Put the switches after the script in the `command` of your settings, for example `"command": "node ~/.claude/claude-gauge/dist/statusline.js --show 5h,7d"`.
 
 Only your usage, on one row:
 
@@ -271,7 +271,7 @@ Claude Code reruns a status line when something happens in the session, such as 
 ```json
 "statusLine": {
   "type": "command",
-  "command": "node ~/.claude/claude-gauge/statusline.js",
+  "command": "node ~/.claude/claude-gauge/dist/statusline.js",
   "refreshInterval": 60
 }
 ```
@@ -289,7 +289,7 @@ Claude Code reruns a status line when something happens in the session, such as 
 The transcript does not record the context window size, so without `--window` the token line assumes Claude Code's default of 200k, and 1M once the context grows past 200k. If you use a 1M-context model, say so, and the percentage is right from the start:
 
 ```json
-"command": "node ~/.claude/claude-gauge/tokenline.js --window 1m"
+"command": "node ~/.claude/claude-gauge/dist/tokenline.js --window 1m"
 ```
 
 Unknown switches and part names are ignored, so a typo never breaks your status line or your turn. If `--show` names no known part, the line shows every part.
@@ -311,13 +311,16 @@ rm -rf ~/.claude/claude-gauge
 ## Development
 
 ```sh
+pnpm install
 pnpm test
 ```
 
-The tests use Node's built-in test runner. To try the status line by hand, pipe it a sample of the JSON that Claude Code sends:
+Both lines are TypeScript modules in `src/`, built by `pnpm build` to the two self-contained Node.js files in `dist/` that the settings entries above run. `pnpm test` builds first, then runs the suites against the build with Node's built-in test runner; `pnpm typecheck` checks the sources without building. `dist/` is committed, so a clone works without a build: rebuild and commit it with any change to `src/`. [Bun](https://bun.sh) runs the sources directly, with the same output as the build: `bun src/statusline.ts`.
+
+To try the status line by hand, pipe it a sample of the JSON that Claude Code sends:
 
 ```sh
-echo '{"model":{"display_name":"Opus"},"workspace":{"current_dir":"'"$PWD"'"},"context_window":{"used_percentage":25}}' | node statusline.js
+echo '{"model":{"display_name":"Opus"},"workspace":{"current_dir":"'"$PWD"'"},"context_window":{"used_percentage":25}}' | node dist/statusline.js
 ```
 
 The full input format is in the [status line docs](https://code.claude.com/docs/en/statusline).
