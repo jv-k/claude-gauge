@@ -528,9 +528,13 @@ function latestTranscript(cwd) {
 // needs nothing.
 const INSTRUCT_HOSTS = ['claude-vscode', 'claude-desktop', 'claude-desktop-3p'];
 
+// A shell word: as is when plain, else in single quotes. ~ stays bare so the
+// shell expands a ~/ path.
+const shellWord = (s) => (/^[\w@%+=:,.\/~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
 function instruction(argv, { host, script }) {
   if (!INSTRUCT_HOSTS.includes(host)) return null;
-  const command = ['node', script, '--latest', ...argv.filter((a) => a !== '--instruct')].join(' ');
+  const command = ['node', script, '--latest', ...argv.filter((a) => a !== '--instruct')].map(shellWord).join(' ');
   return [
     '## Status line in replies',
     '',

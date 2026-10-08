@@ -93,6 +93,8 @@ test('--instruct prints the reply instruction in hosts without hook messages, an
   assert.match(text, /^## Token line in replies\n/);
   assert.match(text, /\n```sh\nnode ~\/\.claude\/claude-gauge\/tokenline\.js --latest --window=1m\n```\n/);
   assert.match(text, /Never guess the figures/);
+  const spaced = instruction(['--instruct', '--show', 'req, ctx', '--window', '1m'], { host: 'claude-vscode', script });
+  assert.match(spaced, /\nnode ~\/\.claude\/claude-gauge\/tokenline\.js --latest --show 'req, ctx' --window 1m\n/);
   assert.deepEqual(INSTRUCT_HOSTS, ['claude-vscode', 'claude-desktop', 'claude-desktop-3p']);
   for (const host of INSTRUCT_HOSTS) assert.ok(instruction(['--instruct'], { host, script }), host);
   for (const host of ['cli', 'sdk-ts', 'local-agent', 'jetbrains', '', undefined]) {

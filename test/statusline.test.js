@@ -283,6 +283,8 @@ test('--instruct prints the reply instruction in hosts without a status line, an
   assert.match(text, /last tool call .* verbatim .* one plain code block/);
   assert.match(text, /Never guess the figures/);
   assert.doesNotMatch(text, /--instruct/);
+  const spaced = instruction(['--instruct', '--show', '7d, 5h', '--segments=10', "it's"], { host: 'claude-vscode', script });
+  assert.match(spaced, /\nnode ~\/\.claude\/claude-gauge\/statusline\.js --latest --show '7d, 5h' --segments=10 'it'\\''s'\n/);
   assert.deepEqual(INSTRUCT_HOSTS, ['claude-vscode', 'claude-desktop', 'claude-desktop-3p']);
   for (const host of INSTRUCT_HOSTS) assert.ok(instruction(['--instruct'], { host, script }), host);
   for (const host of ['cli', 'sdk-ts', 'sdk-cli', 'local-agent', 'remote', 'jetbrains', '', undefined]) {
