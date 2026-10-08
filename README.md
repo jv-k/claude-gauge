@@ -21,6 +21,8 @@ Both are single Node.js files with no dependencies, and both use the same parts:
 5h 9% ▓░░░┃░░░░░ → 14:10 │ 7d 41% ▓▓▓▓░░┃░░░ → 3d
 ```
 
+The terminal CLI shows both bars by itself. In the VS Code extension and the desktop app, Claude can paste them into its replies instead (see [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app)).
+
 ## What the bars show
 
 ### Status line
@@ -115,7 +117,7 @@ Paste this into a Claude Code session:
 Install claude-gauge: clone https://github.com/jv-k/claude-gauge to ~/.claude/claude-gauge, then follow INSTALL-WITH-CLAUDE.md in it.
 ```
 
-Claude asks which bars and parts you want, checks that they run, backs up your settings and merges the new entries into them. To update later, ask the same again.
+Claude asks which bars and parts you want, checks that they run, backs up your settings and merges the new entries into them. If you also use the VS Code extension or the desktop app, it adds the instruction that pastes the bars into its replies there. To update later, ask the same again.
 
 ### By hand
 
@@ -164,22 +166,44 @@ curl -fsSL https://raw.githubusercontent.com/jv-k/claude-gauge/main/statusline.j
 curl -fsSL https://raw.githubusercontent.com/jv-k/claude-gauge/main/tokenline.js -o ~/.claude/claude-gauge/tokenline.js
 ```
 
-### Where the bars appear
+### In VS Code and the desktop app
 
-Claude Code shows a custom status line in the terminal CLI. At the time of writing, the VS Code extension and the desktop app do not show one. To get the status line in VS Code, run `claude` in its integrated terminal.
+Claude Code runs a custom status line and shows Stop hook messages only in the terminal CLI. At the time of writing, the VS Code extension and the desktop app show neither. You can still see both bars there in two ways:
 
-Where hook messages are not shown, Claude can paste the token line into its replies instead. Add this to `~/.claude/CLAUDE.md`:
+- **Run `claude` in VS Code's integrated terminal.** That is the terminal CLI, so both bars show as usual.
+- **Have Claude paste the bars into its replies.** Both scripts take `--latest`, which rebuilds the bars for the calling session from its transcript and prints them as plain text.
+
+For the second way, keep the settings entries above, and add this to `~/.claude/CLAUDE.md`:
 
 ```md
-## Token usage
+## Gauge in replies
 
-End every reply with the output of `node ~/.claude/claude-gauge/tokenline.js --latest`,
-run as the last tool call of the turn, pasted verbatim as a code block.
+End every reply with the claude-gauge bars. As the last tool calls of the turn, run:
+
+- `node ~/.claude/claude-gauge/statusline.js --latest`
+- `node ~/.claude/claude-gauge/tokenline.js --latest`
+
+Paste their output verbatim, in one plain code block, as the last thing in the reply. Skip a command that fails. Never guess the figures, and never reuse an earlier turn's output.
 ```
 
-`--latest` finds the calling session by the `CLAUDE_CODE_SESSION_ID` variable that Claude Code sets for the commands it runs.
+The reply in the VS Code panel then ends like this:
 
-The status line has the same mode. `node ~/.claude/claude-gauge/statusline.js --latest` rebuilds the rows for the calling session from its transcript, as plain text for pasting, and takes `--window` like the token line. The 5h and 7d figures come from the last time the status line ran in a terminal, which saves them; until then they show `~`. Add it to the CLAUDE.md instruction above, before the token line, to see both in the VS Code panel.
+```text
+ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
+11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main │ Opus 5.5 │ effort high
+12:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
+```
+
+Keep one line or both. Each takes its usual switches, such as `--show` and `--segments`. On a 1M-context model, add `--window 1m` to both, for the reason in [Token line options](#token-line-options). Each reply costs one or two short tool calls more.
+
+`--latest` finds the calling session by the `CLAUDE_CODE_SESSION_ID` variable, which Claude Code sets for the commands it runs. Without that variable, it takes the newest transcript of the current folder. It prints no colours, because a reply shows colour codes as junk.
+
+**What the status line can rebuild.** A transcript holds less than the input Claude Code sends a status line, so with `--latest`:
+
+- `ctx`, `model` and `effort` come from the session's last response. `duration` counts from the first entry in the transcript.
+- `time`, `dir`, `repo`, `branch` and `worktree` come from the clock and from git, as in the terminal.
+- `5h` and `7d` come from the last time the status line ran in a terminal, in any session. Claude Code sends usage figures only to a status line, so each terminal render saves them in `~/.claude/claude-gauge/.state/usage.json`. The figures are as recent as that render. Until a terminal render saves them, and after a window resets, the part shows `~`.
+- The other parts, such as `cost`, `lines`, `pr` and `cache`, have nothing to report, and stay out of their row.
 
 ## Options
 
@@ -196,6 +220,8 @@ Both scripts take switches on the command line, so you set them in the `command`
 | `--no-pace` | Drops the pace markers. |
 | `--no-reset` | Drops the reset times. |
 | `--12h` | Shows the `time` part and reset times on the 12-hour clock. Default: 24-hour. |
+| `--latest` | Prints the rows for the calling session from its transcript, as plain text, instead of reading Claude Code's input. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
+| `--window <size>` | With `--latest`: the context window size, for example `200k` or `1m`, as for the token line. |
 
 A row with nothing to show is left out, and a `--show` that names no known part adds no row.
 
@@ -256,7 +282,7 @@ Claude Code reruns a status line when something happens in the session, such as 
 | `--show <parts>` | The parts to show, in the order given, separated by commas. Parts: `time`, `req`, `out`, `cache`, `ctx`. Default: all of them, in that order. |
 | `--segments <5\|10>` | Cells in the context bar. Default: 5. Any other value gives 5. |
 | `--window <size>` | The context window size, for example `200k` or `1m`. |
-| `--latest` | Prints the line for the calling session, instead of reading a hook payload. |
+| `--latest` | Prints the line for the calling session, instead of reading a hook payload. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 
 The transcript does not record the context window size, so without `--window` the token line assumes Claude Code's default of 200k, and 1M once the context grows past 200k. If you use a 1M-context model, say so, and the percentage is right from the start:
 
@@ -274,7 +300,7 @@ git -C ~/.claude/claude-gauge pull
 
 ## Uninstall
 
-Remove the `statusLine` and `Stop` entries from `~/.claude/settings.json`, then delete the folder:
+Remove the `statusLine` and `Stop` entries from `~/.claude/settings.json`, and the gauge instruction from `~/.claude/CLAUDE.md` if you added one. Then delete the folder:
 
 ```sh
 rm -rf ~/.claude/claude-gauge
