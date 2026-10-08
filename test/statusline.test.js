@@ -272,3 +272,37 @@ test('--latest reads the repo and worktree from git, as the terminal payload has
   assert.equal(worktreeFromGitDir('/home/me/project/.git'), undefined);
   assert.equal(worktreeFromGitDir(''), undefined);
 });
+
+test('--instruct prints the reply instruction in hosts without a status line, and nothing elsewhere', () => {
+  const { instruction, INSTRUCT_HOSTS } = require('../statusline.js');
+  const script = '~/.claude/claude-gauge/statusline.js';
+  const args = ['--instruct', '--window', '1m', '--show', 'ctx,5h'];
+  const text = instruction(args, { host: 'claude-vscode', script });
+  assert.match(text, /^## Status line in replies\n/);
+  assert.match(text, /\n```sh\nnode ~\/\.claude\/claude-gauge\/statusline\.js --latest --window 1m --show ctx,5h\n```\n/);
+  assert.match(text, /last tool call .* verbatim .* one plain code block/);
+  assert.match(text, /Never guess the figures/);
+  assert.doesNotMatch(text, /--instruct/);
+  const spaced = instruction(['--instruct', '--show', '7d, 5h', '--segments=10', "it's"], { host: 'claude-vscode', script });
+  assert.match(spaced, /\nnode ~\/\.claude\/claude-gauge\/statusline\.js --latest --show '7d, 5h' --segments=10 'it'\\''s'\n/);
+  assert.deepEqual(INSTRUCT_HOSTS, ['claude-vscode', 'claude-desktop', 'claude-desktop-3p']);
+  for (const host of INSTRUCT_HOSTS) assert.ok(instruction(['--instruct'], { host, script }), host);
+  for (const host of ['cli', 'sdk-ts', 'sdk-cli', 'local-agent', 'remote', 'jetbrains', '', undefined]) {
+    assert.equal(instruction(['--instruct'], { host, script }), null, String(host));
+  }
+});
+
+test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () => {
+  const { execFileSync } = require('node:child_process');
+  const script = require('node:path').join(__dirname, '..', 'statusline.js');
+  const run = (host) =>
+    execFileSync(process.execPath, [script, '--instruct', '--window', '1m'], {
+      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: host },
+      input: '{"source":"startup"}',
+      encoding: 'utf8',
+    });
+  assert.equal(run('cli'), '');
+  const text = run('claude-desktop');
+  assert.match(text, /^## Status line in replies\n/);
+  assert.match(text, /statusline\.js --latest --window 1m\n/);
+});

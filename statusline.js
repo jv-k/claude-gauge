@@ -520,6 +520,38 @@ function latestTranscript(cwd) {
   return newest ? newest.f : null;
 }
 
+// --instruct: the SessionStart hook for hosts that show no status line. In
+// the VS Code extension and the desktop app it prints an instruction that has
+// Claude end each reply with it. In the terminal CLI, where it already shows,
+// it prints nothing. Claude Code names the host in CLAUDE_CODE_ENTRYPOINT,
+// which hooks inherit; an unknown or missing value counts as a host that
+// needs nothing.
+const INSTRUCT_HOSTS = ['claude-vscode', 'claude-desktop', 'claude-desktop-3p'];
+
+// A shell word: as is when plain, else in single quotes. ~ stays bare so the
+// shell expands a ~/ path.
+const shellWord = (s) => (/^[\w@%+=:,.\/~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+function instruction(argv, { host, script }) {
+  if (!INSTRUCT_HOSTS.includes(host)) return null;
+  const command = ['node', script, '--latest', ...argv.filter((a) => a !== '--instruct')].map(shellWord).join(' ');
+  return [
+    '## Status line in replies',
+    '',
+    "End every reply with the claude-gauge status line, as a copyable code block, so this panel shows what the terminal's status line does:",
+    '',
+    '```sh',
+    command,
+    '```',
+    '',
+    "Run it as the last tool call of the turn, then paste its rows verbatim as the final thing in the reply, in one plain code block. `ctx` is the context the most recent request carried in. Skip it only if the command fails. Never guess the figures, and never reuse an earlier turn's rows.",
+    '',
+  ].join('\n');
+}
+
+// This script's path as a hook command can name it: ~ for the home folder.
+const ownPath = () => process.argv[1].replace(new RegExp(`^${os.homedir()}(?=/)`), '~');
+
 module.exports = {
   render,
   parseArgs,
@@ -529,13 +561,18 @@ module.exports = {
   modelName,
   repoFromRemote,
   worktreeFromGitDir,
+  instruction,
+  INSTRUCT_HOSTS,
 };
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
   const config = parseArgs(argv);
   const nowMs = Date.now();
-  if (argv.includes('--latest')) {
+  if (argv.includes('--instruct')) {
+    const text = instruction(argv, { host: process.env.CLAUDE_CODE_ENTRYPOINT, script: ownPath() });
+    if (text) process.stdout.write(text);
+  } else if (argv.includes('--latest')) {
     const at = argv.findIndex((a) => a === '--window' || a.startsWith('--window='));
     const window = at < 0 ? undefined : argv[at].includes('=') ? argv[at].split('=')[1] : argv[at + 1];
     const transcript = latestTranscript(process.cwd());

@@ -85,3 +85,32 @@ test('assumes 200k, then 1M once the context passes it, unless told', () => {
   assert.equal(contextWindow(250000), 1000000);
   assert.equal(contextWindow(150000, '1m'), 1000000);
 });
+
+test('--instruct prints the reply instruction in hosts without hook messages, and nothing elsewhere', () => {
+  const { instruction, INSTRUCT_HOSTS } = require('../tokenline.js');
+  const script = '~/.claude/claude-gauge/tokenline.js';
+  const text = instruction(['--instruct', '--window=1m'], { host: 'claude-vscode', script });
+  assert.match(text, /^## Token line in replies\n/);
+  assert.match(text, /\n```sh\nnode ~\/\.claude\/claude-gauge\/tokenline\.js --latest --window=1m\n```\n/);
+  assert.match(text, /Never guess the figures/);
+  const spaced = instruction(['--instruct', '--show', 'req, ctx', '--window', '1m'], { host: 'claude-vscode', script });
+  assert.match(spaced, /\nnode ~\/\.claude\/claude-gauge\/tokenline\.js --latest --show 'req, ctx' --window 1m\n/);
+  assert.deepEqual(INSTRUCT_HOSTS, ['claude-vscode', 'claude-desktop', 'claude-desktop-3p']);
+  for (const host of INSTRUCT_HOSTS) assert.ok(instruction(['--instruct'], { host, script }), host);
+  for (const host of ['cli', 'sdk-ts', 'local-agent', 'jetbrains', '', undefined]) {
+    assert.equal(instruction(['--instruct'], { host, script }), null, String(host));
+  }
+});
+
+test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () => {
+  const { execFileSync } = require('node:child_process');
+  const script = require('node:path').join(__dirname, '..', 'tokenline.js');
+  const run = (host) =>
+    execFileSync(process.execPath, [script, '--instruct'], {
+      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: host },
+      input: '{"source":"startup"}',
+      encoding: 'utf8',
+    });
+  assert.equal(run('cli'), '');
+  assert.match(run('claude-vscode'), /^## Token line in replies\n[\s\S]*tokenline\.js --latest\n/);
+});

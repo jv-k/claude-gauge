@@ -31,7 +31,7 @@ Ask with one `AskUserQuestion` call, the recommended option first in each questi
 - **Which bars?** The status line, the token line, or both. Recommend both.
 - **Which status line layout?** Recommend the default two rows (no `--show`): `ctx,5h,7d` above `time,duration,repo,branch,model,effort`. Offer one row of usage only (`--show 5h,7d`), and a custom layout: each `--show` is one row, built from the parts in the README's two parts tables.
 - **Bar size?** 5 cells (the default) or 10 (`--segments 10`).
-- **Where should the token line appear?** As a Stop hook, it shows in the terminal CLI. In surfaces that do not show hook messages, such as the VS Code extension, you show it yourself through a `~/.claude/CLAUDE.md` instruction (step 7). Recommend the hook, plus the instruction when this session runs outside the terminal.
+- **Also in VS Code and the desktop app?** The VS Code extension and the desktop app show neither the status line nor hook messages. A SessionStart hook per bar, with `--instruct` (step 7), has you paste that bar at the end of each reply in those two hosts, and does nothing in the terminal CLI. Recommend it for every bar the user chose.
 
 Decide the context window yourself: if your own context window is 1M tokens, add `--window 1m` to the token line, so its percentage is right from the first turn.
 
@@ -64,20 +64,21 @@ Claude Code may refuse your edit to its own settings, for example under auto mod
 
 Done when settings.json parses and holds the entries the user chose, or the user has the JSON to merge.
 
-## 7. Add the CLAUDE.md instruction (if chosen)
+## 7. Add the SessionStart hooks (if chosen)
 
-Append this to `~/.claude/CLAUDE.md`, unless it already mentions `tokenline.js --latest`:
+For each bar the user wants in VS Code and the desktop app, append `{ "hooks": [ { "type": "command", "command": "<command>" } ] }` to the `hooks.SessionStart` array of `~/.claude/settings.json`, creating `hooks` and `SessionStart` as needed. The command is the bar's step 5 command with `--instruct` added, for example `node ~/.claude/claude-gauge/statusline.js --instruct --window 1m`. If an entry already runs that script with `--instruct`, update it instead of adding a second one. Keep the user's other hooks, and confirm the file parses as in step 6.
 
-```md
-## Token usage
+Check each hook:
 
-End every reply with the output of `node ~/.claude/claude-gauge/tokenline.js --latest <switches>`,
-run as the last tool call of the turn, pasted verbatim as a code block.
+```sh
+CLAUDE_CODE_ENTRYPOINT=claude-vscode node ~/.claude/claude-gauge/statusline.js --instruct <switches>
 ```
 
-Replace `<switches>` with the token line switches from step 5, or remove it.
+prints an instruction that names the `--latest` command. The same command without the variable prints nothing.
 
-Done when `~/.claude/CLAUDE.md` holds exactly one such instruction.
+If `~/.claude/CLAUDE.md` holds an older claude-gauge instruction that mentions `--latest`, tell the user the hook replaces it, and remove it with their consent.
+
+Done when settings.json holds one SessionStart entry per chosen bar, or the user has the JSON to merge.
 
 ## 8. Report
 
@@ -85,5 +86,5 @@ Tell the user, in a few lines:
 
 - what you installed, with each command;
 - that the changes take effect in a new Claude Code session;
-- that the status line shows in the terminal CLI, and in VS Code only when `claude` runs in its integrated terminal;
+- that the bars show in the terminal CLI, and, with the step 7 hooks, at the end of each reply in the VS Code extension and the desktop app;
 - where the settings backup is, and that `git -C ~/.claude/claude-gauge pull` updates claude-gauge.
