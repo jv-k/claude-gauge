@@ -55,8 +55,8 @@ Done when both commands print one line each.
 
 Read `~/.claude/settings.json` (treat a missing file as `{}`), and copy it to `~/.claude/settings.json.claude-gauge-bak` before you change it. Then merge with Edit, keeping every existing key:
 
-- **Status line:** set `statusLine` to `{ "type": "command", "command": "<status line command>" }`. If `statusLine` already holds a different command, show it to the user and replace it only with their consent.
-- **Token line:** append `{ "hooks": [ { "type": "command", "command": "<token line command>" } ] }` to the `hooks.Stop` array, creating `hooks` and `Stop` as needed. Keep the user's other hooks. If an entry already runs `claude-gauge/dist/tokenline.js`, update that entry instead of adding a second one.
+- **Status line:** set `statusLine` to `{ "type": "command", "command": "<status line command>" }`. If `statusLine` already runs `claude-gauge/statusline.js` or `claude-gauge/dist/statusline.js`, replace that command. If it holds any other command, show it to the user and replace it only with their consent.
+- **Token line:** append `{ "hooks": [ { "type": "command", "command": "<token line command>" } ] }` to the `hooks.Stop` array, creating `hooks` and `Stop` as needed. Keep the user's other hooks. If an entry already runs `claude-gauge/tokenline.js` or `claude-gauge/dist/tokenline.js`, update that entry to the new command instead of adding a second one.
 
 Confirm the result parses: `node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" ~/.claude/settings.json`.
 
@@ -66,7 +66,7 @@ Done when settings.json parses and holds the entries the user chose, or the user
 
 ## 7. Add the SessionStart hooks (if chosen)
 
-For each bar the user wants in VS Code and the desktop app, append `{ "hooks": [ { "type": "command", "command": "<command>" } ] }` to the `hooks.SessionStart` array of `~/.claude/settings.json`, creating `hooks` and `SessionStart` as needed. The command is the bar's step 5 command with `--instruct` added, for example `node ~/.claude/claude-gauge/dist/statusline.js --instruct --window 1m`. If an entry already runs that script with `--instruct`, update it instead of adding a second one. Keep the user's other hooks, and confirm the file parses as in step 6.
+For each bar the user wants in VS Code and the desktop app, append `{ "hooks": [ { "type": "command", "command": "<command>" } ] }` to the `hooks.SessionStart` array of `~/.claude/settings.json`, creating `hooks` and `SessionStart` as needed. The command is the bar's step 5 command with `--instruct` added, for example `node ~/.claude/claude-gauge/dist/statusline.js --instruct --window 1m`. If an entry already runs that script with `--instruct`, at either the old or the `dist/` path, update it instead of adding a second one. Keep the user's other hooks, and confirm the file parses as in step 6.
 
 Check each hook:
 

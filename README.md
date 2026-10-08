@@ -300,6 +300,8 @@ Unknown switches and part names are ignored, so a typo never breaks your status 
 git -C ~/.claude/claude-gauge pull
 ```
 
+If your settings still name `~/.claude/claude-gauge/statusline.js` or `tokenline.js` from before the scripts moved into `dist/`, change each `command` to the `dist/` path shown in [By hand](#by-hand).
+
 ## Uninstall
 
 Remove the `statusLine`, `Stop` and `SessionStart` entries that name claude-gauge from `~/.claude/settings.json`. Then delete the folder:

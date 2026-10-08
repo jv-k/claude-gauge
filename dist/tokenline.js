@@ -163,9 +163,9 @@ function summarize(records, { now = new Date(), window, segments, show = PARTS }
     };
     // A show list handed in from JavaScript may name parts the registry lacks;
     // those render as nothing, like a part with nothing to show.
-    const builders = build;
+    const anyPart = build;
     // The same separator as the status line.
-    const line = show.map((part) => builders[part]?.() ?? '').filter(Boolean).join(' │ ');
+    const line = show.map((part) => anyPart[part]?.() ?? '').filter(Boolean).join(' │ ');
     return line || null;
 }
 function readRecords(transcriptPath) {

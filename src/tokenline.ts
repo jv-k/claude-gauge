@@ -172,7 +172,7 @@ interface SummarizeOptions {
   now?: Date;
   window?: string;
   segments?: number | string;
-  show?: readonly string[];
+  show?: readonly Part[];
 }
 
 // Builds the line from parsed transcript records; null when the run made no
@@ -203,9 +203,9 @@ function summarize(records: TranscriptRecord[], { now = new Date(), window, segm
   };
   // A show list handed in from JavaScript may name parts the registry lacks;
   // those render as nothing, like a part with nothing to show.
-  const builders: Partial<Record<string, () => string>> = build;
+  const anyPart: Partial<Record<string, () => string>> = build;
   // The same separator as the status line.
-  const line = show.map((part) => builders[part]?.() ?? '').filter(Boolean).join(' │ ');
+  const line = show.map((part) => anyPart[part]?.() ?? '').filter(Boolean).join(' │ ');
   return line || null;
 }
 

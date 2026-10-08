@@ -472,14 +472,14 @@ function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), 
   };
   // Rows handed in from JavaScript may name parts the registry lacks; those
   // render as nothing, like every other part with nothing to show.
-  const builders: Partial<Record<string, () => string>> = build;
+  const anyPart: Partial<Record<string, () => string>> = build;
 
   // One output line per row. A part with nothing to show drops out of its
   // row, and a row left with no parts drops out of the status line.
   return config.rows
     .map((row) =>
       row
-        .map((part) => builders[part]?.() ?? '')
+        .map((part) => anyPart[part]?.() ?? '')
         .filter(Boolean)
         .join(`${GRAY} │ ${RESET}`),
     )
