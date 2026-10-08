@@ -22,7 +22,7 @@ This is a single-context repo:
 ├── src/
 │   ├── statusline.ts
 │   └── tokenline.ts
-└── dist/            # built by pnpm build, committed
+└── dist/            # built by pnpm build; only main tracks it, committed there by CI
 ```
 
 ## Use the glossary's vocabulary

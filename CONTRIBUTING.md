@@ -29,7 +29,7 @@ pnpm test
 | --- | --- |
 | `src/statusline.ts` | The status line. |
 | `src/tokenline.ts` | The token line. |
-| `dist/` | The two built files that users' settings run. `pnpm build` writes them. Only `main` tracks them, and a workflow commits them there. |
+| `dist/` | The two built files that users' settings run. `pnpm build` writes them. The `dist` workflow commits them to `main`. |
 | `test/` | The suites, one per line, and the parity suite, which checks the README examples against the build. |
 | `README.md` | The user docs: every part and every switch. |
 | `INSTALL-WITH-CLAUDE.md` | The steps Claude follows when a user asks it to install claude-gauge. |
@@ -37,7 +37,7 @@ pnpm test
 
 ## Rules for a change
 
-- **Leave `dist/` out of the commit.** `dist/` is generated, and every branch except `main` ignores it. Commit the change to `src/` only. After each merge to `main`, the `dist` workflow builds `dist/` and commits it to `main` as a bot commit marked `[auto]`, so a clone of `main` runs the new code without a build. A check fails a pull request that adds or changes files in `dist/`.
+- **Leave `dist/` out of the commit.** `dist/` is generated. Commit the change to `src/` only. A branch cut from `integration/1.0` ignores `dist/`. `main` tracks it, so a branch cut from `main` tracks it too, and `pnpm build` or `pnpm test` changes it there: run `git restore dist/` before you commit. A check fails a pull request that adds or changes files in `dist/`. After each merge to `main`, the `dist` workflow builds and tests `dist/`, and commits it to `main` as a bot commit marked `[auto]`.
 - **Keep the runtime free of dependencies.** The two scripts use only Node.js built-ins. A status line that fails to load leaves the footer blank.
 - **Keep Node.js 18.** Use no API that Node.js 18 does not have. The `@types/node` version in `package.json` makes `pnpm typecheck` catch most of these.
 - **Ignore what is unknown.** An unknown switch or part name is ignored, so that a typo never breaks a user's status line or turn. New parsing keeps that rule.
