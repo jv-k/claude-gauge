@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { render, parseArgs } = require('../statusline.js');
+const { render, parseArgs } = require('../dist/statusline.js');
 
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
@@ -241,7 +241,7 @@ test('ctx shows the token count after the bar, from whatever Claude Code sends',
 });
 
 test('--latest rebuilds a payload from the transcript, with saved usage', () => {
-  const { payloadFromTranscript, modelName } = require('../statusline.js');
+  const { payloadFromTranscript, modelName } = require('../dist/statusline.js');
   assert.equal(modelName('claude-opus-5-5'), 'Opus 5.5');
   assert.equal(modelName('claude-haiku-4-5-20251001'), 'Haiku 4.5');
   const records = [
@@ -259,7 +259,7 @@ test('--latest rebuilds a payload from the transcript, with saved usage', () => 
 });
 
 test('--latest reads the repo and worktree from git, as the terminal payload has them', () => {
-  const { repoFromRemote, worktreeFromGitDir } = require('../statusline.js');
+  const { repoFromRemote, worktreeFromGitDir } = require('../dist/statusline.js');
   const repo = { host: 'github.com', owner: 'jv-k', name: 'claude-gauge' };
   assert.deepEqual(repoFromRemote('git@github.com:jv-k/claude-gauge.git'), repo);
   assert.deepEqual(repoFromRemote('https://github.com/jv-k/claude-gauge.git'), repo);
@@ -274,7 +274,7 @@ test('--latest reads the repo and worktree from git, as the terminal payload has
 });
 
 test('--instruct prints the reply instruction in hosts without a status line, and nothing elsewhere', () => {
-  const { instruction, INSTRUCT_HOSTS } = require('../statusline.js');
+  const { instruction, INSTRUCT_HOSTS } = require('../dist/statusline.js');
   const script = '~/.claude/claude-gauge/statusline.js';
   const args = ['--instruct', '--window', '1m', '--show', 'ctx,5h'];
   const text = instruction(args, { host: 'claude-vscode', script });
@@ -294,7 +294,7 @@ test('--instruct prints the reply instruction in hosts without a status line, an
 
 test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () => {
   const { execFileSync } = require('node:child_process');
-  const script = require('node:path').join(__dirname, '..', 'statusline.js');
+  const script = require('node:path').join(__dirname, '..', 'dist', 'statusline.js');
   const run = (host) =>
     execFileSync(process.execPath, [script, '--instruct', '--window', '1m'], {
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: host },

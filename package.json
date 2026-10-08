@@ -11,7 +11,13 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test test/",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm build && node --test test/",
     "bump-release": "verbump --release --push origin"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.130",
+    "typescript": "^5.9.3"
   }
 }

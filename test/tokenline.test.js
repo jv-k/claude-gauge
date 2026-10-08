@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { summarize, parseArgs, parseSize, contextWindow } = require('../tokenline.js');
+const { summarize, parseArgs, parseSize, contextWindow } = require('../dist/tokenline.js');
 
 const NOW = new Date(2026, 9, 7, 12, 5);
 
@@ -87,7 +87,7 @@ test('assumes 200k, then 1M once the context passes it, unless told', () => {
 });
 
 test('--instruct prints the reply instruction in hosts without hook messages, and nothing elsewhere', () => {
-  const { instruction, INSTRUCT_HOSTS } = require('../tokenline.js');
+  const { instruction, INSTRUCT_HOSTS } = require('../dist/tokenline.js');
   const script = '~/.claude/claude-gauge/tokenline.js';
   const text = instruction(['--instruct', '--window=1m'], { host: 'claude-vscode', script });
   assert.match(text, /^## Token line in replies\n/);
@@ -104,7 +104,7 @@ test('--instruct prints the reply instruction in hosts without hook messages, an
 
 test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () => {
   const { execFileSync } = require('node:child_process');
-  const script = require('node:path').join(__dirname, '..', 'tokenline.js');
+  const script = require('node:path').join(__dirname, '..', 'dist', 'tokenline.js');
   const run = (host) =>
     execFileSync(process.execPath, [script, '--instruct'], {
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: host },

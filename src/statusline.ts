@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-'use strict';
 
 // claude-gauge status line for the Claude Code terminal CLI.
 //
@@ -26,8 +25,10 @@
 //   --12h              12-hour clock for the time part and reset times
 //                      (default 24-hour)
 
-const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const PARTS = [
   'dir', 'branch', 'model', 'ctx', '5h', '7d',
@@ -35,16 +36,34 @@ const PARTS = [
   'effort', 'thinking', 'fast', 'style',
   'repo', 'worktree', 'pr', 'agent',
   'cache', 'spend', 'version',
-];
+] as const;
+
+type Part = (typeof PARTS)[number];
+
+const isPart = (name: string): name is Part => (PARTS as readonly string[]).includes(name);
 
 // The rows shown when no --show names a known part: the headroom figures on
 // top, the session around them below.
-const DEFAULT_ROWS = [
+const DEFAULT_ROWS: Part[][] = [
   ['ctx', '5h', '7d'],
   ['time', 'duration', 'repo', 'branch', 'model', 'effort'],
 ];
 
-const DEFAULTS = {
+interface Config {
+  rows: Part[][];
+  segments: number;
+  labels: boolean;
+  bars: boolean;
+  pace: boolean;
+  reset: boolean;
+  hour12: boolean;
+}
+
+// What parseArgs returns and render takes: any subset of the config, with
+// segments still the text of the switch.
+type Overrides = Partial<Omit<Config, 'segments'>> & { segments?: number | string };
+
+const DEFAULTS: Config = {
   rows: DEFAULT_ROWS,
   segments: 5,
   labels: true,
@@ -57,14 +76,14 @@ const DEFAULTS = {
 // Turns the switches into a config. Unknown switches and part names are
 // ignored, and a --show with no known part adds no row: a status line should
 // show something rather than fail.
-function parseArgs(argv) {
-  const config = {};
+function parseArgs(argv: string[]): Overrides {
+  const config: Overrides = {};
   for (let i = 0; i < argv.length; i++) {
     const [name, inline] = argv[i].split(/=(.*)/s);
     const value = () => inline ?? argv[++i] ?? '';
     switch (name) {
       case '--show': {
-        const parts = value().split(',').map((p) => p.trim()).filter((p) => PARTS.includes(p));
+        const parts = value().split(',').map((p) => p.trim()).filter(isPart);
         if (parts.length) (config.rows ??= []).push(parts);
         break;
       }
@@ -87,15 +106,15 @@ const GRAY = '\x1b[0;90m';
 const YELLOW = '\x1b[0;33m';
 const CYAN = '\x1b[0;36m';
 const RED = '\x1b[0;31m';
-const ansi256 = (n) => `\x1b[38;5;${n}m`;
+const ansi256 = (n: number) => `\x1b[38;5;${n}m`;
 
 // Ten usage levels: dark green at 0-10%, deep red above 90%.
 const LEVELS = [22, 28, 34, 100, 142, 178, 172, 166, 160, 124].map(ansi256);
-const levelColor = (pct) => LEVELS[Math.min(9, Math.max(0, Math.ceil(pct / 10) - 1))];
+const levelColor = (pct: number) => LEVELS[Math.min(9, Math.max(0, Math.ceil(pct / 10) - 1))];
 
 // Pace marker colours, by the usage the current rate projects for the end of
 // the window.
-const paceColor = (projected) =>
+const paceColor = (projected: number) =>
   projected < 50 ? ansi256(34) // comfortable
   : projected < 75 ? ansi256(37) // on track
   : projected < 90 ? ansi256(178) // warming
@@ -103,28 +122,85 @@ const paceColor = (projected) =>
   : projected < 120 ? ansi256(160) // critical
   : ansi256(135); // runaway
 
-const WINDOWS = {
+interface UsageWindow {
+  key: 'five_hour' | 'seven_day';
+  seconds: number;
+  minElapsed: number;
+}
+
+const WINDOWS: Record<'5h' | '7d', UsageWindow> = {
   '5h': { key: 'five_hour', seconds: 5 * 3600, minElapsed: 540 }, // 9 minutes
   '7d': { key: 'seven_day', seconds: 7 * 86400, minElapsed: 3024 }, // about 50 minutes
 };
 
+// The parts of Claude Code's payload the status line reads. Every field is
+// optional: the payload grows with Claude Code, and a part with nothing to
+// show drops out rather than fails.
+interface RateLimit {
+  used_percentage?: number | null;
+  resets_at?: number;
+  used_usd?: number | null;
+  limit_usd?: number | null;
+}
+
+interface StatusData {
+  cwd?: string;
+  version?: string;
+  session_name?: string;
+  fast_mode?: boolean;
+  model?: { display_name?: string };
+  workspace?: {
+    current_dir?: string;
+    repo?: { host?: string; owner?: string; name?: string };
+    git_worktree?: string;
+  };
+  worktree?: { name?: string };
+  context_window?: {
+    context_window_size?: number;
+    used_percentage?: number | null;
+    total_input_tokens?: number | null;
+    current_usage?: {
+      input_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    };
+  };
+  rate_limits?: {
+    five_hour?: RateLimit;
+    seven_day?: RateLimit;
+    spend_limit?: RateLimit;
+  };
+  cost?: {
+    total_duration_ms?: number;
+    total_cost_usd?: number;
+    total_lines_added?: number;
+    total_lines_removed?: number;
+  };
+  effort?: { level?: string };
+  thinking?: { enabled?: boolean };
+  output_style?: { name?: string };
+  pr?: { number?: number; kind?: string; review_state?: string; url?: string };
+  agent?: { name?: string };
+  prompt_cache?: { warm?: boolean; hit_ratio?: number | null };
+}
+
 // Compact counts, the same as the token line's: 1.69M, 427k, 6.5k, 830.
-const fmt = (n) =>
+const fmt = (n: number) =>
   n >= 1e6 ? `${(n / 1e6).toFixed(2)}M`
   : n >= 1e5 ? `${Math.round(n / 1e3)}k`
   : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k`
   : String(n);
 
 // Bars come in 5 or 10 cells; anything else falls back to 5.
-const segmentsOf = (value) => (Number(value) === 10 ? 10 : 5);
+const segmentsOf = (value: number | string | undefined) => (Number(value) === 10 ? 10 : 5);
 
 // The cells of a bar, filled in proportion to pct.
-const cellsFor = (pct, segments) => {
+const cellsFor = (pct: number, segments: number) => {
   const filled = Math.min(segments, Math.max(0, Math.round((pct * segments) / 100)));
   return '▓'.repeat(filled) + '░'.repeat(segments - filled);
 };
 
-function git(cwd, args) {
+function git(cwd: string, args: string[]): string {
   try {
     return execFileSync('git', args, {
       cwd,
@@ -137,12 +213,12 @@ function git(cwd, args) {
   }
 }
 
-const gitBranch = (cwd) => git(cwd, ['branch', '--show-current']);
+const gitBranch = (cwd: string) => git(cwd, ['branch', '--show-current']);
 
 // Reset times are rounded to the nearest minute, so 6:59:45 shows as 07:00.
-const resetDate = (epochSeconds) => new Date(Math.round(epochSeconds / 60) * 60 * 1000);
+const resetDate = (epochSeconds: number) => new Date(Math.round(epochSeconds / 60) * 60 * 1000);
 
-function formatTime(epochSeconds, config) {
+function formatTime(epochSeconds: number, config: Config): string {
   return resetDate(epochSeconds).toLocaleTimeString('en-GB', {
     hour: '2-digit',
     minute: '2-digit',
@@ -152,15 +228,22 @@ function formatTime(epochSeconds, config) {
 
 // The weekly window resets days away: show the calendar days until the
 // reset ("3d"), or the time when the reset falls today.
-function formatDaysOrTime(epochSeconds, config, nowMs) {
-  const midnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+function formatDaysOrTime(epochSeconds: number, config: Config, nowMs: number): string {
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const days = Math.round((midnight(resetDate(epochSeconds)) - midnight(new Date(nowMs))) / 86400000);
   return days > 0 ? `${days}d` : formatTime(epochSeconds, config);
 }
 
 // A usage bar. With a pace marker, ┃ replaces the cell where "now" falls in
 // the window, coloured by the projected end-of-window usage.
-function usageBar(pct, color, window, resetsAt, config, nowMs) {
+function usageBar(
+  pct: number,
+  color: string,
+  window: UsageWindow,
+  resetsAt: number | undefined,
+  config: Config,
+  nowMs: number,
+): string {
   const cells = cellsFor(pct, config.segments);
   const remaining = resetsAt ? resetsAt - nowMs / 1000 : 0;
   if (!config.pace || remaining <= 0 || remaining >= window.seconds) return ` ${cells}`;
@@ -175,7 +258,7 @@ function usageBar(pct, color, window, resetsAt, config, nowMs) {
 // The 5h or 7d part. rate_limits is present only for claude.ai Pro and Max
 // subscribers, after the first response of a session; "~" marks a window
 // Claude Code has not reported yet.
-function windowPart(name, data, config, nowMs) {
+function windowPart(name: '5h' | '7d', data: StatusData, config: Config, nowMs: number): string {
   const window = WINDOWS[name];
   const label = config.labels ? `${name} ` : '';
   const limit = data.rate_limits?.[window.key];
@@ -195,12 +278,12 @@ function windowPart(name, data, config, nowMs) {
 // The context in the token line's shape: ctx 43% ▓▓░░░ 86.0k. Both figures
 // count input only (fresh input plus cache writes and reads), as Claude
 // Code's used_percentage does.
-function contextPart(data, config) {
+function contextPart(data: StatusData, config: Config): string {
   const ctx = data.context_window;
   if (!ctx) return '';
   const u = ctx.current_usage;
   const size = ctx.context_window_size;
-  let tokens = u
+  let tokens: number | null = u
     ? (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
     : (ctx.total_input_tokens ?? null);
   const pct = ctx.used_percentage ?? (tokens != null && size ? (tokens * 100) / size : null);
@@ -215,14 +298,14 @@ function contextPart(data, config) {
 }
 
 // The current local time, on the same clock as the reset times.
-function timePart(config, nowMs) {
+function timePart(config: Config, nowMs: number): string {
   const time = new Date(nowMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: config.hour12 });
   return `${GRAY}${time}${RESET}`;
 }
 
 // A session's running time: 45s, 12m, 1h12m, 2d3h. A zero lower unit is
 // left off, so an hour on the dot reads 1h.
-function formatDuration(ms) {
+function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -233,14 +316,14 @@ function formatDuration(ms) {
   return h % 24 ? `${d}d${h % 24}h` : `${d}d`;
 }
 
-function durationPart(data) {
+function durationPart(data: StatusData): string {
   const ms = data.cost?.total_duration_ms;
   return ms != null ? `${GRAY}${formatDuration(ms)}${RESET}` : '';
 }
 
 // The session's estimated cost. Behind a spend limit it takes the usage
 // colour of the limit's percentage; otherwise it is plain metadata.
-function costPart(data) {
+function costPart(data: StatusData): string {
   const usd = data.cost?.total_cost_usd;
   if (usd == null) return '';
   const spent = data.rate_limits?.spend_limit?.used_percentage;
@@ -248,7 +331,7 @@ function costPart(data) {
   return `${color}$${usd.toFixed(2)}${RESET}`;
 }
 
-function linesPart(data) {
+function linesPart(data: StatusData): string {
   const added = data.cost?.total_lines_added;
   const removed = data.cost?.total_lines_removed;
   if (added == null && removed == null) return '';
@@ -256,7 +339,7 @@ function linesPart(data) {
 }
 
 // The session's custom name or AI-generated title, cut to 30 characters.
-function namePart(data) {
+function namePart(data: StatusData): string {
   const name = data.session_name;
   if (!name) return '';
   const shown = name.length > 30 ? `${name.slice(0, 29)}…` : name;
@@ -266,16 +349,16 @@ function namePart(data) {
 // Model state, in the model's yellow. effort is labelled because "high" on
 // its own could mean anything; thinking and fast are their own label and
 // show only when on; style shows only when it is not the default.
-function effortPart(data, config) {
+function effortPart(data: StatusData, config: Config): string {
   const level = data.effort?.level;
   return level ? `${YELLOW}${config.labels ? 'effort ' : ''}${level}${RESET}` : '';
 }
 
-const thinkingPart = (data) => (data.thinking?.enabled ? `${YELLOW}think${RESET}` : '');
+const thinkingPart = (data: StatusData) => (data.thinking?.enabled ? `${YELLOW}think${RESET}` : '');
 
-const fastPart = (data) => (data.fast_mode ? `${YELLOW}fast${RESET}` : '');
+const fastPart = (data: StatusData) => (data.fast_mode ? `${YELLOW}fast${RESET}` : '');
 
-function stylePart(data, config) {
+function stylePart(data: StatusData, config: Config): string {
   const name = data.output_style?.name;
   if (!name || name === 'default') return '';
   return `${GRAY}${config.labels ? 'style ' : ''}${name}${RESET}`;
@@ -284,7 +367,7 @@ function stylePart(data, config) {
 // The repository as owner/name from the origin remote. Without one (outside
 // git, or no origin) it falls back to the folder name, so a row that leads
 // with repo never loses its location.
-function repoPart(data, cwd) {
+function repoPart(data: StatusData, cwd: string): string {
   const repo = data.workspace?.repo;
   const shown = repo?.owner && repo?.name ? `${repo.owner}/${repo.name}` : path.basename(cwd);
   return `${GRAY}${shown}${RESET}`;
@@ -293,41 +376,41 @@ function repoPart(data, cwd) {
 // The linked git worktree the session is in, if any. workspace.git_worktree
 // covers every linked worktree; worktree.name only Claude Code's own
 // worktree sessions.
-const worktreeName = (data) => data.workspace?.git_worktree || data.worktree?.name || '';
+const worktreeName = (data: StatusData) => data.workspace?.git_worktree || data.worktree?.name || '';
 
 // The branch, followed by the worktree name inside a linked worktree.
-function branchPart(data, config, branch) {
+function branchPart(data: StatusData, config: Config, branch: string): string {
   if (!branch) return '';
   const wt = worktreeName(data);
   const inWorktree = wt ? ` (${config.labels ? 'wt ' : ''}${wt})` : '';
   return `${GREEN}⎇ ${branch}${inWorktree}${RESET}`;
 }
 
-function worktreePart(data, config) {
+function worktreePart(data: StatusData, config: Config): string {
   const wt = worktreeName(data);
   return wt ? `${GRAY}${config.labels ? 'wt ' : ''}${wt}${RESET}` : '';
 }
 
 // The branch's open pull request, coloured by its review state. A GitLab
 // merge request takes GitLab's ! prefix instead of #.
-const PR_COLORS = { approved: GREEN, pending: YELLOW, changes_requested: RED, draft: GRAY };
+const PR_COLORS: Record<string, string> = { approved: GREEN, pending: YELLOW, changes_requested: RED, draft: GRAY };
 
-function prPart(data) {
+function prPart(data: StatusData): string {
   const pr = data.pr;
   if (pr?.number == null) return '';
   const number = `${pr.kind === 'mr' ? '!' : '#'}${pr.number}`;
   const state = pr.review_state ? ` ${pr.review_state}` : '';
-  return `${PR_COLORS[pr.review_state] ?? GRAY}${number}${state}${RESET}`;
+  return `${PR_COLORS[pr.review_state ?? ''] ?? GRAY}${number}${state}${RESET}`;
 }
 
-function agentPart(data, config) {
+function agentPart(data: StatusData, config: Config): string {
   const name = data.agent?.name;
   return name ? `${GRAY}${config.labels ? 'agent ' : ''}${name}${RESET}` : '';
 }
 
 // The prompt cache's hit ratio and whether it is still warm. A high hit
 // ratio is good, so the colour follows the miss rate on the usage scale.
-function cachePart(data, config) {
+function cachePart(data: StatusData, config: Config): string {
   const cache = data.prompt_cache;
   if (!cache) return '';
   const label = config.labels ? 'cache ' : '';
@@ -340,7 +423,7 @@ function cachePart(data, config) {
 // The spend limit behind a Claude apps gateway: dollars when Claude Code has
 // them, which arrive a little after the percentage, and the percentage until
 // then.
-function spendPart(data, config) {
+function spendPart(data: StatusData, config: Config): string {
   const limit = data.rate_limits?.spend_limit;
   if (limit?.used_percentage == null) return '';
   const color = levelColor(Math.round(limit.used_percentage));
@@ -350,14 +433,20 @@ function spendPart(data, config) {
   return `${color}${config.labels ? 'spend ' : ''}${Math.round(limit.used_percentage)}%${RESET}`;
 }
 
-const versionPart = (data) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
+const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
 
-function render(data, { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch } = {}) {
-  const config = { ...DEFAULTS, ...overrides };
-  config.segments = segmentsOf(config.segments);
+interface RenderOptions {
+  config?: Overrides;
+  nowMs?: number;
+  branchOf?: (cwd: string) => string;
+}
+
+function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch }: RenderOptions = {}): string {
+  const merged = { ...DEFAULTS, ...overrides };
+  const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
 
-  const build = {
+  const build: Record<Part, () => string> = {
     dir: () => `${BLUE}${path.basename(cwd)}${RESET}`,
     branch: () => branchPart(data, config, branchOf(cwd)),
     model: () => (data.model?.display_name ? `${YELLOW}${data.model.display_name}${RESET}` : ''),
@@ -381,13 +470,16 @@ function render(data, { config: overrides = {}, nowMs = Date.now(), branchOf = g
     spend: () => spendPart(data, config),
     version: () => versionPart(data),
   };
+  // Rows handed in from JavaScript may name parts the registry lacks; those
+  // render as nothing, like every other part with nothing to show.
+  const anyPart: Partial<Record<string, () => string>> = build;
 
   // One output line per row. A part with nothing to show drops out of its
   // row, and a row left with no parts drops out of the status line.
   return config.rows
     .map((row) =>
       row
-        .map((part) => build[part]?.() ?? '')
+        .map((part) => anyPart[part]?.() ?? '')
         .filter(Boolean)
         .join(`${GRAY} │ ${RESET}`),
     )
@@ -399,14 +491,11 @@ function render(data, { config: overrides = {}, nowMs = Date.now(), branchOf = g
 // It rebuilds a payload from the session transcript, and takes the 5h and 7d
 // windows from the last terminal render, which saves them.
 
-const fs = require('node:fs');
-const os = require('node:os');
-
 const configDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const usageFile = () => path.join(configDir(), 'claude-gauge', '.state', 'usage.json');
 
 // Best effort: a failed save never breaks the status line.
-function saveUsage(data, nowMs) {
+function saveUsage(data: StatusData, nowMs: number): void {
   if (!data.rate_limits) return;
   try {
     fs.mkdirSync(path.dirname(usageFile()), { recursive: true });
@@ -417,9 +506,11 @@ function saveUsage(data, nowMs) {
 }
 
 // The saved windows, without any that have reset since they were saved.
-function loadUsage(nowMs) {
+function loadUsage(nowMs: number): StatusData['rate_limits'] | undefined {
   try {
-    const { rate_limits: saved } = JSON.parse(fs.readFileSync(usageFile(), 'utf8'));
+    const { rate_limits: saved } = JSON.parse(fs.readFileSync(usageFile(), 'utf8')) as {
+      rate_limits?: Record<string, RateLimit | undefined>;
+    };
     const live = Object.entries(saved ?? {}).filter(([, w]) => !w?.resets_at || w.resets_at * 1000 > nowMs);
     return live.length ? Object.fromEntries(live) : undefined;
   } catch {
@@ -428,7 +519,7 @@ function loadUsage(nowMs) {
 }
 
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
-function modelName(id) {
+function modelName(id: string | undefined): string | undefined {
   if (!id) return undefined;
   const parts = id.replace(/^claude-/, '').split('-').filter((p) => !/^\d{8}$/.test(p));
   const family = parts.shift();
@@ -436,26 +527,50 @@ function modelName(id) {
   return [family[0].toUpperCase() + family.slice(1), parts.join('.')].filter(Boolean).join(' ');
 }
 
+const SCALES: Record<string, number> = { '': 1, k: 1e3, m: 1e6 };
+
 // --window when given (200k, 1m, 1000000); else 200k, or 1M once past it.
-function windowSize(tokens, explicit) {
+function windowSize(tokens: number, explicit: string | undefined): number {
   const m = /^\s*(\d+(?:\.\d+)?)\s*([km]?)\s*$/i.exec(String(explicit ?? ''));
-  if (m) return Math.round(Number(m[1]) * { '': 1, k: 1e3, m: 1e6 }[m[2].toLowerCase()]);
+  if (m) return Math.round(Number(m[1]) * SCALES[m[2].toLowerCase()]);
   return tokens > 200e3 ? 1e6 : 200e3;
 }
 
+// A session transcript record, as far as the status line reads it.
+interface TranscriptRecord {
+  type?: string;
+  cwd?: string;
+  timestamp?: string;
+  isSidechain?: boolean;
+  effort?: string | { level?: string };
+  message?: {
+    model?: string;
+    usage?: {
+      input_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    };
+  };
+}
+
+interface TranscriptOptions {
+  nowMs?: number;
+  window?: string;
+  usage?: StatusData['rate_limits'];
+}
+
 // A status line payload rebuilt from transcript records.
-function payloadFromTranscript(records, { nowMs = Date.now(), window, usage } = {}) {
-  const data = {};
+function payloadFromTranscript(records: TranscriptRecord[], { nowMs = Date.now(), window, usage }: TranscriptOptions = {}): StatusData {
+  const data: StatusData = {};
   const cwd = [...records].reverse().find((r) => r.cwd)?.cwd;
   if (cwd) data.workspace = { current_dir: cwd };
-  const main = records.filter((r) => r.type === 'assistant' && !r.isSidechain && r.message?.usage);
-  const last = main[main.length - 1];
+  const last = records.filter((r) => r.type === 'assistant' && !r.isSidechain && r.message?.usage).at(-1);
   if (last) {
-    const u = last.message.usage;
+    const u = last.message?.usage ?? {};
     const tokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
     const size = windowSize(tokens, window);
     data.context_window = { context_window_size: size, used_percentage: (tokens * 100) / size, total_input_tokens: tokens };
-    data.model = { display_name: modelName(last.message.model) };
+    data.model = { display_name: modelName(last.message?.model) };
     const effort = typeof last.effort === 'string' ? last.effort : last.effort?.level;
     if (effort) data.effort = { level: effort };
   }
@@ -467,26 +582,26 @@ function payloadFromTranscript(records, { nowMs = Date.now(), window, usage } = 
 
 // A remote URL as { host, owner, name }, the shape Claude Code sends:
 // git@github.com:jv-k/claude-gauge.git, https://github.com/jv-k/claude-gauge.
-function repoFromRemote(url) {
+function repoFromRemote(url: string | undefined): { host: string; owner: string; name: string } | undefined {
   const m = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/](.+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url ?? '');
   return m ? { host: m[1], owner: m[2], name: m[3] } : undefined;
 }
 
 // The linked worktree's name, from its git dir: <common>/worktrees/<name>.
-function worktreeFromGitDir(gitDir) {
+function worktreeFromGitDir(gitDir: string | undefined): string | undefined {
   return gitDir && path.basename(path.dirname(gitDir)) === 'worktrees' ? path.basename(gitDir) : undefined;
 }
 
 // What Claude Code's payload says about the repository, read from git, so
 // repo and branch show as they do in the terminal.
-function gitWorkspace(cwd) {
+function gitWorkspace(cwd: string): NonNullable<StatusData['workspace']> {
   const repo = repoFromRemote(git(cwd, ['remote', 'get-url', 'origin']));
   const worktree = worktreeFromGitDir(git(cwd, ['rev-parse', '--absolute-git-dir']));
-  return { ...(repo && { repo }), ...(worktree && { git_worktree: worktree }) };
+  return { ...(repo ? { repo } : {}), ...(worktree ? { git_worktree: worktree } : {}) };
 }
 
-function readRecords(file) {
-  const records = [];
+function readRecords(file: string): TranscriptRecord[] {
+  const records: TranscriptRecord[] = [];
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     if (!line) continue;
     try {
@@ -500,7 +615,7 @@ function readRecords(file) {
 
 // The calling session's transcript, found by the id Claude Code exports to
 // the commands it runs; else the newest transcript of this folder.
-function latestTranscript(cwd) {
+function latestTranscript(cwd: string): string | null {
   const projects = path.join(configDir(), 'projects');
   if (!fs.existsSync(projects)) return null;
   const own = process.env.CLAUDE_CODE_SESSION_ID;
@@ -530,10 +645,10 @@ const INSTRUCT_HOSTS = ['claude-vscode', 'claude-desktop', 'claude-desktop-3p'];
 
 // A shell word: as is when plain, else in single quotes. ~ stays bare so the
 // shell expands a ~/ path.
-const shellWord = (s) => (/^[\w@%+=:,.\/~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+const shellWord = (s: string) => (/^[\w@%+=:,.\/~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
-function instruction(argv, { host, script }) {
-  if (!INSTRUCT_HOSTS.includes(host)) return null;
+function instruction(argv: string[], { host, script }: { host: string | undefined; script: string }): string | null {
+  if (host === undefined || !INSTRUCT_HOSTS.includes(host)) return null;
   const command = ['node', script, '--latest', ...argv.filter((a) => a !== '--instruct')].map(shellWord).join(' ');
   return [
     '## Status line in replies',
@@ -552,7 +667,7 @@ function instruction(argv, { host, script }) {
 // This script's path as a hook command can name it: ~ for the home folder.
 const ownPath = () => process.argv[1].replace(new RegExp(`^${os.homedir()}(?=/)`), '~');
 
-module.exports = {
+export {
   render,
   parseArgs,
   PARTS,
@@ -565,7 +680,15 @@ module.exports = {
   INSTRUCT_HOSTS,
 };
 
-if (require.main === module) {
+export type { StatusData, Config, Overrides, Part, TranscriptRecord };
+
+// Whether this file is the program, not a module another file loaded. Node
+// runs the compiled CommonJS, where require.main names the entry; Bun runs
+// this source as an ES module, where Bun.main does.
+declare const Bun: { main: string } | undefined;
+const isMain = (typeof require !== 'undefined' && require.main === module) || (typeof Bun !== 'undefined' && Bun.main === __filename);
+
+if (isMain) {
   const argv = process.argv.slice(2);
   const config = parseArgs(argv);
   const nowMs = Date.now();
@@ -578,14 +701,15 @@ if (require.main === module) {
     const transcript = latestTranscript(process.cwd());
     const records = transcript ? readRecords(transcript) : [];
     const data = payloadFromTranscript(records, { nowMs, window, usage: loadUsage(nowMs) });
-    if (data.workspace) Object.assign(data.workspace, gitWorkspace(data.workspace.current_dir));
+    const cwd = data.workspace?.current_dir;
+    if (data.workspace && cwd) Object.assign(data.workspace, gitWorkspace(cwd));
     // Plain text: it is pasted into a reply, where colour codes show as junk.
     process.stdout.write(render(data, { config, nowMs }).replace(/\x1b\[[0-9;]*m/g, '') + '\n');
   } else {
-    const chunks = [];
-    process.stdin.on('data', (c) => chunks.push(c));
+    const chunks: Buffer[] = [];
+    process.stdin.on('data', (c: Buffer) => chunks.push(c));
     process.stdin.on('end', () => {
-      let data = {};
+      let data: StatusData = {};
       try {
         data = JSON.parse(Buffer.concat(chunks).toString() || '{}');
       } catch {
