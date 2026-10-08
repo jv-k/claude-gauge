@@ -30,7 +30,7 @@ pnpm test
 | `src/statusline.ts` | The status line. |
 | `src/tokenline.ts` | The token line. |
 | `dist/` | The two built files that users' settings run. `pnpm build` writes them. The `dist` workflow commits them to `main`. |
-| `test/` | The suites, one per line, and the parity suite, which checks the README examples against the build. |
+| `test/` | The suites, one per line; the parity suite, which checks the README examples against the build; and the README sync suite, which checks the README's status line tables against the registry. |
 | `README.md` | The user docs: every part and every switch. |
 | `INSTALL-WITH-CLAUDE.md` | The steps Claude follows when a user asks it to install claude-gauge. |
 | `docs/agents/` | How agent skills use the issue tracker, the triage labels and the domain docs. |
@@ -43,7 +43,7 @@ pnpm test
 - **Ignore what is unknown.** An unknown switch or part name is ignored, so that a typo never breaks a user's status line or turn. New parsing keeps that rule.
 - **Keep switches the only configuration.** Each line reads its switches from the `command` in the user's settings. There is no configuration file.
 - **Keep tests out of the real config folder.** A test that renders the status line sets `CLAUDE_CONFIG_DIR` to a temporary folder, because a terminal render saves usage into the config folder.
-- **Update the docs with the code.** A new or changed part or switch updates the tables in `README.md`. If it changes a README example, update the parity suite too. If it changes how Claude installs claude-gauge, update `INSTALL-WITH-CLAUDE.md`.
+- **Update the docs with the code.** A new or changed part or switch updates the tables in `README.md`. Each status line part goes in `PART_REGISTRY` and each switch in `SWITCHES` in `src/statusline.ts`, and the README sync suite fails until the README's tables name the same parts and switches. If it changes a README example, update the parity suite too. If it changes how Claude installs claude-gauge, update `INSTALL-WITH-CLAUDE.md`.
 - **Test new behaviour.** Add a test to the suite for the line you change.
 
 ## Branches

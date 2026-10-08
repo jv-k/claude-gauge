@@ -13,41 +13,76 @@
 // claude.ai 5-hour and 7-day windows. The only side call is
 // `git branch --show-current`.
 //
-// Switches:
-//   --show <parts>     one row: the parts to show, in order, comma-separated,
-//                      from the PARTS list below. Repeat it for more rows.
-//                      Default: the two rows of DEFAULT_ROWS.
-//   --segments <5|10>  cells per bar (default 5)
-//   --no-labels        drop the labels in front of values (ctx, 5h, effort...)
-//   --no-bars          drop the bars
-//   --no-pace          drop the pace markers
-//   --no-reset         drop the reset times
-//   --12h              12-hour clock for the time part and reset times
-//                      (default 24-hour)
+// The parts it can show are in PART_REGISTRY and the switches it takes in
+// SWITCHES, both below. README.md documents each in a table, and a test fails
+// when the tables and the registry disagree.
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-const PARTS = [
-  'dir', 'branch', 'model', 'ctx', '5h', '7d',
-  'time', 'duration', 'cost', 'lines', 'name',
-  'effort', 'thinking', 'fast', 'style',
-  'repo', 'worktree', 'pr', 'agent',
-  'cache', 'spend', 'version',
-] as const;
+// What a part's builder reads: the payload, the config, the clock, the
+// folder Claude Code runs in, and the git branch reader.
+interface PartContext {
+  data: StatusData;
+  config: Config;
+  nowMs: number;
+  cwd: string;
+  branchOf: (cwd: string) => string;
+}
 
-type Part = (typeof PARTS)[number];
+interface PartSpec {
+  description: string;
+  // The default row the part shows in, counted from 0. A part without one
+  // shows only when a --show names it.
+  row?: number;
+  build: (ctx: PartContext) => string;
+}
+
+// Every status line part, by the name --show takes. The default parts come
+// first, in the order their rows show them; the order of the rest is the
+// README's.
+const partRegistry = {
+  ctx: { description: 'context window in use: percentage, bar and token count', row: 0, build: ({ data, config }) => contextPart(data, config) },
+  '5h': { description: '5-hour usage, with pace marker and reset time', row: 0, build: ({ data, config, nowMs }) => windowPart('5h', data, config, nowMs) },
+  '7d': { description: 'weekly usage, with pace marker and days to reset', row: 0, build: ({ data, config, nowMs }) => windowPart('7d', data, config, nowMs) },
+  time: { description: 'current local time', row: 1, build: ({ config, nowMs }) => timePart(config, nowMs) },
+  duration: { description: 'how long the session has run', row: 1, build: ({ data }) => durationPart(data) },
+  repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, cwd }) => repoPart(data, cwd) },
+  branch: { description: 'current git branch, and the linked worktree', row: 1, build: ({ data, config, cwd, branchOf }) => branchPart(data, config, branchOf(cwd)) },
+  model: { description: 'model name', row: 1, build: ({ data }) => (data.model?.display_name ? `${YELLOW}${data.model.display_name}${RESET}` : '') },
+  effort: { description: 'reasoning effort', row: 1, build: ({ data, config }) => effortPart(data, config) },
+  dir: { description: 'folder Claude Code runs in', build: ({ cwd }) => `${BLUE}${path.basename(cwd)}${RESET}` },
+  cost: { description: 'estimated session cost', build: ({ data }) => costPart(data) },
+  lines: { description: 'lines added and removed this session', build: ({ data }) => linesPart(data) },
+  name: { description: 'session name or title', build: ({ data }) => namePart(data) },
+  thinking: { description: 'extended thinking, when on', build: ({ data }) => thinkingPart(data) },
+  fast: { description: 'fast mode, when on', build: ({ data }) => fastPart(data) },
+  style: { description: 'output style, when not the default', build: ({ data, config }) => stylePart(data, config) },
+  worktree: { description: 'linked git worktree', build: ({ data, config }) => worktreePart(data, config) },
+  pr: { description: "the branch's open pull request and its review state", build: ({ data }) => prPart(data) },
+  agent: { description: 'agent name, with --agent', build: ({ data, config }) => agentPart(data, config) },
+  cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config }) => cachePart(data, config) },
+  spend: { description: 'spend against a gateway spend limit', build: ({ data, config }) => spendPart(data, config) },
+  version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
+} satisfies Record<string, PartSpec>;
+
+type Part = keyof typeof partRegistry;
+
+const PART_REGISTRY: Readonly<Record<Part, PartSpec>> = partRegistry;
+
+const PARTS = Object.keys(PART_REGISTRY) as Part[];
 
 const isPart = (name: string): name is Part => (PARTS as readonly string[]).includes(name);
 
 // The rows shown when no --show names a known part: the headroom figures on
 // top, the session around them below.
-const DEFAULT_ROWS: Part[][] = [
-  ['ctx', '5h', '7d'],
-  ['time', 'duration', 'repo', 'branch', 'model', 'effort'],
-];
+const DEFAULT_ROWS: Part[][] = PARTS.reduce<Part[][]>((rows, part) => {
+  const { row } = PART_REGISTRY[part];
+  if (row != null) (rows[row] ??= []).push(part);
+  return rows;
+}, []);
 
 interface Config {
   rows: Part[][];
@@ -73,6 +108,38 @@ const DEFAULTS: Config = {
   hour12: false,
 };
 
+interface Switch {
+  name: string;
+  // The value the switch takes, as the README writes it; none for a flag.
+  value?: string;
+  description: string;
+  // What the switch sets in the config. A switch without one acts in the
+  // program itself, not in render.
+  apply?: (config: Overrides, value: string) => void;
+}
+
+// Every status line switch.
+const SWITCHES: readonly Switch[] = [
+  {
+    name: '--show',
+    value: '<parts>',
+    description: 'one row: the parts to show, in order, comma-separated; repeat it for more rows',
+    apply: (config, value) => {
+      const parts = value.split(',').map((p) => p.trim()).filter(isPart);
+      if (parts.length) (config.rows ??= []).push(parts);
+    },
+  },
+  { name: '--segments', value: '<5|10>', description: 'cells per bar (default 5)', apply: (config, value) => { config.segments = value; } },
+  { name: '--no-labels', description: 'drop the labels in front of values', apply: (config) => { config.labels = false; } },
+  { name: '--no-bars', description: 'drop the bars', apply: (config) => { config.bars = false; } },
+  { name: '--no-pace', description: 'drop the pace markers', apply: (config) => { config.pace = false; } },
+  { name: '--no-reset', description: 'drop the reset times', apply: (config) => { config.reset = false; } },
+  { name: '--12h', description: '12-hour clock for the time part and reset times', apply: (config) => { config.hour12 = true; } },
+  { name: '--latest', description: "print the calling session's rows from its transcript, as plain text" },
+  { name: '--window', value: '<size>', description: 'with --latest: the context window size, such as 200k or 1m' },
+  { name: '--instruct', description: 'as a SessionStart hook: have Claude end each reply with the --latest rows' },
+];
+
 // Turns the switches into a config. Unknown switches and part names are
 // ignored, and a --show with no known part adds no row: a status line should
 // show something rather than fail.
@@ -80,21 +147,9 @@ function parseArgs(argv: string[]): Overrides {
   const config: Overrides = {};
   for (let i = 0; i < argv.length; i++) {
     const [name, inline] = argv[i].split(/=(.*)/s);
-    const value = () => inline ?? argv[++i] ?? '';
-    switch (name) {
-      case '--show': {
-        const parts = value().split(',').map((p) => p.trim()).filter(isPart);
-        if (parts.length) (config.rows ??= []).push(parts);
-        break;
-      }
-      case '--segments': config.segments = value(); break;
-      case '--no-labels': config.labels = false; break;
-      case '--no-bars': config.bars = false; break;
-      case '--no-pace': config.pace = false; break;
-      case '--no-reset': config.reset = false; break;
-      case '--12h': config.hour12 = true; break;
-      default: break;
-    }
+    const sw = SWITCHES.find((s) => s.name === name);
+    if (!sw?.apply) continue;
+    sw.apply(config, sw.value ? (inline ?? argv[++i] ?? '') : '');
   }
   return config;
 }
@@ -446,40 +501,16 @@ function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), 
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
 
-  const build: Record<Part, () => string> = {
-    dir: () => `${BLUE}${path.basename(cwd)}${RESET}`,
-    branch: () => branchPart(data, config, branchOf(cwd)),
-    model: () => (data.model?.display_name ? `${YELLOW}${data.model.display_name}${RESET}` : ''),
-    ctx: () => contextPart(data, config),
-    '5h': () => windowPart('5h', data, config, nowMs),
-    '7d': () => windowPart('7d', data, config, nowMs),
-    time: () => timePart(config, nowMs),
-    duration: () => durationPart(data),
-    cost: () => costPart(data),
-    lines: () => linesPart(data),
-    name: () => namePart(data),
-    effort: () => effortPart(data, config),
-    thinking: () => thinkingPart(data),
-    fast: () => fastPart(data),
-    style: () => stylePart(data, config),
-    repo: () => repoPart(data, cwd),
-    worktree: () => worktreePart(data, config),
-    pr: () => prPart(data),
-    agent: () => agentPart(data, config),
-    cache: () => cachePart(data, config),
-    spend: () => spendPart(data, config),
-    version: () => versionPart(data),
-  };
-  // Rows handed in from JavaScript may name parts the registry lacks; those
-  // render as nothing, like every other part with nothing to show.
-  const anyPart: Partial<Record<string, () => string>> = build;
+  const ctx: PartContext = { data, config, nowMs, cwd, branchOf };
 
   // One output line per row. A part with nothing to show drops out of its
   // row, and a row left with no parts drops out of the status line.
   return config.rows
     .map((row) =>
       row
-        .map((part) => anyPart[part]?.() ?? '')
+        // Rows handed in from JavaScript may name parts the registry lacks;
+        // those render as nothing, like every other part with nothing to show.
+        .map((part) => (isPart(part) ? PART_REGISTRY[part].build(ctx) : ''))
         .filter(Boolean)
         .join(`${GRAY} │ ${RESET}`),
     )
@@ -671,7 +702,9 @@ export {
   render,
   parseArgs,
   PARTS,
+  PART_REGISTRY,
   DEFAULT_ROWS,
+  SWITCHES,
   payloadFromTranscript,
   modelName,
   repoFromRemote,
@@ -680,7 +713,7 @@ export {
   INSTRUCT_HOSTS,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord };
+export type { StatusData, Config, Overrides, Part, PartSpec, PartContext, Switch, TranscriptRecord };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
