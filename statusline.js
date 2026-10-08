@@ -124,9 +124,9 @@ const cellsFor = (pct, segments) => {
   return '▓'.repeat(filled) + '░'.repeat(segments - filled);
 };
 
-function gitBranch(cwd) {
+function git(cwd, args) {
   try {
-    return execFileSync('git', ['branch', '--show-current'], {
+    return execFileSync('git', args, {
       cwd,
       timeout: 1000,
       encoding: 'utf8',
@@ -136,6 +136,8 @@ function gitBranch(cwd) {
     return ''; // not a repository, or git is missing
   }
 }
+
+const gitBranch = (cwd) => git(cwd, ['branch', '--show-current']);
 
 // Reset times are rounded to the nearest minute, so 6:59:45 shows as 07:00.
 const resetDate = (epochSeconds) => new Date(Math.round(epochSeconds / 60) * 60 * 1000);
@@ -463,6 +465,26 @@ function payloadFromTranscript(records, { nowMs = Date.now(), window, usage } = 
   return data;
 }
 
+// A remote URL as { host, owner, name }, the shape Claude Code sends:
+// git@github.com:jv-k/claude-gauge.git, https://github.com/jv-k/claude-gauge.
+function repoFromRemote(url) {
+  const m = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?([^/:]+)(?::\d+)?[:/](.+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url ?? '');
+  return m ? { host: m[1], owner: m[2], name: m[3] } : undefined;
+}
+
+// The linked worktree's name, from its git dir: <common>/worktrees/<name>.
+function worktreeFromGitDir(gitDir) {
+  return gitDir && path.basename(path.dirname(gitDir)) === 'worktrees' ? path.basename(gitDir) : undefined;
+}
+
+// What Claude Code's payload says about the repository, read from git, so
+// repo and branch show as they do in the terminal.
+function gitWorkspace(cwd) {
+  const repo = repoFromRemote(git(cwd, ['remote', 'get-url', 'origin']));
+  const worktree = worktreeFromGitDir(git(cwd, ['rev-parse', '--absolute-git-dir']));
+  return { ...(repo && { repo }), ...(worktree && { git_worktree: worktree }) };
+}
+
 function readRecords(file) {
   const records = [];
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
@@ -498,7 +520,16 @@ function latestTranscript(cwd) {
   return newest ? newest.f : null;
 }
 
-module.exports = { render, parseArgs, PARTS, DEFAULT_ROWS, payloadFromTranscript, modelName };
+module.exports = {
+  render,
+  parseArgs,
+  PARTS,
+  DEFAULT_ROWS,
+  payloadFromTranscript,
+  modelName,
+  repoFromRemote,
+  worktreeFromGitDir,
+};
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
@@ -510,6 +541,7 @@ if (require.main === module) {
     const transcript = latestTranscript(process.cwd());
     const records = transcript ? readRecords(transcript) : [];
     const data = payloadFromTranscript(records, { nowMs, window, usage: loadUsage(nowMs) });
+    if (data.workspace) Object.assign(data.workspace, gitWorkspace(data.workspace.current_dir));
     // Plain text: it is pasted into a reply, where colour codes show as junk.
     process.stdout.write(render(data, { config, nowMs }).replace(/\x1b\[[0-9;]*m/g, '') + '\n');
   } else {

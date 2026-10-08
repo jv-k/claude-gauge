@@ -257,3 +257,18 @@ test('--latest rebuilds a payload from the transcript, with saved usage', () => 
   );
   assert.match(run(payloadFromTranscript(records, { nowMs: NOW, window: '1m' }), ['--show', 'ctx']), /^ctx 9% ░░░░░ 86\.0k$/);
 });
+
+test('--latest reads the repo and worktree from git, as the terminal payload has them', () => {
+  const { repoFromRemote, worktreeFromGitDir } = require('../statusline.js');
+  const repo = { host: 'github.com', owner: 'jv-k', name: 'claude-gauge' };
+  assert.deepEqual(repoFromRemote('git@github.com:jv-k/claude-gauge.git'), repo);
+  assert.deepEqual(repoFromRemote('https://github.com/jv-k/claude-gauge.git'), repo);
+  assert.deepEqual(repoFromRemote('https://github.com/jv-k/claude-gauge'), repo);
+  assert.deepEqual(repoFromRemote('ssh://git@github.com:22/jv-k/claude-gauge.git'), repo);
+  assert.deepEqual(repoFromRemote('https://gitlab.com/group/sub/app.git'), { host: 'gitlab.com', owner: 'group/sub', name: 'app' });
+  assert.equal(repoFromRemote('/srv/git/app.git'), undefined);
+  assert.equal(repoFromRemote(''), undefined);
+  assert.equal(worktreeFromGitDir('/home/me/project/.git/worktrees/my-feature'), 'my-feature');
+  assert.equal(worktreeFromGitDir('/home/me/project/.git'), undefined);
+  assert.equal(worktreeFromGitDir(''), undefined);
+});
