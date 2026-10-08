@@ -53,7 +53,7 @@ const partRegistry = {
   branch: { description: 'current git branch, and the linked worktree', row: 1, build: ({ data, config, cwd, branchOf }) => branchPart(data, config, branchOf(cwd)) },
   model: { description: 'model name', row: 1, build: ({ data }) => (data.model?.display_name ? `${YELLOW}${data.model.display_name}${RESET}` : '') },
   effort: { description: 'reasoning effort', row: 1, build: ({ data, config }) => effortPart(data, config) },
-  dir: { description: 'folder Claude Code runs in', build: ({ cwd }) => `${BLUE}${path.basename(cwd)}${RESET}` },
+  dir: { description: 'folder Claude Code runs in', build: ({ cwd }) => `${BLUE}${sanitise(path.basename(cwd))}${RESET}` },
   cost: { description: 'estimated session cost', build: ({ data }) => costPart(data) },
   lines: { description: 'lines added and removed this session', build: ({ data }) => linesPart(data) },
   name: { description: 'session name or title', build: ({ data }) => namePart(data) },
@@ -164,6 +164,33 @@ const YELLOW = '\x1b[0;33m';
 const CYAN = '\x1b[0;36m';
 const RED = '\x1b[0;31m';
 const ansi256 = (n: number) => `\x1b[38;5;${n}m`;
+
+// Terminal escape sequences, whole: CSI (colours, cursor moves, erases), OSC
+// (window titles, hyperlinks, the clipboard), the DCS, SOS, PM and APC
+// strings, and every other ESC sequence, each in its 7-bit and 8-bit forms.
+// An OSC or string left unterminated runs to the end of the text, as a
+// terminal would read it.
+const ESCAPE_SEQUENCE =
+  /(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)?|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x9c]*(?:\x1b\\|\x9c)?|\x1b[ -/]*[0-~]/g;
+
+// The control characters an escape sequence leaves behind or that act alone:
+// C0, DEL, C1, and the bidirectional formatting characters that reorder text.
+const CONTROL_CHARACTER = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+// Text from outside claude-gauge (the payload, the transcript, git), safe to
+// print: nothing in it can move the cursor, change colours or reorder the
+// row. claude-gauge's own colours are added around it afterwards.
+const sanitise = (text: string) => text.replace(ESCAPE_SEQUENCE, '').replace(CONTROL_CHARACTER, '');
+
+// A parsed payload with every string in it sanitised, at any depth.
+function sanitiseAll<T>(value: T): T {
+  if (typeof value === 'string') return sanitise(value) as T;
+  if (Array.isArray(value)) return value.map(sanitiseAll) as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, sanitiseAll(v)])) as T;
+  }
+  return value;
+}
 
 // Ten usage levels: dark green at 0-10%, deep red above 90%.
 const LEVELS = [22, 28, 34, 100, 142, 178, 172, 166, 160, 124].map(ansi256);
@@ -426,7 +453,7 @@ function stylePart(data: StatusData, config: Config): string {
 // with repo never loses its location.
 function repoPart(data: StatusData, cwd: string): string {
   const repo = data.workspace?.repo;
-  const shown = repo?.owner && repo?.name ? `${repo.owner}/${repo.name}` : path.basename(cwd);
+  const shown = repo?.owner && repo?.name ? `${repo.owner}/${repo.name}` : sanitise(path.basename(cwd));
   return `${GRAY}${shown}${RESET}`;
 }
 
@@ -501,9 +528,10 @@ interface RenderOptions {
 function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch }: RenderOptions = {}): string {
   const merged = { ...DEFAULTS, ...overrides };
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
+  // The folder as it is, since git runs in it; the parts print it sanitised.
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
 
-  const input: PartContext = { data, config, nowMs, cwd, branchOf };
+  const input: PartContext = { data: sanitiseAll(data), config, nowMs, cwd, branchOf: (dir) => sanitise(branchOf(dir)) };
 
   // One output line per row. A part with nothing to show drops out of its
   // row, and a row left with no parts drops out of the status line.
