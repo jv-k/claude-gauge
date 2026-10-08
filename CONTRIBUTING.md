@@ -10,7 +10,7 @@ Do not report a vulnerability in a public issue. See [SECURITY.md](SECURITY.md).
 
 ## Set up
 
-You need Node.js 18 or later, git, and [pnpm](https://pnpm.io) 10. The `packageManager` field in `package.json` names the exact pnpm version, so `corepack enable` gives you that version.
+You need Node.js 18 or later, git, and [pnpm](https://pnpm.io) 10. The `packageManager` field in `package.json` names the exact pnpm version, so `corepack enable` gives you that version. Node.js 25 and later do not include Corepack, so on those versions run `npm install -g corepack` first.
 
 ```sh
 git clone https://github.com/jv-k/claude-gauge.git
