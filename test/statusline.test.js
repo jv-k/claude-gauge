@@ -72,6 +72,11 @@ test('a --show with no known part adds no row', () => {
   assert.equal(run(bothWindows(), ['--show', 'weather', '--show', 'model']), 'Opus');
 });
 
+test('rows handed in from JavaScript render unknown part names as nothing', () => {
+  const rows = [['weather', 'model', 'constructor', 'toString', '__proto__'], ['hasOwnProperty']];
+  assert.equal(plain(render(bothWindows(), { nowMs: NOW, branchOf: () => 'main', config: { rows } })), 'Opus');
+});
+
 test('a row with nothing to show drops out', () => {
   const noBranch = plain(
     render(bothWindows(), { nowMs: NOW, branchOf: () => '', config: parseArgs(['--show', 'branch', '--show', 'model']) }),
