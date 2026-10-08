@@ -36,26 +36,27 @@ function tableNames(text, heading) {
 // Every difference between the README's tables and a registry, as one line
 // each. Empty when they agree.
 function drift(text, { parts, defaultRows, switches }) {
-  const problems = [];
+  // One table's differences. The README says the default parts table is in
+  // row order, so for that table a reorder alone is a difference too.
   const compare = (heading, expected, { ordered = false } = {}) => {
     const documented = tableNames(text, heading);
-    if (!documented) return problems.push(`README has no "${heading}" heading`);
-    for (const name of expected.filter((n) => !documented.includes(n))) {
-      problems.push(`${name} has no row under "${heading}"`);
-    }
-    for (const name of documented.filter((n) => !expected.includes(n))) {
-      problems.push(`"${heading}" documents ${name}, which the registry lacks`);
-    }
+    if (!documented) return [`README has no "${heading}" heading`];
+    const problems = [
+      ...expected.filter((n) => !documented.includes(n)).map((n) => `${n} has no row under "${heading}"`),
+      ...documented.filter((n) => !expected.includes(n)).map((n) => `"${heading}" documents ${n}, which the registry lacks`),
+    ];
     const same = documented.length === expected.length && documented.every((n, i) => n === expected[i]);
     if (ordered && !problems.length && !same) {
       problems.push(`"${heading}" lists ${documented.join(',')}; the default rows are ${expected.join(',')}`);
     }
+    return problems;
   };
   const defaults = defaultRows.flat();
-  compare('### Status line', defaults, { ordered: true });
-  compare('### More status line parts', parts.filter((p) => !defaults.includes(p)));
-  compare('### Status line options', switches);
-  return problems;
+  return [
+    ...compare('### Status line', defaults, { ordered: true }),
+    ...compare('### More status line parts', parts.filter((p) => !defaults.includes(p))),
+    ...compare('### Status line options', switches),
+  ];
 }
 
 const registry = { parts: [...PARTS], defaultRows: DEFAULT_ROWS, switches: SWITCHES.map((s) => s.name) };

@@ -70,6 +70,8 @@ const partRegistry = {
 
 type Part = keyof typeof partRegistry;
 
+// The same object, typed so that every entry reads as a PartSpec: the literal
+// above keeps the names for the Part type, this keeps row optional on each.
 const PART_REGISTRY: Readonly<Record<Part, PartSpec>> = partRegistry;
 
 const PARTS = Object.keys(PART_REGISTRY) as Part[];
@@ -147,9 +149,9 @@ function parseArgs(argv: string[]): Overrides {
   const config: Overrides = {};
   for (let i = 0; i < argv.length; i++) {
     const [name, inline] = argv[i].split(/=(.*)/s);
-    const sw = SWITCHES.find((s) => s.name === name);
-    if (!sw?.apply) continue;
-    sw.apply(config, sw.value ? (inline ?? argv[++i] ?? '') : '');
+    const known = SWITCHES.find((s) => s.name === name);
+    if (!known?.apply) continue;
+    known.apply(config, known.value ? (inline ?? argv[++i] ?? '') : '');
   }
   return config;
 }
@@ -501,7 +503,7 @@ function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), 
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
 
-  const ctx: PartContext = { data, config, nowMs, cwd, branchOf };
+  const input: PartContext = { data, config, nowMs, cwd, branchOf };
 
   // One output line per row. A part with nothing to show drops out of its
   // row, and a row left with no parts drops out of the status line.
@@ -510,7 +512,7 @@ function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), 
       row
         // Rows handed in from JavaScript may name parts the registry lacks;
         // those render as nothing, like every other part with nothing to show.
-        .map((part) => (isPart(part) ? PART_REGISTRY[part].build(ctx) : ''))
+        .map((part) => (isPart(part) ? PART_REGISTRY[part].build(input) : ''))
         .filter(Boolean)
         .join(`${GRAY} │ ${RESET}`),
     )
@@ -702,7 +704,6 @@ export {
   render,
   parseArgs,
   PARTS,
-  PART_REGISTRY,
   DEFAULT_ROWS,
   SWITCHES,
   payloadFromTranscript,
@@ -713,7 +714,7 @@ export {
   INSTRUCT_HOSTS,
 };
 
-export type { StatusData, Config, Overrides, Part, PartSpec, PartContext, Switch, TranscriptRecord };
+export type { StatusData, Config, Overrides, Part, TranscriptRecord };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
