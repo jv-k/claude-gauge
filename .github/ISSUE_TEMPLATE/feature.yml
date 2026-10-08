@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a new part, a new switch, or a change to what a line shows.
+labels: [enhancement, needs-triage]
+body:
+  - type: dropdown
+    id: line
+    attributes:
+      label: Which line
+      options:
+        - Status line
+        - Token line
+        - Both
+        - Setup or install
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: The change
+      description: What you want the line to show or do. Show the output you have in mind, if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The problem it solves for you.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Other parts, switches or tools that come close.
+    validations:
+      required: false
