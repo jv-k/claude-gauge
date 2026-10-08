@@ -312,6 +312,8 @@ rm -rf ~/.claude/claude-gauge
 
 ## Development
 
+[CONTRIBUTING.md](CONTRIBUTING.md) has the setup, the rules for a change, and the branch and commit conventions.
+
 ```sh
 pnpm install
 pnpm test
@@ -329,12 +331,7 @@ The full input format is in the [status line docs](https://code.claude.com/docs/
 
 ### Releases
 
-Releases use [VerBump](https://github.com/jv-k/VerBump), which reads the Conventional Commits since the last tag, suggests the next version, updates `package.json` and `CHANGELOG.md`, tags, pushes, and publishes a GitHub release. The tests must pass first; `.verbumprc` runs them as a gate.
-
-```sh
-pnpm bump-release --dry-run   # preview the release, changes nothing
-pnpm bump-release             # cut it
-```
+Releases use [VerBump](https://github.com/jv-k/VerBump), and the tests must pass first. [RELEASING.md](RELEASING.md) gives the steps.
 
 ## License
 
