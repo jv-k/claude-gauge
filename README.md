@@ -117,7 +117,7 @@ Paste this into a Claude Code session:
 Install claude-gauge: clone https://github.com/jv-k/claude-gauge to ~/.claude/claude-gauge, then follow INSTALL-WITH-CLAUDE.md in it.
 ```
 
-Claude asks which bars and parts you want, checks that they run, backs up your settings and merges the new entries into them. If you also use the VS Code extension or the desktop app, it adds the instruction that pastes the bars into its replies there. To update later, ask the same again.
+Claude asks which bars and parts you want, checks that they run, backs up your settings and merges the new entries into them. If you also use the VS Code extension or the desktop app, it adds the hooks that paste the bars into its replies there. To update later, ask the same again.
 
 ### By hand
 
@@ -171,22 +171,22 @@ curl -fsSL https://raw.githubusercontent.com/jv-k/claude-gauge/main/tokenline.js
 Claude Code runs a custom status line and shows Stop hook messages only in the terminal CLI. At the time of writing, the VS Code extension and the desktop app show neither. You can still see both bars there in two ways:
 
 - **Run `claude` in VS Code's integrated terminal.** That is the terminal CLI, so both bars show as usual.
-- **Have Claude paste the bars into its replies.** Both scripts take `--latest`, which rebuilds the bars for the calling session from its transcript and prints them as plain text.
+- **Have Claude paste the bars into its replies.** A SessionStart hook asks it to, in those two hosts only.
 
-For the second way, keep the settings entries above, and add this to `~/.claude/CLAUDE.md`:
+For the second way, keep the settings entries above and add one hook per bar you want in the replies:
 
-```md
-## Gauge in replies
-
-End every reply with the claude-gauge bars. As the last tool calls of the turn, run:
-
-- `node ~/.claude/claude-gauge/statusline.js --latest`
-- `node ~/.claude/claude-gauge/tokenline.js --latest`
-
-Paste their output verbatim, in one plain code block, as the last thing in the reply. Skip a command that fails. Never guess the figures, and never reuse an earlier turn's output.
+```json
+"hooks": {
+  "SessionStart": [
+    { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/statusline.js --instruct" } ] },
+    { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/tokenline.js --instruct" } ] }
+  ]
+}
 ```
 
-The reply in the VS Code panel then ends like this:
+`--instruct` reads the host from the `CLAUDE_CODE_ENTRYPOINT` variable, which Claude Code sets and its hooks inherit. In the VS Code extension (`claude-vscode`) and the desktop app (`claude-desktop`, `claude-desktop-3p`) it prints an instruction into Claude's context: end every reply with the output of the same command with `--latest` in place of `--instruct`, run as the last tool call of the turn and pasted verbatim in one code block, never guessed and never reused from an earlier turn. In the terminal CLI (`cli`) it prints nothing. One settings file therefore serves every host, and the terminal, which shows the bars already, stays as it is. Any other or missing value also prints nothing: the variable is not documented, so a host under a new name gets a quiet session rather than a wrong one. `echo $CLAUDE_CODE_ENTRYPOINT` in Claude's shell shows the value.
+
+The hook runs when a session starts, resumes, is cleared with `/clear`, or compacts, so the instruction survives all four. The reply in the VS Code panel then ends like this:
 
 ```text
 ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
@@ -194,7 +194,7 @@ ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓
 12:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
 ```
 
-Keep one line or both. Each takes its usual switches, such as `--show` and `--segments`. On a 1M-context model, add `--window 1m` to both, for the reason in [Token line options](#token-line-options). Each reply costs one or two short tool calls more.
+Each hook takes its bar's usual switches, such as `--show` and `--segments`, and passes them on to the command it names. On a 1M-context model, add `--window 1m` to both, for the reason in [Token line options](#token-line-options). Each reply costs one or two short tool calls more.
 
 `--latest` finds the calling session by the `CLAUDE_CODE_SESSION_ID` variable, which Claude Code sets for the commands it runs. Without that variable, it takes the newest transcript of the current folder. It prints no colours, because a reply shows colour codes as junk.
 
@@ -222,6 +222,7 @@ Both scripts take switches on the command line, so you set them in the `command`
 | `--12h` | Shows the `time` part and reset times on the 12-hour clock. Default: 24-hour. |
 | `--latest` | Prints the rows for the calling session from its transcript, as plain text, instead of reading Claude Code's input. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 | `--window <size>` | With `--latest`: the context window size, for example `200k` or `1m`, as for the token line. |
+| `--instruct` | As a SessionStart hook: in the VS Code extension and the desktop app, prints an instruction that has Claude end each reply with the `--latest` rows; in the terminal CLI, prints nothing. The other switches pass through to the command it names. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 
 A row with nothing to show is left out, and a `--show` that names no known part adds no row.
 
@@ -283,6 +284,7 @@ Claude Code reruns a status line when something happens in the session, such as 
 | `--segments <5\|10>` | Cells in the context bar. Default: 5. Any other value gives 5. |
 | `--window <size>` | The context window size, for example `200k` or `1m`. |
 | `--latest` | Prints the line for the calling session, instead of reading a hook payload. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
+| `--instruct` | As a SessionStart hook: in the VS Code extension and the desktop app, prints an instruction that has Claude end each reply with the `--latest` line; in the terminal CLI, prints nothing. The other switches pass through to the command it names. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 
 The transcript does not record the context window size, so without `--window` the token line assumes Claude Code's default of 200k, and 1M once the context grows past 200k. If you use a 1M-context model, say so, and the percentage is right from the start:
 
@@ -300,7 +302,7 @@ git -C ~/.claude/claude-gauge pull
 
 ## Uninstall
 
-Remove the `statusLine` and `Stop` entries from `~/.claude/settings.json`, and the gauge instruction from `~/.claude/CLAUDE.md` if you added one. Then delete the folder:
+Remove the `statusLine`, `Stop` and `SessionStart` entries that name claude-gauge from `~/.claude/settings.json`. Then delete the folder:
 
 ```sh
 rm -rf ~/.claude/claude-gauge

@@ -21,6 +21,9 @@
 //   --window <tokens>   context window size, e.g. 200k or 1m. Without it the
 //                       window is 200k, or 1M once the context passes 200k.
 //   --latest            print the line for the calling session
+//   --instruct          as a SessionStart hook: in the VS Code extension and
+//                       the desktop app, tell Claude to end each reply with
+//                       the line; in the terminal CLI, print nothing
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -192,12 +195,44 @@ function latestTranscript(cwd) {
   return newest ? newest.f : null;
 }
 
-module.exports = { summarize, parseArgs, parseSize, contextWindow, PARTS };
+// --instruct: the SessionStart hook for hosts that show no hook message. In
+// the VS Code extension and the desktop app it prints an instruction that has
+// Claude end each reply with it. In the terminal CLI, where it already shows,
+// it prints nothing. Claude Code names the host in CLAUDE_CODE_ENTRYPOINT,
+// which hooks inherit; an unknown or missing value counts as a host that
+// needs nothing.
+const INSTRUCT_HOSTS = ['claude-vscode', 'claude-desktop', 'claude-desktop-3p'];
+
+function instruction(argv, { host, script }) {
+  if (!INSTRUCT_HOSTS.includes(host)) return null;
+  const command = ['node', script, '--latest', ...argv.filter((a) => a !== '--instruct')].join(' ');
+  return [
+    '## Token line in replies',
+    '',
+    "End every reply with the claude-gauge token line, as a copyable code block, so this panel shows what the terminal's Stop hook does:",
+    '',
+    '```sh',
+    command,
+    '```',
+    '',
+    "Run it as the last tool call of the turn, then paste its line verbatim as the final thing in the reply, in one plain code block. Skip it only if the command fails or prints nothing. Never guess the figures, and never reuse an earlier turn's line.",
+    '',
+  ].join('\n');
+}
+
+// This script's path as a hook command can name it: ~ for the home folder.
+const ownPath = () => process.argv[1].replace(new RegExp(`^${os.homedir()}(?=/)`), '~');
+
+module.exports = { summarize, parseArgs, parseSize, contextWindow, PARTS, instruction, INSTRUCT_HOSTS };
 
 if (require.main === module) {
-  const { latest, ...opts } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { latest, ...opts } = parseArgs(argv);
 
-  if (latest) {
+  if (argv.includes('--instruct')) {
+    const text = instruction(argv, { host: process.env.CLAUDE_CODE_ENTRYPOINT, script: ownPath() });
+    if (text) process.stdout.write(text);
+  } else if (latest) {
     const t = latestTranscript(process.cwd());
     const line = t ? summarize(readRecords(t), opts) : null;
     if (line) process.stdout.write(line + '\n');
