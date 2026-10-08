@@ -319,7 +319,7 @@ pnpm install
 pnpm test
 ```
 
-Both lines are TypeScript modules in `src/`, built by `pnpm build` to the two self-contained Node.js files in `dist/` that the settings entries above run. `pnpm test` builds first, then runs the suites against the build with Node's built-in test runner; `pnpm typecheck` checks the sources without building. `dist/` is committed, so a clone works without a build: rebuild and commit it with any change to `src/`. [Bun](https://bun.sh) runs the sources directly, with the same output as the build: `bun src/statusline.ts`.
+Both lines are TypeScript modules in `src/`, built by `pnpm build` to the two self-contained Node.js files in `dist/` that the settings entries above run. `pnpm test` builds first, then runs the suites against the build with Node's built-in test runner; `pnpm typecheck` checks the sources without building. `dist/` is generated, so never edit it or commit it. After each merge to `main`, the `dist` workflow builds and tests `dist/`, and commits it to `main` as a bot commit marked `[auto]` when the build changed it. A clone of `main` works without a build. [CONTRIBUTING.md](CONTRIBUTING.md) says how to keep `dist/` out of a pull request. [Bun](https://bun.sh) runs the sources directly, with the same output as the build: `bun src/statusline.ts`.
 
 To try the status line by hand, pipe it a sample of the JSON that Claude Code sends:
 
