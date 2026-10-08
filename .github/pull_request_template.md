@@ -9,7 +9,7 @@
 - [ ] The base branch is the one that CONTRIBUTING.md names.
 - [ ] Commit subjects follow Conventional Commits, and each one names the effect a user sees.
 - [ ] `pnpm typecheck` and `pnpm test` pass.
-- [ ] A change to `src/` has a rebuilt `dist/` (`pnpm build`) in the same commit.
+- [ ] The pull request adds or changes no files in `dist/`. The `dist` workflow builds it on `main`.
 - [ ] New behaviour has a test.
 - [ ] A new or changed part or switch updates the tables in `README.md`, and `INSTALL-WITH-CLAUDE.md` where it applies.
 - [ ] The runtime still has no dependencies.

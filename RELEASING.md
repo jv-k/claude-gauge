@@ -18,7 +18,7 @@ The package is private, so a release publishes nothing to npm. Installs clone `m
 - Sign in to the `gh` CLI with an account that can push to jv-k/claude-gauge. VerBump uses `gh` to publish the GitHub release.
 - Release from `main`. While 1.0 is in progress, the work is on `integration/1.0`, so merge that branch into `main` first.
 - Pull `main`, and make sure the working tree is clean.
-- Run `pnpm install`, then `pnpm build`, then `git status`. The build must leave `dist/` unchanged. If it changes `dist/`, a merge left the committed build stale: commit the rebuilt `dist/` first.
+- Run `pnpm install`, then `pnpm build`, then `git status`. The build must leave `dist/` unchanged. The `dist` workflow commits the build to `main` after each merge, so a change in `dist/` means that its run for the last merge has not finished or has failed. Wait for the run, or fix it and run it again, then pull `main`.
 
 ## Cut a release
 

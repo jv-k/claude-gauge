@@ -1,0 +1,74 @@
+# Installs clone main and run dist/ without a build, so main must carry the
+# built files. Every other branch ignores dist/ (see .gitignore), and this
+# workflow is the only writer of dist/ on main.
+name: dist
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  commit:
+    name: Commit the built dist to main
+    # Bot commits carry [auto]. A push made with the default GITHUB_TOKEN does
+    # not start a workflow, and this check stops a loop if a token that does is
+    # ever used instead.
+    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[auto]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # One run at a time, so two quick merges cannot race to push.
+    concurrency:
+      group: dist-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The tip of main when the run starts, not the pushed commit, so a
+          # queued run builds on top of the bot commit before it.
+          ref: main
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Clear dist/ first, so a file that the build no longer writes is
+      # removed from main too.
+      - run: rm -rf dist && pnpm build
+      - name: Commit dist/ when the build changed it
+        run: |
+          git add --force --all dist/
+          if git diff --cached --quiet -- dist/; then
+            echo "dist/ already matches the build. Nothing to commit."
+            exit 0
+          fi
+          source=$(git rev-parse --short HEAD)
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "chore(dist): build dist from ${source} [auto]"
+          git push origin HEAD:main
+
+  source-only:
+    name: Keep dist out of pull requests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The merge commit and its two parents.
+          fetch-depth: 2
+      - name: Fail when the pull request adds or changes files in dist/
+        # A deletion is allowed: merging a branch that does not track dist/
+        # into main deletes it, and the commit job above rebuilds it.
+        run: |
+          changed=$(git diff --name-only --diff-filter=d HEAD^1 HEAD -- dist/)
+          if [ -n "$changed" ]; then
+            echo "::error::dist/ is built on main by the dist workflow. Remove these files from the pull request:"
+            echo "$changed"
+            exit 1
+          fi
