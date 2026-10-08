@@ -239,3 +239,21 @@ test('ctx shows the token count after the bar, from whatever Claude Code sends',
   assert.equal(ctx({ used_percentage: 43 }), 'ctx 43% ▓▓░░░');
   assert.equal(run({ context_window: { used_percentage: 43, context_window_size: 200000 } }, ['--show', 'ctx', '--no-bars']), 'ctx 43% 86.0k');
 });
+
+test('--latest rebuilds a payload from the transcript, with saved usage', () => {
+  const { payloadFromTranscript, modelName } = require('../statusline.js');
+  assert.equal(modelName('claude-opus-5-5'), 'Opus 5.5');
+  assert.equal(modelName('claude-haiku-4-5-20251001'), 'Haiku 4.5');
+  const records = [
+    { type: 'user', timestamp: new Date(NOW - 2 * HOUR).toISOString(), cwd: '/home/me/project', message: { content: 'hi' } },
+    { type: 'assistant', cwd: '/home/me/project', effort: 'high', message: { model: 'claude-opus-5-5', usage: { input_tokens: 1000, cache_creation_input_tokens: 5000, cache_read_input_tokens: 80000 } } },
+    { type: 'assistant', isSidechain: true, message: { model: 'claude-haiku-4-5', usage: { input_tokens: 900000 } } },
+  ];
+  const usage = { five_hour: { used_percentage: 9.4, resets_at: at(NOW + 3 * HOUR) } };
+  const data = payloadFromTranscript(records, { nowMs: NOW, usage });
+  assert.equal(
+    run(data),
+    'ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 15:00 │ 7d ~\n12:00 │ 2h │ project │ ⎇ main │ Opus 5.5 │ effort high',
+  );
+  assert.match(run(payloadFromTranscript(records, { nowMs: NOW, window: '1m' }), ['--show', 'ctx']), /^ctx 9% ░░░░░ 86\.0k$/);
+});

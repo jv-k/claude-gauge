@@ -179,6 +179,8 @@ run as the last tool call of the turn, pasted verbatim as a code block.
 
 `--latest` finds the calling session by the `CLAUDE_CODE_SESSION_ID` variable that Claude Code sets for the commands it runs.
 
+The status line has the same mode. `node ~/.claude/claude-gauge/statusline.js --latest` rebuilds the rows for the calling session from its transcript, as plain text for pasting, and takes `--window` like the token line. The 5h and 7d figures come from the last time the status line ran in a terminal, which saves them; until then they show `~`. Add it to the CLAUDE.md instruction above, before the token line, to see both in the VS Code panel.
+
 ## Options
 
 Both scripts take switches on the command line, so you set them in the `command` of your settings and never edit the scripts. A switch takes its value after a space or an `=`: `--show 5h,7d` and `--show=5h,7d` are the same.

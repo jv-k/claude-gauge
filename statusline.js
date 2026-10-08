@@ -393,19 +393,137 @@ function render(data, { config: overrides = {}, nowMs = Date.now(), branchOf = g
     .join('\n');
 }
 
-module.exports = { render, parseArgs, PARTS, DEFAULT_ROWS };
+// --latest: the status line where Claude Code runs none (the VS Code panel).
+// It rebuilds a payload from the session transcript, and takes the 5h and 7d
+// windows from the last terminal render, which saves them.
+
+const fs = require('node:fs');
+const os = require('node:os');
+
+const configDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+const usageFile = () => path.join(configDir(), 'claude-gauge', '.state', 'usage.json');
+
+// Best effort: a failed save never breaks the status line.
+function saveUsage(data, nowMs) {
+  if (!data.rate_limits) return;
+  try {
+    fs.mkdirSync(path.dirname(usageFile()), { recursive: true });
+    fs.writeFileSync(usageFile(), JSON.stringify({ savedAt: nowMs, rate_limits: data.rate_limits }));
+  } catch {
+    /* read-only home or similar: skip */
+  }
+}
+
+// The saved windows, without any that have reset since they were saved.
+function loadUsage(nowMs) {
+  try {
+    const { rate_limits: saved } = JSON.parse(fs.readFileSync(usageFile(), 'utf8'));
+    const live = Object.entries(saved ?? {}).filter(([, w]) => !w?.resets_at || w.resets_at * 1000 > nowMs);
+    return live.length ? Object.fromEntries(live) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
+function modelName(id) {
+  if (!id) return undefined;
+  const parts = id.replace(/^claude-/, '').split('-').filter((p) => !/^\d{8}$/.test(p));
+  const family = parts.shift();
+  if (!family) return id;
+  return [family[0].toUpperCase() + family.slice(1), parts.join('.')].filter(Boolean).join(' ');
+}
+
+// --window when given (200k, 1m, 1000000); else 200k, or 1M once past it.
+function windowSize(tokens, explicit) {
+  const m = /^\s*(\d+(?:\.\d+)?)\s*([km]?)\s*$/i.exec(String(explicit ?? ''));
+  if (m) return Math.round(Number(m[1]) * { '': 1, k: 1e3, m: 1e6 }[m[2].toLowerCase()]);
+  return tokens > 200e3 ? 1e6 : 200e3;
+}
+
+// A status line payload rebuilt from transcript records.
+function payloadFromTranscript(records, { nowMs = Date.now(), window, usage } = {}) {
+  const data = {};
+  const cwd = [...records].reverse().find((r) => r.cwd)?.cwd;
+  if (cwd) data.workspace = { current_dir: cwd };
+  const main = records.filter((r) => r.type === 'assistant' && !r.isSidechain && r.message?.usage);
+  const last = main[main.length - 1];
+  if (last) {
+    const u = last.message.usage;
+    const tokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+    const size = windowSize(tokens, window);
+    data.context_window = { context_window_size: size, used_percentage: (tokens * 100) / size, total_input_tokens: tokens };
+    data.model = { display_name: modelName(last.message.model) };
+    const effort = typeof last.effort === 'string' ? last.effort : last.effort?.level;
+    if (effort) data.effort = { level: effort };
+  }
+  const first = records.find((r) => r.timestamp)?.timestamp;
+  if (first) data.cost = { total_duration_ms: nowMs - Date.parse(first) };
+  if (usage) data.rate_limits = usage;
+  return data;
+}
+
+function readRecords(file) {
+  const records = [];
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    if (!line) continue;
+    try {
+      records.push(JSON.parse(line));
+    } catch {
+      /* a partially flushed final line is expected */
+    }
+  }
+  return records;
+}
+
+// The calling session's transcript, found by the id Claude Code exports to
+// the commands it runs; else the newest transcript of this folder.
+function latestTranscript(cwd) {
+  const projects = path.join(configDir(), 'projects');
+  if (!fs.existsSync(projects)) return null;
+  const own = process.env.CLAUDE_CODE_SESSION_ID;
+  if (own) {
+    for (const d of fs.readdirSync(projects)) {
+      const f = path.join(projects, d, `${own}.jsonl`);
+      if (fs.existsSync(f)) return f;
+    }
+  }
+  const dir = path.join(projects, cwd.replace(/[/.]/g, '-'));
+  if (!fs.existsSync(dir)) return null;
+  const newest = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith('.jsonl'))
+    .map((f) => ({ f: path.join(dir, f), mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime)[0];
+  return newest ? newest.f : null;
+}
+
+module.exports = { render, parseArgs, PARTS, DEFAULT_ROWS, payloadFromTranscript, modelName };
 
 if (require.main === module) {
-  const config = parseArgs(process.argv.slice(2));
-  const chunks = [];
-  process.stdin.on('data', (c) => chunks.push(c));
-  process.stdin.on('end', () => {
-    let data = {};
-    try {
-      data = JSON.parse(Buffer.concat(chunks).toString() || '{}');
-    } catch {
-      /* render what we can from an empty payload rather than print nothing */
-    }
-    process.stdout.write(render(data, { config }) + '\n');
-  });
+  const argv = process.argv.slice(2);
+  const config = parseArgs(argv);
+  const nowMs = Date.now();
+  if (argv.includes('--latest')) {
+    const at = argv.findIndex((a) => a === '--window' || a.startsWith('--window='));
+    const window = at < 0 ? undefined : argv[at].includes('=') ? argv[at].split('=')[1] : argv[at + 1];
+    const transcript = latestTranscript(process.cwd());
+    const records = transcript ? readRecords(transcript) : [];
+    const data = payloadFromTranscript(records, { nowMs, window, usage: loadUsage(nowMs) });
+    // Plain text: it is pasted into a reply, where colour codes show as junk.
+    process.stdout.write(render(data, { config, nowMs }).replace(/\x1b\[[0-9;]*m/g, '') + '\n');
+  } else {
+    const chunks = [];
+    process.stdin.on('data', (c) => chunks.push(c));
+    process.stdin.on('end', () => {
+      let data = {};
+      try {
+        data = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+      } catch {
+        /* render what we can from an empty payload rather than print nothing */
+      }
+      saveUsage(data, nowMs);
+      process.stdout.write(render(data, { config, nowMs }) + '\n');
+    });
+  }
 }
