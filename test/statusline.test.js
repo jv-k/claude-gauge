@@ -131,6 +131,86 @@ test('switches drop labels, bars, pace markers and reset times', () => {
   assert.equal(run(data, ['--show', 'ctx,5h,7d', '--no-labels', '--no-bars']), '43% 86.0k │ 9% → 14:00 │ 41% → 3d');
 });
 
+// Per-model weekly windows, as Anthropic's usage API names them.
+const modelWindows = (extra = {}) =>
+  payload({
+    five_hour: { used_percentage: 9.4, resets_at: at(NOW + 2 * HOUR) },
+    seven_day: { used_percentage: 41.2, resets_at: at(NOW + 3 * DAY) },
+    seven_day_opus: { used_percentage: 41.2, resets_at: at(NOW + 3 * DAY) },
+    ...extra,
+  });
+
+test('models shows a per-model weekly window as 7d shows the week, named for the model', () => {
+  assert.equal(run(modelWindows(), ['--show', 'models']), '7d Opus 41% ▓▓░┃░ → 3d');
+  assert.equal(run(modelWindows(), ['--show', '7d,models']), '7d 41% ▓▓░┃░ → 3d │ 7d Opus 41% ▓▓░┃░ → 3d');
+});
+
+test('models shows each per-model window in key order, and skips one with no percentage', () => {
+  const data = modelWindows({
+    seven_day_sonnet: { used_percentage: 62, resets_at: at(NOW + 3 * DAY) },
+    seven_day_haiku: { used_percentage: null, resets_at: at(NOW + 3 * DAY) },
+    seven_day_oauth_apps: { used_percentage: 5, resets_at: at(new Date(2026, 9, 7, 23, 30).getTime()) },
+    seven_day_fable: null,
+  });
+  assert.equal(
+    run(data, ['--show', 'models']),
+    '7d Oauth Apps 5% ░░░░┃ → 23:30 │ 7d Opus 41% ▓▓░┃░ → 3d │ 7d Sonnet 62% ▓▓▓┃░ → 3d',
+  );
+  assert.equal(
+    run(data, ['--show', 'models', '--compact']),
+    '7d Oauth Apps 5% ░░░░┃ → 23:30│7d Opus 41% ▓▓░┃░ → 3d│7d Sonnet 62% ▓▓▓┃░ → 3d',
+  );
+});
+
+test('models reads a model name with dots and hyphens, and skips a key with anything else', () => {
+  const data = payload({
+    'seven_day_opus-4.5': { used_percentage: 41.2, resets_at: at(NOW + 3 * DAY) },
+    'seven_day_so nnet': { used_percentage: 62, resets_at: at(NOW + 3 * DAY) },
+    'seven_day_': { used_percentage: 62, resets_at: at(NOW + 3 * DAY) },
+  });
+  assert.equal(run(data, ['--show', 'models']), '7d Opus-4.5 41% ▓▓░┃░ → 3d');
+});
+
+test('models drops out when Claude Code sends no per-model window', () => {
+  assert.equal(run(bothWindows(), ['--show', 'models']), '');
+  assert.equal(run(payload(undefined), ['--show', 'models,model']), 'Opus');
+  assert.equal(run(payload({ seven_day: { used_percentage: 41 } }), ['--show', 'models,model']), 'Opus');
+});
+
+test('models takes the switches 7d takes, and keeps the model name without labels', () => {
+  const data = modelWindows();
+  assert.equal(run(data, ['--show', 'models', '--no-pace']), '7d Opus 41% ▓▓░░░ → 3d');
+  assert.equal(run(data, ['--show', 'models', '--no-reset']), '7d Opus 41% ▓▓░┃░');
+  assert.equal(run(data, ['--show', 'models', '--no-bars']), '7d Opus 41% → 3d');
+  assert.equal(run(data, ['--show', 'models', '--no-labels']), 'Opus 41% ▓▓░┃░ → 3d');
+  assert.equal(run(data, ['--show', 'models', '--segments', '10']), '7d Opus 41% ▓▓▓▓░░┃░░░ → 3d');
+});
+
+test('limit names an exhausted window and its reset, and drops out while none is', () => {
+  assert.equal(run(modelWindows(), ['--show', 'limit']), '');
+  assert.equal(run(payload(undefined), ['--show', 'limit,model']), 'Opus');
+  const fiveHour = modelWindows({ five_hour: { used_percentage: 100, resets_at: at(NOW + 2 * HOUR + 10 * 60_000) } });
+  assert.equal(run(fiveHour, ['--show', 'limit']), 'limit reached: 5h → 14:10');
+  assert.equal(run(fiveHour, ['--show', 'limit', '--12h']), 'limit reached: 5h → 02:10 pm');
+  assert.equal(run(fiveHour, ['--show', 'limit', '--no-reset']), 'limit reached: 5h');
+});
+
+test('limit names every exhausted window: 5h, 7d, each model and the spend limit', () => {
+  const data = payload({
+    five_hour: { used_percentage: 100, resets_at: at(NOW + 2 * HOUR) },
+    seven_day: { used_percentage: 100.4, resets_at: at(NOW + 3 * DAY) },
+    seven_day_opus: { used_percentage: 100, resets_at: at(new Date(2026, 9, 7, 23, 30).getTime()) },
+    seven_day_sonnet: { used_percentage: 99.6, resets_at: at(NOW + 3 * DAY) },
+    spend_limit: { used_percentage: 100 },
+  });
+  assert.equal(run(data, ['--show', 'limit']), 'limit reached: 5h → 14:00, 7d → 3d, 7d Opus → 23:30, spend');
+  // The notice names each window in full, labels or not.
+  assert.equal(run(data, ['--show', 'limit', '--no-labels', '--no-reset']), 'limit reached: 5h, 7d, 7d Opus, spend');
+  // A spend reset, when Claude Code sends one, shows as the weekly resets do.
+  data.rate_limits = { spend_limit: { used_percentage: 100, resets_at: at(NOW + 3 * DAY) } };
+  assert.equal(run(data, ['--show', 'limit']), 'limit reached: spend → 3d');
+});
+
 test('time shows the current local time, on the 24-hour clock unless --12h', () => {
   assert.equal(run({}, ['--show', 'time']), '12:00');
   assert.equal(run({}, ['--show', 'time', '--12h']), '12:00 pm');
@@ -640,7 +720,14 @@ test('every part prints hostile payload text without its control codes', () => {
     pr: { number: h('12'), kind: 'pr', review_state: h('pending') },
     agent: { name: h('reviewer') },
     prompt_cache: { warm: true, hit_ratio: 0.5 },
-    rate_limits: { five_hour: { used_percentage: 10 }, seven_day: { used_percentage: 20 }, spend_limit: { used_percentage: 30 } },
+    rate_limits: {
+      five_hour: { used_percentage: 10 },
+      seven_day: { used_percentage: 20 },
+      spend_limit: { used_percentage: 30 },
+      seven_day_opus: { used_percentage: 100 },
+      // A key reaches the row as it is, so one with control codes stays out.
+      [`seven_day_${h('sonnet')}`]: { used_percentage: 100 },
+    },
     transcript_path: '/home/me/session.jsonl',
   };
   const activity = {
@@ -660,6 +747,7 @@ test('every part prints hostile payload text without its control codes', () => {
     renderClean(data, 'model,effort,style,agent,version,lines,ctx'),
     'Opus │ effort high │ style explanatory │ agent reviewer │ v2.1.90 │ +15 −23 │ ctx 43% ▓▓░░░ 86.0k',
   );
+  assert.equal(renderClean(data, 'models,limit'), '7d Opus 100% ▓▓▓▓▓ │ limit reached: 7d Opus');
 });
 
 test('hostile text from the transcript prints without its control codes', () => {
@@ -809,6 +897,26 @@ test('--right leaves a row unchanged when it does not fit, or has no right-align
   assert.equal(runAt(20, data, ['--show', 'time,model,pr', '--right', 'pr']), '12:00 │ Opus');
   // Only the rows holding a right-aligned part are padded.
   assert.equal(runAt(10, data, ['--show', 'time', '--show', 'model', '--right', 'model']), '12:00\n      Opus');
+});
+
+test('--latest shows the per-model windows a terminal render saved, less those that have reset', () => {
+  const { execFileSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const script = path.join(__dirname, '..', 'dist', 'statusline.js');
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-')) };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const now = Math.floor(Date.now() / 1000);
+  const statusLine = (args, input = '') => plain(execFileSync(process.execPath, [script, ...args], { env, input, encoding: 'utf8' }));
+  const rateLimits = {
+    seven_day: { used_percentage: 41.2, resets_at: now + 3 * 86400 },
+    seven_day_opus: { used_percentage: 100, resets_at: now + 3 * 86400 },
+    seven_day_sonnet: { used_percentage: 62, resets_at: now - 60 },
+  };
+  const shown = ['--show', 'models,limit', '--no-bars', '--no-reset'];
+  assert.equal(statusLine(shown, JSON.stringify({ rate_limits: rateLimits })), '7d Opus 100% │ 7d Sonnet 62% │ limit reached: 7d Opus\n');
+  assert.equal(statusLine(['--latest', ...shown]), '7d Opus 100% │ limit reached: 7d Opus\n');
 });
 
 test('the status line program takes the terminal width from COLUMNS', () => {
