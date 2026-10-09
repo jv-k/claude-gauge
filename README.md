@@ -81,6 +81,10 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 | `cache` | The prompt cache's hit ratio and state: `cache 91% warm`. Green when most requests hit the cache, red when most miss. | After the session's first response. |
 | `spend` | Your spend against the limit: `$314/$500`, or `spend 63%` until Claude Code has the dollar amounts. | Behind a Claude apps gateway with a spend limit. |
 | `version` | The Claude Code version: `v2.1.90`. | Always. |
+| `today` | What all your sessions have spent today, at list price: `today $4.12`. | Once a session has a cost, or the ledger has spend for today. |
+| `week` | What all your sessions have spent this week, from Monday: `week $23.50`. | Once a session has a cost, or the ledger has spend for this week. |
+
+**Cost ledger.** `today` and `week` add up the spend of every session, from a ledger that each terminal render keeps in `~/.claude/claude-gauge/.state/ledger.json` (under `$CLAUDE_CONFIG_DIR` when that is set). A render records what its session has spent since the session was last recorded, against the local day it is spent on, so a session that runs past midnight counts on both days. Each session writes to the ledger at most once every 10 seconds; the parts always include the current session's latest cost, so they never fall behind in the session you are in. Spend a session makes in its last 10 seconds is recorded when it next renders, so a session that ends then leaves that spend out. Several sessions can render at once without harm: a write locks the ledger and replaces the file whole. The ledger keeps 31 days.
 
 ### Token line
 
@@ -203,6 +207,7 @@ Each hook takes its bar's usual switches, such as `--show` and `--segments`, and
 - `ctx`, `model` and `effort` come from the session's last response. `duration` counts from the first entry in the transcript.
 - `time`, `dir`, `repo`, `branch` and `worktree` come from the clock and from git, as in the terminal.
 - `5h` and `7d` come from the last time the status line ran in a terminal, in any session. Claude Code sends usage figures only to a status line, so each terminal render saves them in `~/.claude/claude-gauge/.state/usage.json`. The figures are as recent as that render. Until a terminal render saves them, and after a window resets, the part shows `~`.
+- `today` and `week` come from the cost ledger that terminal renders keep. The figures are as recent as the last terminal render of each session.
 - The other parts, such as `cost`, `lines`, `pr` and `cache`, have nothing to report, and stay out of their row.
 
 ## Options
@@ -220,7 +225,7 @@ Both scripts take switches on the command line, so you set them in the `command`
 | `--no-pace` | Drops the pace markers. |
 | `--no-reset` | Drops the reset times. |
 | `--12h` | Shows the `time` part and reset times on the 12-hour clock. Default: 24-hour. |
-| `--compact` | Fits narrow terminals: `│` between parts with no spaces round it, and shorter labels: `c` for `ctx`, `eff` for `effort`, `sty` for `style`, `agt` for `agent`, `cch` for `cache` and `spd` for `spend`. The other labels are short already. |
+| `--compact` | Fits narrow terminals: `│` between parts with no spaces round it, and shorter labels: `c` for `ctx`, `eff` for `effort`, `sty` for `style`, `agt` for `agent`, `cch` for `cache`, `spd` for `spend`, `tdy` for `today` and `wk` for `week`. The other labels are short already. |
 | `--right <parts>` | The parts to right-align, separated by commas. In each row that shows any of them, they move to the end of the row, in the row's order, and spaces fill the gap so the row ends at the terminal's right edge. Claude Code gives the terminal width in `COLUMNS`. When the width is unknown, as with `--latest`, the row is too long to leave a gap, or the row holds characters whose width varies by terminal, such as CJK text and emoji, the row is left as it is. Repeat `--right` to name more parts. |
 | `--latest` | Prints the rows for the calling session from its transcript, as plain text, instead of reading Claude Code's input. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 | `--window <size>` | With `--latest`: the context window size, for example `200k` or `1m`, as for the token line. |
