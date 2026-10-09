@@ -647,6 +647,9 @@ test('every part prints hostile payload text without its control codes', () => {
     tools: { running: [{ name: h('Edit'), target: h('src/a.ts') }], completed: { [h('Read')]: 2 } },
     agents: [{ type: h('Explore'), model: h('Haiku'), description: h('Map it') }],
     todos: [{ content: h('Write it'), activeForm: h('Writing it'), status: 'in_progress' }],
+    compactions: 1,
+    lastReplyAt: NOW - 60_000,
+    speed: 80,
   };
   const setup = { claudeMd: 1, rules: 0, mcp: 0, hooks: 0, plan: h('Claude Max 20x'), user: h('me@example.com') };
   // The parts that print text from a switch, and the memory reading.

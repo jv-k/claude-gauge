@@ -111,6 +111,9 @@ const partRegistry = {
   tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, cwd }) => toolsPart(activity(), cwd) },
   agents: { description: 'running subagents, and those finished in the last minute', build: ({ activity, nowMs }) => agentsPart(activity(), nowMs) },
   todos: { description: 'the todo in progress, and how many todos are done', build: ({ activity, config }) => todosPart(activity(), config) },
+  compactions: { description: 'how many times the conversation was compacted', build: ({ activity, config }) => compactionsPart(activity(), config) },
+  reply: { description: 'time since the last reply', build: ({ activity, config, nowMs }) => replyPart(activity(), config, nowMs) },
+  speed: { description: 'output tokens per second of the last response', build: ({ activity }) => speedPart(activity()) },
   env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
   plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
   ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, memory }) => ramPart(memory(), config) },
@@ -278,7 +281,17 @@ function sanitiseAll<T>(value: T): T {
 
 // The labels --compact shortens, and their short forms. A label not named
 // here is short already.
-const COMPACT_LABELS: Record<string, string> = { ctx: 'c', effort: 'eff', style: 'sty', agent: 'agt', cache: 'cch', spend: 'spd', today: 'tdy', week: 'wk' };
+const COMPACT_LABELS: Record<string, string> = {
+  ctx: 'c',
+  effort: 'eff',
+  style: 'sty',
+  agent: 'agt',
+  cache: 'cch',
+  spend: 'spd',
+  today: 'tdy',
+  week: 'wk',
+  compactions: 'cmp',
+};
 
 // A part's label and the space after it: none with --no-labels, the short
 // form with --compact.
@@ -718,9 +731,10 @@ function ledgerFrom(value: unknown): Ledger {
   return { days: table(days), sessions: table(sessions) };
 }
 
-// A ledger value as a number of dollars, or undefined when it is not one: the
-// file is outside claude-gauge's control.
-const dollars = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+// A number from a file or a reader outside claude-gauge's control, such as a
+// ledger value or a transcript counter, or undefined when it is not a finite
+// one.
+const finite = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 
 // A local day as the ledger keys it.
 const dayKey = (ms: number) => {
@@ -732,9 +746,9 @@ const dayKey = (ms: number) => {
 // cost when the ledger has not seen it, or when its cost fell, which means it
 // started again from zero.
 function unrecorded(ledger: Ledger, data: StatusData): number {
-  const usd = dollars(data.cost?.total_cost_usd);
+  const usd = finite(data.cost?.total_cost_usd);
   if (usd === undefined) return 0;
-  const recorded = data.session_id ? dollars(ledger.sessions[data.session_id]?.usd) : undefined;
+  const recorded = data.session_id ? finite(ledger.sessions[data.session_id]?.usd) : undefined;
   return recorded === undefined || usd < recorded ? usd : usd - recorded;
 }
 
@@ -753,8 +767,8 @@ function periodDays(period: Period, nowMs: number): string[] {
 // those days, and what this session has spent since it was last recorded.
 // Nothing shows when neither has anything to add.
 function spentPart(period: Period, { data, config, nowMs, ledger }: PartContext): string {
-  const byDay = periodDays(period, nowMs).map((day) => dollars(ledger.days[day]));
-  const known = byDay.some((usd) => usd !== undefined) || dollars(data.cost?.total_cost_usd) !== undefined;
+  const byDay = periodDays(period, nowMs).map((day) => finite(ledger.days[day]));
+  const known = byDay.some((usd) => usd !== undefined) || finite(data.cost?.total_cost_usd) !== undefined;
   if (!known) return '';
   const usd = byDay.reduce<number>((sum, day) => sum + (day ?? 0), 0) + unrecorded(ledger, data);
   return `${GRAY}${labelOf(config, period)}$${usd.toFixed(2)}${RESET}`;
@@ -834,6 +848,28 @@ function todosPart(activity: TranscriptActivity, config: Config): string {
   if (now) return `${YELLOW}◐ ${cut(now.activeForm || now.content, DESCRIPTION_CHARS)}${RESET} ${GRAY}${count}${RESET}`;
   const text = `${GRAY}${labelOf(config, 'todos')}${count}${RESET}`;
   return done === todos.length ? `${GREEN}✓${RESET} ${text}` : text;
+}
+
+// How many times the conversation was compacted: compactions 2. Nothing
+// before the first.
+function compactionsPart(activity: TranscriptActivity, config: Config): string {
+  const { compactions } = activity;
+  return compactions > 0 ? `${GRAY}${labelOf(config, 'compactions')}${compactions}${RESET}` : '';
+}
+
+// The time since Claude last replied: reply 3m ago. A reply stamped ahead of
+// this machine's clock counts as just now.
+function replyPart(activity: TranscriptActivity, config: Config, nowMs: number): string {
+  const { lastReplyAt } = activity;
+  if (lastReplyAt === undefined) return '';
+  return `${GRAY}${labelOf(config, 'reply')}${formatDuration(Math.max(0, nowMs - lastReplyAt))} ago${RESET}`;
+}
+
+// The output speed of the last response: 84 tok/s, or 6.3 tok/s below ten.
+function speedPart(activity: TranscriptActivity): string {
+  const { speed } = activity;
+  if (speed === undefined) return '';
+  return `${GRAY}${speed < 10 ? speed.toFixed(1) : Math.round(speed)} tok/s${RESET}`;
 }
 
 // env and plan: what Claude Code loads into a session, and the account, read
@@ -1385,11 +1421,11 @@ function withLock(file: string, write: (held: () => boolean) => void): void {
 function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() }: { file?: string; nowMs?: number } = {}): Ledger {
   let ledger = readLedger(file);
   const id = data.session_id;
-  const usd = dollars(data.cost?.total_cost_usd);
+  const usd = finite(data.cost?.total_cost_usd);
   if (typeof id !== 'string' || !id || usd === undefined) return ledger;
   const last = ledger.sessions[id];
-  if (dollars(last?.usd) === usd) return ledger;
-  const since = nowMs - (dollars(last?.at) ?? -Infinity);
+  if (finite(last?.usd) === usd) return ledger;
+  const since = nowMs - (finite(last?.at) ?? -Infinity);
   if (since >= 0 && since < LEDGER_THROTTLE_MS) return ledger;
 
   const temp = `${file}.${process.pid}.tmp`;
@@ -1398,7 +1434,7 @@ function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() 
     withLock(file, (held) => {
       const fresh = readLedger(file);
       const day = dayKey(nowMs);
-      fresh.days[day] = (dollars(fresh.days[day]) ?? 0) + unrecorded(fresh, data);
+      fresh.days[day] = (finite(fresh.days[day]) ?? 0) + unrecorded(fresh, data);
       fresh.sessions[id] = { usd, at: nowMs };
       forgetOld(fresh, nowMs);
       fs.writeFileSync(temp, JSON.stringify(fresh));
@@ -1424,11 +1460,11 @@ function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() 
 function forgetOld(ledger: Ledger, nowMs: number): void {
   const oldest = dayKey(nowMs - LEDGER_KEEP_MS);
   for (const [day, usd] of Object.entries(ledger.days)) {
-    if (day < oldest || dollars(usd) === undefined) delete ledger.days[day];
+    if (day < oldest || finite(usd) === undefined) delete ledger.days[day];
   }
   for (const [id, entry] of Object.entries(ledger.sessions)) {
-    const at = dollars(entry?.at);
-    if (at === undefined || at < nowMs - LEDGER_KEEP_MS || dollars(entry?.usd) === undefined) delete ledger.sessions[id];
+    const at = finite(entry?.at);
+    if (at === undefined || at < nowMs - LEDGER_KEEP_MS || finite(entry?.usd) === undefined) delete ledger.sessions[id];
   }
 }
 
@@ -1469,19 +1505,25 @@ type TodoStatus = 'pending' | 'in_progress' | 'completed';
 
 // What a transcript shows: the tool calls still running, oldest first, how
 // many calls of each tool have completed, the subagents, in the order they
-// started, and the todo list, in its order.
+// started, the todo list, in its order, and the session counters: how many
+// times the conversation was compacted, when Claude last replied, in ms since
+// the epoch, and the last response's output tokens per second.
 interface TranscriptActivity {
   tools: { running: ToolCall[]; completed: Record<string, number> };
   agents: AgentRun[];
   todos: Todo[];
+  compactions: number;
+  lastReplyAt?: number;
+  speed?: number;
 }
 
-const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [] });
+const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [], compactions: 0 });
 
 // Activity with every name and target sanitised. Two tool names that differ
 // only in control codes count as one.
-// A reader handed in from JavaScript may leave the agents and todos out.
-function sanitiseActivity({ tools, agents = [], todos = [] }: TranscriptActivity): TranscriptActivity {
+// A reader handed in from JavaScript may leave the agents, the todos and the
+// counters out, or give counters that are not numbers.
+function sanitiseActivity({ tools, agents = [], todos = [], compactions, lastReplyAt, speed }: TranscriptActivity): TranscriptActivity {
   const running = tools.running.map(({ name, target }) => ({ name: sanitise(name), ...(target ? { target: sanitise(target) } : {}) }));
   const completed: Record<string, number> = {};
   for (const [name, count] of Object.entries(tools.completed)) completed[sanitise(name)] = (completed[sanitise(name)] ?? 0) + count;
@@ -1496,12 +1538,21 @@ function sanitiseActivity({ tools, agents = [], todos = [] }: TranscriptActivity
     ...(activeForm ? { activeForm: sanitise(activeForm) } : {}),
     status,
   }));
-  return { tools: { running, completed }, agents: cleanAgents, todos: cleanTodos };
+  const replyAt = finite(lastReplyAt);
+  const tokensPerSecond = finite(speed);
+  return {
+    tools: { running, completed },
+    agents: cleanAgents,
+    todos: cleanTodos,
+    compactions: finite(compactions) ?? 0,
+    ...(replyAt !== undefined ? { lastReplyAt: replyAt } : {}),
+    ...(tokensPerSecond !== undefined ? { speed: tokensPerSecond } : {}),
+  };
 }
 
 // What the reader keeps between renders. version changes when the shape
 // does, so a state from an older claude-gauge is rebuilt, not misread.
-const TRANSCRIPT_STATE_VERSION = 3;
+const TRANSCRIPT_STATE_VERSION = 4;
 
 interface TranscriptState {
   version: number;
@@ -1524,6 +1575,22 @@ interface TranscriptState {
   // result yet: a call changes the list once its result says it worked.
   todos: TodoEntry[];
   todoCalls: TodoCall[];
+  // How many times the conversation was compacted.
+  compactions: number;
+  // When the last prompt or tool result came, which asks for the next
+  // response, and the last response so far.
+  askedAt?: number;
+  response?: ResponseEntry;
+}
+
+// A response as the reader keeps it: the message's id, when it was asked for
+// and when its last block came, in ms since the epoch, and its output tokens.
+// Claude Code writes a record per block, each with the message's final usage.
+interface ResponseEntry {
+  id: string;
+  askedAt: number;
+  endedAt: number;
+  tokens: number;
 }
 
 // A todo as the reader keeps it: by the id the task tools gave it, if any.
@@ -1729,6 +1796,29 @@ function capAgents(state: TranscriptState): void {
     .reverse();
 }
 
+// A response's record applied to the state: the first block of a message
+// starts a response, timed from the prompt or tool result that asked for it,
+// and each block after it moves the response's end. A reply Claude Code
+// writes itself, such as an API error, is no response of the model's.
+function applyResponse(state: TranscriptState, record: TranscriptRecord, at: number | undefined): void {
+  const message = record.message;
+  if (at === undefined || typeof message?.id !== 'string' || message.model === '<synthetic>') return;
+  const tokens = finite(message.usage?.output_tokens) ?? 0;
+  if (state.response?.id === message.id) {
+    state.response.endedAt = Math.max(state.response.endedAt, at);
+    state.response.tokens = tokens;
+  } else {
+    state.response = { id: message.id, askedAt: state.askedAt ?? at, endedAt: at, tokens };
+  }
+}
+
+// The last response's output tokens per second, when it had tokens and took
+// time to write.
+function speedOf(response: ResponseEntry | undefined): number | undefined {
+  const seconds = response ? (response.endedAt - response.askedAt) / 1000 : 0;
+  return response && response.tokens > 0 && seconds > 0 ? response.tokens / seconds : undefined;
+}
+
 // One transcript record applied to the state. Subagent records are left out,
 // as they are for --latest. A prompt from the user ends the turn, so a call
 // still running then was interrupted: it no longer shows as running, and a
@@ -1737,6 +1827,9 @@ function capAgents(state: TranscriptState): void {
 function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   if (!record || typeof record !== 'object' || record.isSidechain) return;
   const at = timeOf(record);
+  if (record.type === 'system' && record.subtype === 'compact_boundary') state.compactions++;
+  if (record.type === 'assistant') applyResponse(state, record, at);
+  if (record.type === 'user' && at !== undefined) state.askedAt = at;
   const content = record.message?.content;
   const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
   // A task notification ends a task in the background, and is no prompt.
@@ -1822,6 +1915,7 @@ function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptSta
       Array.isArray(state.agents) &&
       Array.isArray(state.todos) &&
       Array.isArray(state.todoCalls) &&
+      Number.isInteger(state.compactions) &&
       state.completed &&
       typeof state.completed === 'object';
     return valid ? state : undefined;
@@ -1864,12 +1958,25 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
   const state: TranscriptState = unchanged
     ? saved
-    : { version: TRANSCRIPT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0, pending: [], completed: {}, agents: [], todos: [], todoCalls: [] };
+    : {
+        version: TRANSCRIPT_STATE_VERSION,
+        file,
+        dev: stat.dev,
+        ino: stat.ino,
+        offset: 0,
+        pending: [],
+        completed: {},
+        agents: [],
+        todos: [],
+        todoCalls: [],
+        compactions: 0,
+      };
 
   if (stat.size > state.offset || !unchanged) {
     state.offset = readLines(io, file, state.offset, stat.size, (line) => {
-      // Only lines that can hold a tool call, a result or a prompt are parsed.
-      if (!line.includes('"tool_') && !line.includes('"user"')) return;
+      // Only lines that can hold a tool call, a result, a prompt, a response
+      // or a compaction are parsed.
+      if (!['"tool_', '"user"', '"assistant"', '"compact_boundary"'].some((key) => line.includes(key))) return;
       try {
         applyRecord(state, JSON.parse(line));
       } catch {
@@ -1881,7 +1988,16 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
   const agents = state.agents.map(({ id, background, ...agent }) => agent);
   const todos = state.todos.map(({ id, ...todo }) => todo);
-  return { tools: { running, completed: { ...state.completed } }, agents, todos };
+  const lastReplyAt = state.response?.endedAt;
+  const speed = speedOf(state.response);
+  return {
+    tools: { running, completed: { ...state.completed } },
+    agents,
+    todos,
+    compactions: state.compactions,
+    ...(lastReplyAt !== undefined ? { lastReplyAt } : {}),
+    ...(speed !== undefined ? { speed } : {}),
+  };
 }
 
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
@@ -1905,6 +2021,8 @@ function windowSize(tokens: number, explicit: string | undefined): number {
 // A session transcript record, as far as the status line reads it.
 interface TranscriptRecord {
   type?: string;
+  // What a system record reports, such as compact_boundary for a compaction.
+  subtype?: string;
   cwd?: string;
   timestamp?: string;
   isSidechain?: boolean;
@@ -1916,9 +2034,11 @@ interface TranscriptRecord {
   origin?: unknown;
   effort?: string | { level?: string };
   message?: {
+    id?: string;
     model?: string;
     content?: unknown;
     usage?: {
+      output_tokens?: number;
       input_tokens?: number;
       cache_creation_input_tokens?: number;
       cache_read_input_tokens?: number;
