@@ -1523,11 +1523,19 @@ interface TranscriptState {
   // The todo list, in its order, and the calls to the todo tools with no
   // result yet: a call changes the list once its result says it worked.
   todos: TodoEntry[];
-  todoCalls: { id: string; name: string; input: unknown }[];
+  todoCalls: TodoCall[];
 }
 
 // A todo as the reader keeps it: by the id the task tools gave it, if any.
 type TodoEntry = Todo & { id?: string };
+
+// A call to a todo tool, kept until its result comes: its id, the tool and
+// what it was asked to write.
+interface TodoCall {
+  id: string;
+  name: string;
+  input: unknown;
+}
 
 // A subagent as the reader keeps it: by the id of the call that started it,
 // and whether it runs in the background.
@@ -1535,7 +1543,8 @@ type AgentEntry = AgentRun & { id: string; background?: boolean };
 
 // The ended calls kept at most, newest first: a call whose result never
 // came must not grow the state for ever. Running calls are all kept, so a
-// large parallel batch counts in full. Ended subagents are capped the same.
+// large parallel batch counts in full. Ended subagents are capped the same,
+// and so are the todo tools' calls that wait for a result.
 const ENDED_KEPT = 20;
 
 // The tool that starts a subagent: Agent, named Task before Claude Code 2.1.
@@ -1651,15 +1660,28 @@ function taskNotification(record: TranscriptRecord): { id?: string; status?: str
 const todoStatus = (value: unknown): TodoStatus | undefined =>
   value === 'pending' || value === 'in_progress' || value === 'completed' ? value : undefined;
 
+// A field that holds text, not only white space.
+const textAt = (value: unknown, key: string): string | undefined => (stringAt(value, key)?.trim() ? stringAt(value, key) : undefined);
+
+// A field that holds an id, as a string or a number, as a string.
+const idAt = (value: unknown, key: string): string | undefined => {
+  const field = isObject(value) ? value[key] : undefined;
+  return typeof field === 'number' ? String(field) : stringAt(value, key);
+};
+
+// A todo from the fields a todo tool names, or undefined when it has no text.
+function todoOf(content: string | undefined, activeForm: string | undefined, status: TodoStatus, id?: string): TodoEntry | undefined {
+  if (!content) return undefined;
+  return { ...(id ? { id } : {}), content, ...(activeForm ? { activeForm } : {}), status };
+}
+
 // The todos a TodoWrite call writes. One with no text drops out, and one
 // with a status the part does not know counts as pending.
 function writtenTodos(input: JsonObject): TodoEntry[] {
   const todos = Array.isArray(input.todos) ? input.todos : [];
-  return todos.flatMap((todo): TodoEntry[] => {
-    const content = stringAt(todo, 'content');
-    if (!content?.trim()) return [];
-    const activeForm = stringAt(todo, 'activeForm');
-    return [{ content, ...(activeForm ? { activeForm } : {}), status: (isObject(todo) && todoStatus(todo.status)) || 'pending' }];
+  return todos.flatMap((todo) => {
+    const status = (isObject(todo) && todoStatus(todo.status)) || 'pending';
+    return todoOf(textAt(todo, 'content'), textAt(todo, 'activeForm'), status) ?? [];
   });
 }
 
@@ -1667,27 +1689,22 @@ function writtenTodos(input: JsonObject): TodoEntry[] {
 // its text, Task #7 created successfully.
 function createdTaskId(block: ContentBlock, record: TranscriptRecord): string | undefined {
   const task = isObject(record.toolUseResult) ? record.toolUseResult.task : undefined;
-  const id = isObject(task) ? task.id : undefined;
-  if (typeof id === 'string' || typeof id === 'number') return String(id);
-  return /Task #(\S+) created/.exec(textOf(block.content))?.[1];
+  return idAt(task, 'id') ?? /Task #(\S+) created/.exec(textOf(block.content))?.[1];
 }
 
 // A todo tool's call applied to the list, once its result says it worked:
 // TodoWrite replaces the list, TaskCreate adds a pending task, and
 // TaskUpdate changes one, or drops it when it is deleted.
-function applyTodoCall(state: TranscriptState, todoCall: TranscriptState['todoCalls'][number], block: ContentBlock, record: TranscriptRecord): void {
+function applyTodoCall(state: TranscriptState, todoCall: TodoCall, block: ContentBlock, record: TranscriptRecord): void {
   if (block.is_error === true || (isObject(record.toolUseResult) && record.toolUseResult.success === false)) return;
   const input = isObject(todoCall.input) ? todoCall.input : {};
   if (todoCall.name === 'TodoWrite') {
     state.todos = writtenTodos(input);
   } else if (todoCall.name === 'TaskCreate') {
-    const content = stringAt(input, 'subject');
-    if (!content?.trim()) return;
-    const id = createdTaskId(block, record);
-    const activeForm = stringAt(input, 'activeForm');
-    state.todos = [...state.todos, { ...(id ? { id } : {}), content, ...(activeForm ? { activeForm } : {}), status: 'pending' }];
+    const task = todoOf(textAt(input, 'subject'), textAt(input, 'activeForm'), 'pending', createdTaskId(block, record));
+    if (task) state.todos = [...state.todos, task];
   } else if (todoCall.name === 'TaskUpdate') {
-    const id = typeof input.taskId === 'number' ? String(input.taskId) : stringAt(input, 'taskId');
+    const id = idAt(input, 'taskId');
     const task = id === undefined ? undefined : state.todos.find((t) => t.id === id);
     if (!task) return;
     if (input.status === 'deleted') {
@@ -1696,9 +1713,9 @@ function applyTodoCall(state: TranscriptState, todoCall: TranscriptState['todoCa
     }
     const status = todoStatus(input.status);
     if (status) task.status = status;
-    const content = stringAt(input, 'subject');
-    if (content?.trim()) task.content = content;
-    const activeForm = stringAt(input, 'activeForm');
+    const content = textAt(input, 'subject');
+    if (content) task.content = content;
+    const activeForm = textAt(input, 'activeForm');
     if (activeForm) task.activeForm = activeForm;
   }
 }
