@@ -83,12 +83,16 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 | `cache` | The prompt cache's hit ratio and state: `cache 91% warm`. Green when most requests hit the cache, red when most miss. | After the session's first response. |
 | `spend` | Your spend against the limit: `$314/$500`, or `spend 63%` until Claude Code has the dollar amounts. | Behind a Claude apps gateway with a spend limit. |
 | `version` | The Claude Code version: `v2.1.90`. | Always. |
+| `today` | What all your sessions have spent today, at list price: `today $4.12`. | Once a session has a cost, or the ledger has spend for today. |
+| `week` | What all your sessions have spent this week, from Monday: `week $23.50`. | Once a session has a cost, or the ledger has spend for this week. |
 | `tools` | The tool running now and what it works on, then the five tools used most this session, with counts: `◐ Edit src/a.ts ✓ Read ×12 ✓ Bash ×3`. A file inside the project shows relative to it, and a target longer than 30 characters is cut with `…`. Subagents' tools are not counted. | Once the session has called a tool. |
 | `env` | What Claude Code loads into the session: `env 2 md 4 rules 3 mcp 2 hooks`, for CLAUDE.md files, rules, MCP servers and hooks. A kind with none stays out. See [Environment and plan](#environment-and-plan). | When anything is loaded. |
 | `plan` | Your claude.ai plan and the account you are signed in with: `Claude Max 20x (me@example.com)`. | When the config names them. |
 | `ram` | The system's memory in use, as a percentage, a bar and the amount in gigabytes: `ram 66% ▓▓▓░░ 10.5G`. It takes the usage colours. See [Memory, text and command](#memory-text-and-command). | Always. |
 | `text` | Fixed text that you give with `--text`, such as a label for the machine: `work laptop`. | With `--text`. |
 | `command` | The first line of output of a shell command that you give with `--command`: `prod-eu`. See [Memory, text and command](#memory-text-and-command) for the rules it runs under. | With `--command`, when the command succeeds in time. |
+
+**Cost ledger.** `today` and `week` add up the spend of every session, from a ledger that each terminal render keeps in `~/.claude/claude-gauge/.state/ledger.json` (under `$CLAUDE_CONFIG_DIR` when that is set). A render records what its session has spent since the session was last recorded, against the local day of that render, so a session that runs past midnight counts on both days. Each session writes to the ledger at most once every 10 seconds; the parts always include the current session's latest cost, so they never fall behind in the session you are in. Spend a session makes in its last 10 seconds is recorded when it next renders, so a session that ends then leaves that spend out. Several sessions can render at once without harm: a write locks the ledger and replaces the file whole. The ledger keeps 31 days.
 
 **Transcript parts.** `tools` reads the session transcript. claude-gauge reads it only when a `--show` names such a part, and then reads only the lines added since the last render. It keeps its place in each transcript in `~/.claude/claude-gauge/.state/transcripts/`, or under `$CLAUDE_CONFIG_DIR` when that is set. A transcript that shrinks or is replaced is read again from the start.
 
@@ -247,6 +251,7 @@ Each hook takes its bar's usual switches, such as `--show` and `--segments`, and
 - `time`, `dir`, `repo`, `branch` and `worktree` come from the clock and from git, as in the terminal.
 - `env` and `plan` come from the files on disk, and the provider after `model` from the environment, as in the terminal.
 - `5h` and `7d` come from the last time the status line ran in a terminal, in any session. Claude Code sends usage figures only to a status line, so each terminal render saves them in `~/.claude/claude-gauge/.state/usage.json`. The figures are as recent as that render. Until a terminal render saves them, and after a window resets, the part shows `~`.
+- `today` and `week` come from the cost ledger that terminal renders keep. The figures are as recent as the last terminal render of each session.
 - The other parts, such as `cost`, `lines`, `pr` and `cache`, have nothing to report, and stay out of their row.
 
 ## Options
@@ -264,7 +269,7 @@ Both scripts take switches on the command line, so you set them in the `command`
 | `--no-pace` | Drops the pace markers. |
 | `--no-reset` | Drops the reset times. |
 | `--12h` | Shows the `time` part and reset times on the 12-hour clock. Default: 24-hour. |
-| `--compact` | Fits narrow terminals: `│` between parts with no spaces round it, and shorter labels: `c` for `ctx`, `eff` for `effort`, `sty` for `style`, `agt` for `agent`, `cch` for `cache` and `spd` for `spend`. The other labels are short already. |
+| `--compact` | Fits narrow terminals: `│` between parts with no spaces round it, and shorter labels: `c` for `ctx`, `eff` for `effort`, `sty` for `style`, `agt` for `agent`, `cch` for `cache`, `spd` for `spend`, `tdy` for `today` and `wk` for `week`. The other labels are short already. |
 | `--right <parts>` | The parts to right-align, separated by commas. In each row that shows any of them, they move to the end of the row, in the row's order, and spaces fill the gap so the row ends at the terminal's right edge. Claude Code gives the terminal width in `COLUMNS`. When the width is unknown, as with `--latest`, the row is too long to leave a gap, or the row holds characters whose width varies by terminal, such as CJK text and emoji, the row is left as it is. Repeat `--right` to name more parts. |
 | `--text <text>` | The text that the `text` part shows. Quote text that holds spaces: `--text 'work laptop'`. If you give `--text` more than once, the last one counts. |
 | `--command <command>` | The shell command that the `command` part runs. Quote the command as one value: `--command 'kubectl config current-context'`. It runs only when a `--show` row names `command`. See [Memory, text and command](#memory-text-and-command) for its rules. |

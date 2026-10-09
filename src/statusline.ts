@@ -15,7 +15,9 @@
 // command --command names, for the command part, and, only when a part that
 // needs it is shown, a read of the bytes the session transcript has gained
 // since the last render. The env and plan parts read Claude Code's own config
-// files, and the model part reads the provider from the environment.
+// files, and the model part reads the provider from the environment. The today
+// and week parts add the cost ledger, which each render keeps in the state
+// folder.
 //
 // The parts it can show are in PART_REGISTRY and the switches it takes in
 // SWITCHES, both below. README.md documents each in a table, and a test fails
@@ -27,13 +29,15 @@ import * as path from 'node:path';
 import { execFileSync, spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
-// What a part's builder reads: the payload, the config, the clock, the
-// folder Claude Code runs in, and the git branch reader. render sanitises the
-// payload, the folder's name and the branch before any part sees them.
+// What a part's builder reads: the payload, the config, the clock, the cost
+// ledger, the folder Claude Code runs in, and the git branch reader. render
+// sanitises the payload, the folder's name and the branch before any part
+// sees them.
 interface PartContext {
   data: StatusData;
   config: Config;
   nowMs: number;
+  ledger: Ledger;
   // The folder's path as it is, for git to run in, and its name to print.
   cwd: string;
   folder: string;
@@ -102,6 +106,8 @@ const partRegistry = {
   cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config }) => cachePart(data, config) },
   spend: { description: 'spend against a gateway spend limit', build: ({ data, config }) => spendPart(data, config) },
   version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
+  today: { description: "today's spend across sessions, from the cost ledger", build: (ctx) => spentPart('today', ctx) },
+  week: { description: "this week's spend across sessions, from the cost ledger", build: (ctx) => spentPart('week', ctx) },
   tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, cwd }) => toolsPart(activity(), cwd) },
   env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
   plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
@@ -270,7 +276,7 @@ function sanitiseAll<T>(value: T): T {
 
 // The labels --compact shortens, and their short forms. A label not named
 // here is short already.
-const COMPACT_LABELS: Record<string, string> = { ctx: 'c', effort: 'eff', style: 'sty', agent: 'agt', cache: 'cch', spend: 'spd' };
+const COMPACT_LABELS: Record<string, string> = { ctx: 'c', effort: 'eff', style: 'sty', agent: 'agt', cache: 'cch', spend: 'spd', today: 'tdy', week: 'wk' };
 
 // A part's label and the space after it: none with --no-labels, the short
 // form with --compact.
@@ -313,6 +319,7 @@ interface RateLimit {
 }
 
 interface StatusData {
+  session_id?: string;
   cwd?: string;
   transcript_path?: string;
   version?: string;
@@ -681,6 +688,69 @@ function outsideText(raw: string): string {
 
 const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
 
+// The cost ledger: what every session has spent, by local day, kept in the
+// state folder so that the today and week parts can add up spend across
+// sessions. Each session's cost as last recorded is kept too, so a render
+// records only what the session has spent since.
+interface Ledger {
+  // Spend in dollars, by local day as YYYY-MM-DD.
+  days: Record<string, number>;
+  // Each session's total cost when it was last recorded, and when that was.
+  sessions: Record<string, { usd: number; at: number }>;
+}
+
+// A ledger from whatever the file held: its two tables where they are
+// objects, else empty ones. The tables have no prototype, so a session id
+// such as __proto__ is a key like any other.
+function ledgerFrom(value: unknown): Ledger {
+  const isObject = (v: unknown): v is object => typeof v === 'object' && v !== null && !Array.isArray(v);
+  const table = (v: unknown) => Object.assign(Object.create(null), isObject(v) ? v : {});
+  const { days, sessions } = (isObject(value) ? value : {}) as Partial<Ledger>;
+  return { days: table(days), sessions: table(sessions) };
+}
+
+// A ledger value as a number of dollars, or undefined when it is not one: the
+// file is outside claude-gauge's control.
+const dollars = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+
+// A local day as the ledger keys it.
+const dayKey = (ms: number) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// What the session has spent since the ledger last recorded it: all of its
+// cost when the ledger has not seen it, or when its cost fell, which means it
+// started again from zero.
+function unrecorded(ledger: Ledger, data: StatusData): number {
+  const usd = dollars(data.cost?.total_cost_usd);
+  if (usd === undefined) return 0;
+  const recorded = data.session_id ? dollars(ledger.sessions[data.session_id]?.usd) : undefined;
+  return recorded === undefined || usd < recorded ? usd : usd - recorded;
+}
+
+// The spans the today and week parts add up, each named as its part.
+type Period = 'today' | 'week';
+
+// The local days a period covers, newest first: today alone, or each day
+// back to Monday.
+function periodDays(period: Period, nowMs: number): string[] {
+  const now = new Date(nowMs);
+  const count = period === 'today' ? 1 : ((now.getDay() + 6) % 7) + 1;
+  return Array.from({ length: count }, (_, i) => dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i).getTime()));
+}
+
+// Spend across sessions for today or this week: what the ledger holds for
+// those days, and what this session has spent since it was last recorded.
+// Nothing shows when neither has anything to add.
+function spentPart(period: Period, { data, config, nowMs, ledger }: PartContext): string {
+  const byDay = periodDays(period, nowMs).map((day) => dollars(ledger.days[day]));
+  const known = byDay.some((usd) => usd !== undefined) || dollars(data.cost?.total_cost_usd) !== undefined;
+  if (!known) return '';
+  const usd = byDay.reduce<number>((sum, day) => sum + (day ?? 0), 0) + unrecorded(ledger, data);
+  return `${GRAY}${labelOf(config, period)}$${usd.toFixed(2)}${RESET}`;
+}
+
 // The tools part shows the completed tools used most, up to this many, and
 // cuts a target to this many characters.
 const TOOLS_SHOWN = 5;
@@ -990,6 +1060,8 @@ function runCommand(command: string, cwd: string): string {
 interface RenderOptions {
   config?: Overrides;
   nowMs?: number;
+  // The cost ledger, as read from the state folder.
+  ledger?: Ledger;
   branchOf?: (cwd: string) => string;
   env?: Env;
   setupOf?: (cwd: string) => Setup;
@@ -1059,6 +1131,7 @@ function render(
     commandOutputOf = runCommand,
     transcript = readTranscriptActivity,
     columns,
+    ledger,
   }: RenderOptions = {},
 ): string {
   const merged = { ...DEFAULTS, ...overrides };
@@ -1085,6 +1158,7 @@ function render(
     data: sanitiseAll(data),
     config,
     nowMs,
+    ledger: ledgerFrom(ledger),
     cwd,
     folder: sanitise(path.basename(cwd)),
     branchOf: (dir) => sanitise(branchOf(dir)),
@@ -1127,10 +1201,13 @@ function render(
 
 // --latest: the status line where Claude Code runs none (the VS Code panel).
 // It rebuilds a payload from the session transcript, and takes the 5h and 7d
-// windows from the last terminal render, which saves them.
+// windows from the last terminal render, which saves them, and today and
+// week from the cost ledger terminal renders keep.
 
 const configDir = () => configDirOf(process.env, os.homedir());
-const usageFile = () => path.join(configDir(), 'claude-gauge', '.state', 'usage.json');
+// A file in the state folder.
+const stateFile = (name: string) => path.join(configDir(), 'claude-gauge', '.state', name);
+const usageFile = () => stateFile('usage.json');
 
 // Best effort: a failed save never breaks the status line.
 function saveUsage(data: StatusData, nowMs: number): void {
@@ -1153,6 +1230,151 @@ function loadUsage(nowMs: number): StatusData['rate_limits'] | undefined {
     return live.length ? Object.fromEntries(live) : undefined;
   } catch {
     return undefined;
+  }
+}
+
+// The cost ledger file. Each terminal render records its session's cost in
+// it; the today and week parts read it, with --latest too.
+const ledgerFile = () => stateFile('ledger.json');
+
+// A session records its cost at most once in this time. The parts still show
+// its latest cost, as the spend the ledger has not recorded yet.
+const LEDGER_THROTTLE_MS = 10_000;
+
+// Days and sessions older than this drop out of the ledger.
+const LEDGER_KEEP_MS = 31 * 86400 * 1000;
+
+// A lock this old was left by a render that stopped while holding it.
+const STALE_LOCK_MS = 10_000;
+
+// How long a render waits for another to finish writing, in all.
+const LOCK_WAIT_MS = 100;
+
+// The ledger the file holds, or an empty one when there is none or it is not
+// JSON.
+function readLedger(file: string): Ledger {
+  try {
+    return ledgerFrom(JSON.parse(fs.readFileSync(file, 'utf8')));
+  } catch {
+    return ledgerFrom(undefined);
+  }
+}
+
+const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+const isStale = (file: string) => Date.now() - fs.statSync(file).mtimeMs > STALE_LOCK_MS;
+
+// Removes a lock a render left when it stopped while holding it. The lock is
+// first renamed to a name of this render's own, which only one render can do,
+// and then checked again, so a lock another render took in the meantime is
+// put back rather than removed.
+function breakStaleLock(lock: string, token: string): void {
+  const taken = `${lock}.${token}`;
+  try {
+    if (!isStale(lock)) return;
+    fs.renameSync(lock, taken);
+  } catch {
+    return; // the lock went, or another render took it first
+  }
+  try {
+    if (!isStale(taken)) fs.linkSync(taken, lock);
+  } catch {
+    /* a newer lock is in place: leave it */
+  }
+  fs.rmSync(taken, { force: true });
+}
+
+// Runs write while holding the ledger's lock, a file only one render at a
+// time can create, holding a token of the render's own. A render that cannot
+// take the lock in LOCK_WAIT_MS writes nothing, and loses nothing: its
+// session's spend stays unrecorded until a later render records it. write
+// gets held, which says whether the lock is still this render's: a render
+// that stopped for longer than STALE_LOCK_MS, as across a system sleep, can
+// find its lock broken and taken by another, and must then commit nothing.
+function withLock(file: string, write: (held: () => boolean) => void): void {
+  const lock = `${file}.lock`;
+  const token = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  for (let waited = 0; ; waited += 5) {
+    try {
+      fs.writeFileSync(lock, token, { flag: 'wx' });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      breakStaleLock(lock, token);
+      if (waited >= LOCK_WAIT_MS) return;
+      sleep(5);
+    }
+  }
+  const held = () => {
+    try {
+      return fs.readFileSync(lock, 'utf8') === token;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    write(held);
+  } finally {
+    // Only this render's own lock: another may hold it once this one was
+    // taken for stale.
+    if (held()) fs.rmSync(lock, { force: true });
+  }
+}
+
+// Records what the session has spent since the ledger last recorded it,
+// against today, and returns the ledger as it now stands. It writes only when
+// the cost has changed and LEDGER_THROTTLE_MS has passed since the session
+// last wrote. Under the lock it reads the file again, so a write never loses
+// another session's, and it replaces the file in one rename, so a reader never
+// sees half a ledger. Best effort: a failed write never breaks the status
+// line.
+function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() }: { file?: string; nowMs?: number } = {}): Ledger {
+  let ledger = readLedger(file);
+  const id = data.session_id;
+  const usd = dollars(data.cost?.total_cost_usd);
+  if (typeof id !== 'string' || !id || usd === undefined) return ledger;
+  const last = ledger.sessions[id];
+  if (dollars(last?.usd) === usd) return ledger;
+  const since = nowMs - (dollars(last?.at) ?? -Infinity);
+  if (since >= 0 && since < LEDGER_THROTTLE_MS) return ledger;
+
+  const temp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    withLock(file, (held) => {
+      const fresh = readLedger(file);
+      const day = dayKey(nowMs);
+      fresh.days[day] = (dollars(fresh.days[day]) ?? 0) + unrecorded(fresh, data);
+      fresh.sessions[id] = { usd, at: nowMs };
+      forgetOld(fresh, nowMs);
+      fs.writeFileSync(temp, JSON.stringify(fresh));
+      // A lock lost while this render stopped: the ledger read above may be
+      // out of date, so the session's spend waits for a later render.
+      if (!held()) return;
+      fs.renameSync(temp, file);
+      ledger = fresh;
+    });
+  } catch {
+    /* the folder cannot be written at all: the status line still shows */
+  }
+  try {
+    fs.rmSync(temp, { force: true });
+  } catch {
+    /* nothing was left */
+  }
+  return ledger;
+}
+
+// Drops the days and sessions older than LEDGER_KEEP_MS, and any entry that
+// is not a ledger entry.
+function forgetOld(ledger: Ledger, nowMs: number): void {
+  const oldest = dayKey(nowMs - LEDGER_KEEP_MS);
+  for (const [day, usd] of Object.entries(ledger.days)) {
+    if (day < oldest || dollars(usd) === undefined) delete ledger.days[day];
+  }
+  for (const [id, entry] of Object.entries(ledger.sessions)) {
+    const at = dollars(entry?.at);
+    if (at === undefined || at < nowMs - LEDGER_KEEP_MS || dollars(entry?.usd) === undefined) delete ledger.sessions[id];
   }
 }
 
@@ -1523,6 +1745,8 @@ export {
   DEFAULT_ROWS,
   SWITCHES,
   payloadFromTranscript,
+  recordCost,
+  withLock,
   modelName,
   repoFromRemote,
   worktreeFromGitDir,
@@ -1535,7 +1759,7 @@ export {
   COMMAND_TIMEOUT_MS,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord, TranscriptActivity, Setup, Memory };
+export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger, TranscriptActivity, Setup, Memory };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
@@ -1559,7 +1783,7 @@ if (isMain) {
     const cwd = data.workspace?.current_dir;
     if (data.workspace && cwd) Object.assign(data.workspace, gitWorkspace(cwd));
     // Plain text: it is pasted into a reply, where colour codes show as junk.
-    process.stdout.write(stripColours(render(data, { config, nowMs })) + '\n');
+    process.stdout.write(stripColours(render(data, { config, nowMs, ledger: readLedger(ledgerFile()) })) + '\n');
   } else {
     const chunks: Buffer[] = [];
     process.stdin.on('data', (c: Buffer) => chunks.push(c));
@@ -1571,7 +1795,8 @@ if (isMain) {
         /* render what we can from an empty payload rather than print nothing */
       }
       saveUsage(data, nowMs);
-      process.stdout.write(render(data, { config, nowMs, columns: columnsOf(process.env.COLUMNS) }) + '\n');
+      const ledger = recordCost(data, { nowMs });
+      process.stdout.write(render(data, { config, nowMs, ledger, columns: columnsOf(process.env.COLUMNS) }) + '\n');
     });
   }
 }
