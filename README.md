@@ -85,6 +85,12 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 | `version` | The Claude Code version: `v2.1.90`. | Always. |
 | `env` | What Claude Code loads into the session: `env 2 md 4 rules 3 mcp 2 hooks`, for CLAUDE.md files, rules, MCP servers and hooks. A kind with none stays out. See [Environment and plan](#environment-and-plan). | When anything is loaded. |
 | `plan` | Your claude.ai plan and the account you are signed in with: `Claude Max 20x (me@example.com)`. | When the config names them. |
+| `models` | Your weekly usage for each model with a weekly limit of its own, shown as `7d` shows the week, with the model's name: `7d Opus 41% ▓▓░┃░ → 3d`. Several models show as several segments, in name order. `--no-labels` drops `7d` and keeps the name. See [Per-model windows](#per-model-windows). | When Claude Code sends per-model weekly windows. |
+| `limit` | A notice naming each window at 100%, with its reset as its part shows it: `limit reached: 5h → 14:10`, or `limit reached: 7d → 3d, 7d Opus → 3d` for more than one. It covers `5h`, `7d`, each per-model window and the spend limit. In deep red. | While a window is at 100%. |
+
+#### Per-model windows
+
+Claude Code's documented status line input has the 5-hour, weekly and spend windows. Some plans also have a weekly limit for one model, such as Opus, and Anthropic's usage figures name that window `seven_day_opus`. When Claude Code sends a window named `seven_day_<model>` in its `rate_limits`, `models` shows it and `limit` watches it. The name after `7d` is the part after `seven_day_`, capitalised, so a new model needs no new release. A window with no percentage stays out. Until Claude Code sends such a window, `models` shows nothing and stays out of its row.
 
 #### Environment and plan
 
@@ -220,7 +226,7 @@ Each hook takes its bar's usual switches, such as `--show` and `--segments`, and
 - `ctx`, `model` and `effort` come from the session's last response. `duration` counts from the first entry in the transcript.
 - `time`, `dir`, `repo`, `branch` and `worktree` come from the clock and from git, as in the terminal.
 - `env` and `plan` come from the files on disk, and the provider after `model` from the environment, as in the terminal.
-- `5h` and `7d` come from the last time the status line ran in a terminal, in any session. Claude Code sends usage figures only to a status line, so each terminal render saves them in `~/.claude/claude-gauge/.state/usage.json`. The figures are as recent as that render. Until a terminal render saves them, and after a window resets, the part shows `~`.
+- `5h`, `7d`, `models` and `limit` come from the last time the status line ran in a terminal, in any session. Claude Code sends usage figures only to a status line, so each terminal render saves them in `~/.claude/claude-gauge/.state/usage.json`, per-model windows included. The figures are as recent as that render. Until a terminal render saves them, and after a window resets, `5h` and `7d` show `~`, and `models` and `limit` leave that window out.
 - The other parts, such as `cost`, `lines`, `pr` and `cache`, have nothing to report, and stay out of their row.
 
 ## Options

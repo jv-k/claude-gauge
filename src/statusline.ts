@@ -10,9 +10,10 @@
 //
 // Almost everything comes from Claude Code's own payload
 // (https://code.claude.com/docs/en/statusline): `rate_limits` carries the
-// claude.ai 5-hour and 7-day windows. The only side call is
-// `git branch --show-current`. The env and plan parts read Claude Code's own
-// config files, and the model part reads the provider from the environment.
+// claude.ai 5-hour and 7-day windows, and any per-model weekly windows. The
+// only side call is `git branch --show-current`. The env and plan parts read
+// Claude Code's own config files, and the model part reads the provider from
+// the environment.
 //
 // The parts it can show are in PART_REGISTRY and the switches it takes in
 // SWITCHES, both below. README.md documents each in a table, and a test fails
@@ -92,6 +93,8 @@ const partRegistry = {
   version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
   env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
   plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
+  models: { description: 'per-model weekly usage, as 7d shows the week', build: ({ data, config, nowMs }) => modelsPart(data, config, nowMs) },
+  limit: { description: 'a notice naming each exhausted window and its reset', build: ({ data, config, nowMs }) => limitPart(data, config, nowMs) },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -265,11 +268,13 @@ interface UsageWindow {
   key: 'five_hour' | 'seven_day';
   seconds: number;
   minElapsed: number;
+  // The reset as the window shows it: a time of day, or days away.
+  resetText: (epochSeconds: number, config: Config, nowMs: number) => string;
 }
 
 const WINDOWS: Record<'5h' | '7d', UsageWindow> = {
-  '5h': { key: 'five_hour', seconds: 5 * 3600, minElapsed: 540 }, // 9 minutes
-  '7d': { key: 'seven_day', seconds: 7 * 86400, minElapsed: 3024 }, // about 50 minutes
+  '5h': { key: 'five_hour', seconds: 5 * 3600, minElapsed: 540, resetText: (at, config) => formatTime(at, config) }, // 9 minutes
+  '7d': { key: 'seven_day', seconds: 7 * 86400, minElapsed: 3024, resetText: (at, config, nowMs) => formatDaysOrTime(at, config, nowMs) }, // about 50 minutes
 };
 
 // The parts of Claude Code's payload the status line reads. Every field is
@@ -304,10 +309,13 @@ interface StatusData {
       cache_read_input_tokens?: number;
     };
   };
+  // Per-model weekly windows arrive beside the week as seven_day_<model>,
+  // such as seven_day_opus, when Claude Code sends them.
   rate_limits?: {
     five_hour?: RateLimit;
     seven_day?: RateLimit;
     spend_limit?: RateLimit;
+    [key: string]: RateLimit | null | undefined;
   };
   cost?: {
     total_duration_ms?: number;
@@ -402,16 +410,49 @@ function windowPart(name: '5h' | '7d', data: StatusData, config: Config, nowMs: 
   const label = labelOf(config, name);
   const limit = data.rate_limits?.[window.key];
   if (limit?.used_percentage == null) return `${YELLOW}${label}~${RESET}`;
+  return usageSegment(label, limit.used_percentage, limit.resets_at, window, config, nowMs);
+}
 
-  const pct = Math.round(limit.used_percentage);
+// A reported window's percentage, bar and reset, behind its label.
+function usageSegment(
+  label: string,
+  usedPercentage: number,
+  resetsAt: number | undefined,
+  window: UsageWindow,
+  config: Config,
+  nowMs: number,
+): string {
+  const pct = Math.round(usedPercentage);
   const color = levelColor(pct);
-  const bar = config.bars ? usageBar(pct, color, window, limit.resets_at, config, nowMs) : '';
-  let reset = '';
-  if (config.reset && limit.resets_at) {
-    const when = name === '7d' ? formatDaysOrTime(limit.resets_at, config, nowMs) : formatTime(limit.resets_at, config);
-    reset = ` → ${when}`;
-  }
+  const bar = config.bars ? usageBar(pct, color, window, resetsAt, config, nowMs) : '';
+  const reset = config.reset && resetsAt ? ` → ${window.resetText(resetsAt, config, nowMs)}` : '';
   return `${color}${label}${pct}%${bar}${reset}${RESET}`;
+}
+
+// The per-model weekly windows Claude Code reports, as seven_day_<model>
+// keys, in key order: the model's name and the window. A name is letters,
+// digits and underscores only, since keys reach the row unsanitised.
+function modelWindows(data: StatusData): { name: string; limit: RateLimit & { used_percentage: number } }[] {
+  return Object.entries(data.rate_limits ?? {})
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .flatMap(([key, limit]) => {
+      const model = /^seven_day_([a-z0-9]+(?:_[a-z0-9]+)*)$/i.exec(key)?.[1];
+      const used = limit?.used_percentage;
+      if (!model || used == null) return [];
+      const name = model.split('_').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+      return [{ name, limit: { ...limit, used_percentage: used } }];
+    });
+}
+
+// The models part: each per-model weekly window as 7d shows the week, with
+// the model's name after the 7d label. The name stays with --no-labels,
+// since without it two windows read alike.
+function modelsPart(data: StatusData, config: Config, nowMs: number): string {
+  return modelWindows(data)
+    .map(({ name, limit }) =>
+      usageSegment(`${labelOf(config, '7d')}${name} `, limit.used_percentage, limit.resets_at, WINDOWS['7d'], config, nowMs),
+    )
+    .join(separatorOf(config));
 }
 
 // The context in the token line's shape: ctx 43% ▓▓░░░ 86.0k. Both figures
@@ -624,6 +665,28 @@ function planPart({ plan, user }: Setup): string {
   const shown = plan && user ? `${plan} (${user})` : plan || user;
   return shown ? `${GRAY}${shown}${RESET}` : '';
 }
+
+// The limit part: every window at 100% or more, by the name its part shows
+// it under, with its reset as that part shows it. The spend limit's reset,
+// when Claude Code sends one, shows as the week's does.
+function limitPart(data: StatusData, config: Config, nowMs: number): string {
+  const limits = data.rate_limits ?? {};
+  const windows: [string, RateLimit | null | undefined, UsageWindow][] = [
+    ['5h', limits.five_hour, WINDOWS['5h']],
+    ['7d', limits.seven_day, WINDOWS['7d']],
+    ...modelWindows(data).map(({ name, limit }): [string, RateLimit, UsageWindow] => [`7d ${name}`, limit, WINDOWS['7d']]),
+    ['spend', limits.spend_limit, WINDOWS['7d']],
+  ];
+  const reached = windows
+    .filter(([, limit]) => (limit?.used_percentage ?? 0) >= 100)
+    .map(([name, limit, window]) =>
+      config.reset && limit?.resets_at ? `${name} → ${window.resetText(limit.resets_at, config, nowMs)}` : name,
+    );
+  return reached.length ? `${LEVELS[9]}limit reached: ${reached.join(', ')}${RESET}` : '';
+}
+
+// The separator between a row's segments.
+const separatorOf = (config: Config) => `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
 
 const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
 
@@ -869,7 +932,7 @@ function render(
     },
   };
 
-  const separator = `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
+  const separator = separatorOf(config);
   const width = columnsOf(columns);
 
   // One output line per row. A part with nothing to show drops out of its
