@@ -419,3 +419,95 @@ test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () =>
   assert.match(text, /^## Status line in replies\n/);
   assert.match(text, /statusline\.js --latest --window 1m\n/);
 });
+
+// Renders with the given switches and terminal width, colours stripped.
+const runAt = (columns, data, args) =>
+  plain(render(data, { nowMs: NOW, branchOf: () => 'main', config: parseArgs(args), columns }));
+
+test('--right pads its parts to the end of the row, to the terminal width', () => {
+  const data = { model: { display_name: 'Opus' } };
+  assert.equal(runAt(20, data, ['--show', 'time,model', '--right', 'model']), '12:00           Opus');
+  // A row of right-aligned parts only is padded at its start.
+  assert.equal(runAt(10, data, ['--show', 'model', '--right', 'model']), '      Opus');
+  // The colour codes take no room: the visible row is the terminal's width.
+  const raw = render(data, { nowMs: NOW, config: parseArgs(['--show', 'time,model', '--right', 'model']), columns: 20 });
+  assert.ok(raw.length > 20);
+  assert.equal(plain(raw).length, 20);
+});
+
+test('--right moves its parts to the end in row order, and keeps their separators', () => {
+  const data = { model: { display_name: 'Opus' }, effort: { level: 'high' }, version: '2.1.90' };
+  const args = ['--show', 'model,time,effort,version', '--right', 'version,model'];
+  assert.equal(runAt(40, data, args), '12:00 │ effort high       Opus │ v2.1.90');
+  assert.equal(runAt(30, data, [...args, '--compact']), '12:00│eff high    Opus│v2.1.90');
+  // Repeating --right adds to the parts it names; unknown names are ignored.
+  assert.equal(runAt(40, data, [...args.slice(0, 2), '--right', 'model,weather', '--right', 'version']), runAt(40, data, args));
+});
+
+test('--right leaves rows unchanged when the terminal width is unknown', () => {
+  const data = { model: { display_name: 'Opus' } };
+  const args = ['--show', 'time,model', '--right', 'model'];
+  for (const columns of [undefined, 0, -5, NaN, 2.5]) assert.equal(runAt(columns, data, args), '12:00 │ Opus', String(columns));
+});
+
+test('--right leaves a row unchanged when it does not fit, or has no right-aligned part to show', () => {
+  const data = { model: { display_name: 'Opus' } };
+  // Padding narrower than the separator would run the parts together.
+  assert.equal(runAt(11, data, ['--show', 'time,model', '--right', 'model']), '12:00 │ Opus');
+  assert.equal(runAt(12, data, ['--show', 'time,model', '--right', 'model']), '12:00   Opus');
+  assert.equal(runAt(3, data, ['--show', 'model', '--right', 'model']), 'Opus');
+  // pr has nothing to show, so the row has nothing to align.
+  assert.equal(runAt(20, data, ['--show', 'time,model,pr', '--right', 'pr']), '12:00 │ Opus');
+  // Only the rows holding a right-aligned part are padded.
+  assert.equal(runAt(10, data, ['--show', 'time', '--show', 'model', '--right', 'model']), '12:00\n      Opus');
+});
+
+test('the status line program takes the terminal width from COLUMNS', () => {
+  const { execFileSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const script = path.join(__dirname, '..', 'dist', 'statusline.js');
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-')) };
+  delete env.COLUMNS;
+  const statusLine = (columns) =>
+    plain(
+      execFileSync(process.execPath, [script, '--show', 'dir,model', '--right', 'model'], {
+        env: columns === undefined ? env : { ...env, COLUMNS: columns },
+        input: JSON.stringify({ model: { display_name: 'Opus' }, workspace: { current_dir: '/home/me/project' } }),
+        encoding: 'utf8',
+      }),
+    );
+  assert.equal(statusLine('20'), 'project         Opus\n');
+  for (const columns of [undefined, '', 'wide', '0']) assert.equal(statusLine(columns), 'project │ Opus\n', String(columns));
+});
+
+test('--right leaves a row unchanged when it holds text of uncertain width', () => {
+  const args = ['--show', 'name,model', '--right', 'model'];
+  const named = (session_name) => ({ session_name, model: { display_name: 'Opus' } });
+  // Accented and Cyrillic letters take one column each.
+  assert.equal(runAt(30, named('café réunion'), args), 'café réunion              Opus');
+  assert.equal(runAt(30, named('встреча'), args), 'встреча                   Opus');
+  // CJK and emoji take two columns in most terminals, and combining marks
+  // none, so the row stays as it is rather than overshoot the edge.
+  for (const name of ['東京の会議', '🚀 launch', 'cafe\u0301']) {
+    assert.equal(runAt(30, named(name), args), `${name} │ Opus`, name);
+  }
+});
+
+test("the README's compact and --right example rows are what the status line prints", () => {
+  const readme = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'README.md'), 'utf8');
+  const data = {
+    model: { display_name: 'Opus 5.5' },
+    effort: { level: 'high' },
+    workspace: { current_dir: '/home/me/claude-gauge', repo: { host: 'github.com', owner: 'jv-k', name: 'claude-gauge' } },
+  };
+  const show = ['--show', 'repo,branch,model,effort'];
+  const compact = run(data, [...show, '--compact']);
+  assert.equal(compact, 'jv-k/claude-gauge│⎇ main│Opus 5.5│eff high');
+  const right = runAt(72, data, [...show, '--right', 'model,effort']);
+  assert.equal(right, 'jv-k/claude-gauge │ ⎇ main                        Opus 5.5 │ effort high');
+  assert.ok(readme.includes(`\n${compact}\n`), compact);
+  assert.ok(readme.includes(`a 72-column terminal`));
+  assert.ok(readme.includes(`\n${right}\n`), right);
+});
