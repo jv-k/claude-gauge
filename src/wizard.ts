@@ -10,8 +10,9 @@
 // preview renders the payload the status line saved last, else a sample.
 
 import * as fs from 'node:fs';
-import { render, parseArgs, PARTS, THEMES, DEFAULT_ROWS, SWITCHES } from './statusline';
+import { render, parseArgs, readSwitches, PARTS, THEMES, DEFAULT_ROWS } from './statusline';
 import type { StatusData, Part } from './statusline';
+import type { InstalledSwitches } from './settings';
 
 interface WizardIo {
   // Shows `question` and resolves to the answer, or to undefined at the end
@@ -20,27 +21,20 @@ interface WizardIo {
   write(text: string): void;
 }
 
-// The switches of each bar set up now, as words: undefined when the bar is
-// not set up.
-interface Installed {
-  statusLine?: string[];
-  tokenLine?: string[];
-}
-
 interface WizardOptions {
   // The status line's rows when run with these switches.
   preview: (statusLineSwitches: readonly string[]) => string;
   // The bars configure found. The wizard starts from them, and from the
   // factory defaults when neither bar is set up.
-  installed?: Installed;
+  installed?: InstalledSwitches;
 }
 
 // The switches for each bar, as words: the words to run it with, null to
-// leave it out. A status line left undefined stays as it is: only a yes to
-// keeping the bars when it is not set up gives that.
+// leave it out, undefined to leave it as it is, which a yes to keeping the
+// bars gives.
 interface WizardChoices {
   statusLine?: string[];
-  tokenLine: string[] | null;
+  tokenLine?: string[] | null;
 }
 
 // The input ended before the last question: nothing is written.
@@ -67,7 +61,7 @@ const DEFAULT_CHOICES: StatusChoices = { rows: DEFAULT_ROWS, segments: 5, theme:
 
 // Where the wizard starts: the status line choices, whether the token line
 // is on, and the token line's switches to keep when it stays on.
-interface Start {
+interface WizardStart {
   status: StatusChoices;
   tokenLine: boolean;
   tokenSwitches: string[];
@@ -87,35 +81,30 @@ function switchesFor({ rows, segments, theme, labels, others }: StatusChoices): 
   return [...words, ...others];
 }
 
-// The status line choices that `words` give, read as the status line reads
-// its switches: a switch that takes a value takes the next word, unless it
-// has one after `=`, and the last --segments or --theme wins. A part name or
-// theme the status line does not know reads as the status line shows it:
-// left out, or the default theme.
-function statusChoicesOf(words: readonly string[]): StatusChoices {
+// The status line choices that `switches` give, read as the status line reads
+// them, so the last --segments or --theme wins. A part name or theme the
+// status line does not know reads as the status line shows it: left out, or
+// the default theme.
+function statusChoicesOf(switches: readonly string[]): StatusChoices {
   const status: StatusChoices = { ...DEFAULT_CHOICES, rows: [], others: [] };
-  for (let i = 0; i < words.length; i++) {
-    const start = i;
-    const [name, inline] = words[i].split(/=(.*)/s);
-    const known = SWITCHES.find((s) => s.name === name && s.apply);
-    const value = known?.value ? (inline ?? words[++i] ?? '') : '';
+  for (const { name, value, words } of readSwitches(switches)) {
     if (name === '--show') {
       const row = value.split(',').map((p) => p.trim()).filter((p): p is Part => (PARTS as readonly string[]).includes(p));
       if (row.length) status.rows.push(row);
     } else if (name === '--segments') status.segments = Number(value) === 10 ? 10 : 5;
     else if (name === '--theme') status.theme = THEMES.includes(value.trim()) ? value.trim() : 'default';
     else if (name === '--no-labels') status.labels = false;
-    else status.others.push(...words.slice(start, i + 1));
+    else status.others.push(...words);
   }
   if (!status.rows.length) status.rows = DEFAULT_ROWS;
   return status;
 }
 
-const isSetUp = (installed: Installed | undefined): installed is Installed =>
+const isSetUp = (installed: InstalledSwitches | undefined): installed is InstalledSwitches =>
   installed?.statusLine !== undefined || installed?.tokenLine !== undefined;
 
 // The start from the bars set up, else from the factory defaults.
-function startFrom(installed: Installed | undefined): Start {
+function startFrom(installed: InstalledSwitches | undefined): WizardStart {
   if (!isSetUp(installed)) return { status: DEFAULT_CHOICES, tokenLine: true, tokenSwitches: [] };
   return {
     status: statusChoicesOf(installed.statusLine ?? []),
@@ -171,11 +160,9 @@ async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): P
   };
 
   if (isSetUp(installed)) {
-    io.write(`The status line ${installed.statusLine ? 'as set up now' : 'with the defaults'}:\n`);
+    io.write(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
     show();
-    if (await confirm(io, 'Keep the current bars, with the parts above?', true)) {
-      return { ...(installed.statusLine ? { statusLine: installed.statusLine } : {}), tokenLine: installed.tokenLine ?? null };
-    }
+    if (await confirm(io, 'Keep the current bars as they are?', true)) return {};
   } else {
     io.write('The status line with the defaults:\n');
     show();
@@ -184,11 +171,13 @@ async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): P
 
   // A row set up, else the default row there.
   const rowAt = (i: number): Part[] | undefined => start.status.rows[i] ?? DEFAULT_ROWS[i];
-  const rowsNow = Math.min(start.status.rows.length, MAX_ROWS);
+  // More rows than the wizard offers stay possible when that many are set up.
+  const rowsNow = start.status.rows.length;
+  const maxRows = Math.max(MAX_ROWS, rowsNow);
   io.write(`\nThe parts: ${PARTS.join(', ')}.\nREADME.md says what each shows. Press Enter to keep the value in brackets.\n`);
-  const count = await askFor(io, `How many status line rows, 1 to ${MAX_ROWS}? [${rowsNow}] `, (answer) => {
+  const count = await askFor(io, `How many status line rows, 1 to ${maxRows}? [${rowsNow}] `, (answer) => {
     const n = answer ? Number(answer) : rowsNow;
-    return Number.isInteger(n) && n >= 1 && n <= MAX_ROWS ? n : { retry: `Answer a number from 1 to ${MAX_ROWS}.` };
+    return Number.isInteger(n) && n >= 1 && n <= maxRows ? n : { retry: `Answer a number from 1 to ${maxRows}.` };
   });
   status = { ...status, rows: Array.from({ length: count }, (_, i) => rowAt(i) ?? []) };
   show();
@@ -286,4 +275,4 @@ function previewer(payload: StatusData, options: Omit<Parameters<typeof render>[
 
 export { runWizard, offerStar, confirm, EndOfAnswers, samplePayload, loadPayload, previewer, switchesFor };
 
-export type { WizardIo, WizardOptions, WizardChoices, Installed, StarOptions };
+export type { WizardIo, WizardOptions, WizardChoices, StarOptions };

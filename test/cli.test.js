@@ -417,6 +417,17 @@ test('configure starts from the bars set up: a yes keeps the status line and add
   assert.equal(settingsOf(dir).hooks, undefined);
 });
 
+test('a yes to keeping the bars leaves a command written by hand exactly as it is, and copies no scripts', () => {
+  const statusLine = "FORCE_COLOR=1 node ~/.claude/claude-gauge/statusline.js --text 'a b' --segments 10";
+  const dir = configFolder({ statusLine: cmd(statusLine), hooks: { Stop: [entry('node ~/.claude/claude-gauge/tokenline.js'), entry('node ~/.claude/claude-gauge/tokenline.js --window 1m')] } });
+  const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
+  const r = ask(dir, ['configure'], ['y']);
+  ok(r);
+  assert.match(r.stdout, /Nothing to change/);
+  assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
+  assert.ok(!fs.existsSync(runtimeOf(dir)), 'no scripts copied');
+});
+
 test('configure keeps a quoted value and a switch it does not know, whichever path the answers take', () => {
   const dir = configFolder();
   const script = (name) => path.join(runtimeOf(dir), name);

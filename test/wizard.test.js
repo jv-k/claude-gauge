@@ -104,11 +104,11 @@ test('an answer the wizard cannot use is asked again, with the reason', async ()
 });
 
 // configure: the wizard starts from the switches set up now.
-test('configure offers to keep the bars set up now, and a yes gives back their switches as they are', async () => {
+test('configure offers to keep the bars set up now, and a yes leaves both as they are', async () => {
   const io = scripted(['y']);
   const { preview, calls } = fakePreview();
   const installed = { statusLine: ['--theme', 'mono', '--segments', '10'] };
-  assert.deepEqual(await runWizard(io, { preview, installed }), { statusLine: ['--theme', 'mono', '--segments', '10'], tokenLine: null });
+  assert.deepEqual(await runWizard(io, { preview, installed }), {});
   assert.equal(io.questions.length, 1);
   assert.match(io.questions[0], /Keep the current bars/);
   assert.match(io.output, /as set up now/);
@@ -116,9 +116,12 @@ test('configure offers to keep the bars set up now, and a yes gives back their s
   assert.match(io.output, /Token line: off/);
 
   const both = { statusLine: ['--text', 'a b', '--frobnicate'], tokenLine: ['--window', '1m'] };
-  assert.deepEqual(await runWizard(scripted(['']), { preview, installed: both }), { statusLine: ['--text', 'a b', '--frobnicate'], tokenLine: ['--window', '1m'] });
-  // A token line alone: the status line is left as it is.
-  assert.deepEqual(await runWizard(scripted(['y']), { preview, installed: { tokenLine: [] } }), { tokenLine: [] });
+  assert.deepEqual(await runWizard(scripted(['']), { preview, installed: both }), {});
+  // A token line alone: the preview says the status line is not set up.
+  const tokenOnly = scripted(['y']);
+  assert.deepEqual(await runWizard(tokenOnly, { preview, installed: { tokenLine: [] } }), {});
+  assert.match(tokenOnly.output, /status line is not set up/);
+  assert.doesNotMatch(tokenOnly.output, /as set up now/);
 });
 
 test('configure: each question defaults to the installed value, and the switches it does not ask about stay', async () => {
@@ -154,6 +157,11 @@ test('configure: the token line defaults to no when none is set up, and answers 
   const rows = scripted(['n', '2', '', '', '', '', '', '', 'y']);
   await runWizard(rows, { preview, installed: { statusLine: ['--show', 'ctx'] } });
   assert.match(rows.questions[3], new RegExp(`\\[${DEFAULT_ROWS[1].join(',')}\\] $`));
+  // More rows set up than the wizard offers: Enter keeps them all.
+  const four = ['--show', 'ctx', '--show', '5h', '--show', '7d', '--show', 'model'];
+  const many = scripted(['n', '', '', '', '', '', '', '', '', '', 'y']);
+  assert.deepEqual(await runWizard(many, { preview, installed: { statusLine: four } }), { statusLine: four, tokenLine: null });
+  assert.match(many.questions[1], /1 to 4\? \[4\] $/);
 });
 
 test('setup, or configure with no bar set up, starts from the factory defaults', async () => {

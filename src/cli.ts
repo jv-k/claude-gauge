@@ -26,7 +26,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { spawnSync } from 'node:child_process';
-import { plan, commandFor, switchesOf, installed, ownerOf, isForeign } from './settings';
+import { plan, commandFor, installed, installedSwitches, ownerOf, isForeign } from './settings';
 import type { Choices, StatusLineSetting } from './settings';
 import { readSettings, writeSettings, writeAtomic } from './settings-file';
 import { runWizard, offerStar, confirm, loadPayload, previewer } from './wizard';
@@ -330,9 +330,7 @@ async function interactive(command: 'setup' | 'configure', replace: boolean): Pr
       replace = true;
     }
     const preview = previewer(loadPayload(payloadFile()));
-    const ours = command === 'configure' ? installed(settings) : undefined;
-    const switches = (bar: string | undefined) => (bar === undefined ? undefined : switchesOf(bar));
-    const choices = await runWizard(io, { preview, installed: ours && { statusLine: switches(ours.statusLine), tokenLine: switches(ours.tokenLine) } });
+    const choices = await runWizard(io, { preview, installed: command === 'configure' ? installedSwitches(settings) : undefined });
     if (!choices) {
       say('Nothing changed.');
       return;

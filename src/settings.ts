@@ -218,6 +218,21 @@ function installed(settings: Json): { statusLine?: string; tokenLine?: string; a
   return { statusLine, tokenLine, any: statusLine !== undefined || anyHook };
 }
 
+// The switches of each claude-gauge bar in the settings, as words:
+// undefined for a bar that is not set up.
+interface InstalledSwitches {
+  statusLine?: string[];
+  tokenLine?: string[];
+}
+
+function installedSwitches(settings: Json): InstalledSwitches {
+  const { statusLine, tokenLine } = installed(settings);
+  return {
+    ...(statusLine === undefined ? {} : { statusLine: switchesOf(statusLine) }),
+    ...(tokenLine === undefined ? {} : { tokenLine: switchesOf(tokenLine) }),
+  };
+}
+
 // A shell word for a settings command: as is when plain, in double quotes
 // when it holds only spaces or other characters both bash and cmd.exe read
 // literally there, else in single quotes. Claude Code runs the command
@@ -276,6 +291,6 @@ function switchesOf(command: string): string[] {
   return at < 0 ? [] : words.slice(at + 1).map((w) => w.value);
 }
 
-export { plan, commandFor, switchesOf, installed, ownerOf, scriptOf, isForeign };
+export { plan, commandFor, switchesOf, installed, installedSwitches, ownerOf, scriptOf, isForeign };
 
-export type { Choices, Plan, Owner, StatusLineSetting };
+export type { Choices, Plan, Owner, StatusLineSetting, InstalledSwitches };
