@@ -1,9 +1,9 @@
 // The questions claude-gauge setup and configure ask when run with no bar
 // switches: take the defaults in one answer, or walk through the status
-// line's rows and parts, its bar size, theme and labels, and the token line,
-// with a preview of the status line redrawn after each answer. configure
-// starts from the bars set up now: the first answer keeps them, and each
-// question offers the value set up. It returns the switches for each bar, as
+// line's rows and parts, its bar size, theme and labels, and the token line
+// and its parts, with a preview of the status line redrawn after each
+// answer. configure starts from the bars set up now: the first answer keeps
+// them, and each question offers the value set up. It returns the switches for each bar, as
 // words, for the CLI to write; it reads and writes no settings itself.
 //
 // The questions go through a WizardIo, so a test can script the answers. The
@@ -11,7 +11,9 @@
 
 import * as fs from 'node:fs';
 import { render, parseArgs, readSwitches, PARTS, THEMES, DEFAULT_ROWS } from './statusline';
+import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches } from './tokenline';
 import type { StatusData, Part } from './statusline';
+import type { Part as TokenPart } from './tokenline';
 import type { InstalledSwitches } from './settings';
 
 interface WizardIo {
@@ -138,15 +140,32 @@ const yesNo = (fallback: boolean) => (answer: string) => {
 const confirm = (io: WizardIo, question: string, fallback: boolean) =>
   askFor(io, `${question} ${fallback ? '[Y/n]' : '[y/N]'} `, yesNo(fallback));
 
-function readParts(fallback: Part[] | undefined) {
-  return (answer: string): Part[] | { retry: string } => {
+// Reads a list of parts from `known`, or `fallback` on Enter. An unknown
+// part is asked again, named, with `where` to say which parts there are.
+function readParts<P extends string>(fallback: P[] | undefined, known: readonly P[], where = 'The parts are listed above.') {
+  return (answer: string): P[] | { retry: string } => {
     if (!answer && fallback) return fallback;
     const names = answer.split(/[\s,]+/).filter(Boolean);
-    const unknown = names.filter((n) => !(PARTS as readonly string[]).includes(n));
-    if (unknown.length) return { retry: `Unknown part${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. The parts are listed above.` };
+    const unknown = names.filter((n) => !(known as readonly string[]).includes(n));
+    if (unknown.length) return { retry: `Unknown part${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. ${where}` };
     if (!names.length) return { retry: 'Name at least one part.' };
-    return [...new Set(names)] as Part[];
+    return [...new Set(names)] as P[];
   };
+}
+
+// The parts the token line shows with `switches`, read as the token line
+// reads them: all of them without a --show it can use.
+const tokenPartsOf = (switches: readonly string[]): TokenPart[] => parseTokenArgs(switches).show ?? [...TOKEN_PARTS];
+
+const sameParts = (a: readonly string[], b: readonly string[]) => a.join(',') === b.join(',');
+
+// The token line's switches for `parts`: the switches set up when the parts
+// are the ones they show, else those switches without their --show, after a
+// --show for the parts unless they are all of them, in order.
+function tokenSwitchesFor(parts: TokenPart[], installed: string[]): string[] {
+  if (sameParts(parts, tokenPartsOf(installed))) return installed;
+  const others = readTokenSwitches(installed).filter(({ name }) => name !== '--show').flatMap(({ words }) => words);
+  return sameParts(parts, TOKEN_PARTS) ? others : ['--show', parts.join(','), ...others];
 }
 
 async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): Promise<WizardChoices | null> {
@@ -185,7 +204,7 @@ async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): P
   for (let i = 0; i < count; i++) {
     const fallback = rowAt(i);
     const hint = fallback ? ` [${fallback.join(',')}]` : '';
-    const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${hint} `, readParts(fallback));
+    const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${hint} `, readParts(fallback, PARTS));
     status = { ...status, rows: status.rows.map((row, j) => (j === i ? parts : row)) };
     show();
   }
@@ -209,8 +228,16 @@ async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): P
   tokenLine = await confirm(io, 'Add the token line, shown when each turn ends?', start.tokenLine);
   show();
 
+  let tokenSwitches = start.tokenSwitches;
+  if (tokenLine) {
+    const fallback = tokenPartsOf(start.tokenSwitches);
+    const where = `The token line parts are ${TOKEN_PARTS.join(', ')}.`;
+    const question = `Token line parts: all of them, req,out,ctx, or your own list from ${TOKEN_PARTS.join(', ')}? [${fallback.join(',')}] `;
+    tokenSwitches = tokenSwitchesFor(await askFor(io, question, readParts(fallback, TOKEN_PARTS, where)), start.tokenSwitches);
+  }
+
   if (!(await confirm(io, 'Write these choices?', true))) return null;
-  return { statusLine: switchesFor(status), tokenLine: tokenLine ? start.tokenSwitches : null };
+  return { statusLine: switchesFor(status), tokenLine: tokenLine ? tokenSwitches : null };
 }
 
 const REPO = 'jv-k/claude-gauge';

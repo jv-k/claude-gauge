@@ -73,6 +73,13 @@ test('--window sets the context window, and --latest is a flag', () => {
   assert.deepEqual(parseArgs(['--latest', '--window=1m']), { latest: true, window: '1m' });
 });
 
+test('readSwitches gives each switch the words it was read from, a value with it', () => {
+  const { readSwitches } = require('../dist/tokenline.js');
+  const words = (argv) => readSwitches(argv).map((s) => s.words);
+  assert.deepEqual(words(['--window', '1m', '--show=req', '--latest', '--frobnicate', '--segments', '10']), [['--window', '1m'], ['--show=req'], ['--latest'], ['--frobnicate'], ['--segments', '10']]);
+  assert.deepEqual(readSwitches(['--show']), [{ name: '--show', value: '', words: ['--show'] }], 'a value missing at the end');
+});
+
 test('returns null before the run makes a request', () => {
   assert.equal(summarize([prompt('hi')], { now: NOW }), null);
 });

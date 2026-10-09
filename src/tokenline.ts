@@ -41,21 +41,44 @@ interface Options {
   window?: string;
 }
 
+// The switches that take a value.
+const VALUED = ['--show', '--segments', '--window'];
+
+// One switch as readSwitches reads it: its name, its value, and the words it
+// was read from.
+interface ReadSwitch {
+  name: string;
+  value: string;
+  words: string[];
+}
+
+// The switches in `argv` as the token line reads them: a switch that takes a
+// value takes the next word, unless it has one after `=`. Any other word
+// stands alone.
+function readSwitches(argv: readonly string[]): ReadSwitch[] {
+  const read: ReadSwitch[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const start = i;
+    const [name, inline] = argv[i].split(/=(.*)/s);
+    const value = VALUED.includes(name) ? (inline ?? argv[++i] ?? '') : '';
+    read.push({ name, value, words: argv.slice(start, i + 1) });
+  }
+  return read;
+}
+
 // Turns the switches into options. Unknown switches and part names are
 // ignored, so a hook never fails over a typo.
-function parseArgs(argv: string[]): Options {
+function parseArgs(argv: readonly string[]): Options {
   const opts: Options = { latest: false };
-  for (let i = 0; i < argv.length; i++) {
-    const [name, inline] = argv[i].split(/=(.*)/s);
-    const value = () => inline ?? argv[++i] ?? '';
+  for (const { name, value } of readSwitches(argv)) {
     switch (name) {
       case '--show': {
-        const parts = value().split(',').map((p) => p.trim()).filter(isPart);
+        const parts = value.split(',').map((p) => p.trim()).filter(isPart);
         if (parts.length) opts.show = parts;
         break;
       }
-      case '--segments': opts.segments = value(); break;
-      case '--window': opts.window = value(); break;
+      case '--segments': opts.segments = value; break;
+      case '--window': opts.window = value; break;
       case '--latest': opts.latest = true; break;
       default: break;
     }
@@ -284,7 +307,7 @@ function instruction(argv: string[], { host, script }: { host: string | undefine
 // This script's path as a hook command can name it: ~ for the home folder.
 const ownPath = () => process.argv[1].replace(new RegExp(`^${os.homedir()}(?=/)`), '~');
 
-export { summarize, parseArgs, parseSize, contextWindow, PARTS, instruction, INSTRUCT_HOSTS };
+export { summarize, parseArgs, readSwitches, parseSize, contextWindow, PARTS, instruction, INSTRUCT_HOSTS };
 
 export type { Options, Part, SummarizeOptions, TranscriptRecord };
 
