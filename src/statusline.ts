@@ -111,6 +111,7 @@ const partRegistry = {
   tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, cwd }) => toolsPart(activity(), cwd) },
   agents: { description: 'running subagents, and those finished in the last minute', build: ({ activity, nowMs }) => agentsPart(activity(), nowMs) },
   todos: { description: 'the todo in progress, and how many todos are done', build: ({ activity, config }) => todosPart(activity(), config) },
+  skills: { description: 'skills used, and MCP servers called, marking those whose last call failed', build: ({ activity, config }) => skillsPart(activity(), config) },
   env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
   plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
   ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, memory }) => ramPart(memory(), config) },
@@ -836,6 +837,27 @@ function todosPart(activity: TranscriptActivity, config: Config): string {
   return done === todos.length ? `${GREEN}✓${RESET} ${text}` : text;
 }
 
+// The skills part shows this many skills and this many MCP servers, and
+// every server whose latest call failed. A name is cut to DESCRIPTION_CHARS.
+const SKILLS_SHOWN = 3;
+
+// The skills used, newest first, then the MCP servers called, those whose
+// latest call failed first: skills tdd code-review mcp ✗ linear github.
+function skillsPart(activity: TranscriptActivity, config: Config): string {
+  const halves: string[] = [];
+  const skills = [...activity.skills].reverse().slice(0, SKILLS_SHOWN);
+  if (skills.length) halves.push(`${GRAY}${labelOf(config, 'skills')}${skills.map((s) => cut(s, DESCRIPTION_CHARS)).join(' ')}${RESET}`);
+  const newest = [...activity.mcp].reverse();
+  const failing = newest.filter((s) => s.failed);
+  const working = newest.filter((s) => !s.failed).slice(0, Math.max(0, SKILLS_SHOWN - failing.length));
+  const servers = [
+    ...failing.map((s) => `${RED}✗ ${cut(s.name, DESCRIPTION_CHARS)}${RESET}`),
+    ...working.map((s) => `${GRAY}${cut(s.name, DESCRIPTION_CHARS)}${RESET}`),
+  ];
+  if (servers.length) halves.push(`${GRAY}${labelOf(config, 'mcp')}${RESET}${servers.join(' ')}`);
+  return halves.join(' ');
+}
+
 // env and plan: what Claude Code loads into a session, and the account, read
 // from the files it reads them from. Only local files, never the network or
 // the macOS Keychain, and a file that is missing or not JSON counts as empty.
@@ -1467,21 +1489,31 @@ interface Todo {
 
 type TodoStatus = 'pending' | 'in_progress' | 'completed';
 
+// An MCP server the session called, by the name its tools carry, and whether
+// its latest call failed.
+interface McpServer {
+  name: string;
+  failed?: boolean;
+}
+
 // What a transcript shows: the tool calls still running, oldest first, how
 // many calls of each tool have completed, the subagents, in the order they
-// started, and the todo list, in its order.
+// started, the todo list, in its order, and the skills used and MCP servers
+// called, in the order last used.
 interface TranscriptActivity {
   tools: { running: ToolCall[]; completed: Record<string, number> };
   agents: AgentRun[];
   todos: Todo[];
+  skills: string[];
+  mcp: McpServer[];
 }
 
-const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [] });
+const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [], skills: [], mcp: [] });
 
 // Activity with every name and target sanitised. Two tool names that differ
 // only in control codes count as one.
-// A reader handed in from JavaScript may leave the agents and todos out.
-function sanitiseActivity({ tools, agents = [], todos = [] }: TranscriptActivity): TranscriptActivity {
+// A reader handed in from JavaScript may leave out all but the tools.
+function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [] }: TranscriptActivity): TranscriptActivity {
   const running = tools.running.map(({ name, target }) => ({ name: sanitise(name), ...(target ? { target: sanitise(target) } : {}) }));
   const completed: Record<string, number> = {};
   for (const [name, count] of Object.entries(tools.completed)) completed[sanitise(name)] = (completed[sanitise(name)] ?? 0) + count;
@@ -1496,12 +1528,14 @@ function sanitiseActivity({ tools, agents = [], todos = [] }: TranscriptActivity
     ...(activeForm ? { activeForm: sanitise(activeForm) } : {}),
     status,
   }));
-  return { tools: { running, completed }, agents: cleanAgents, todos: cleanTodos };
+  const cleanSkills = skills.map(sanitise);
+  const cleanMcp = mcp.map(({ name, failed }) => ({ name: sanitise(name), ...(failed ? { failed } : {}) }));
+  return { tools: { running, completed }, agents: cleanAgents, todos: cleanTodos, skills: cleanSkills, mcp: cleanMcp };
 }
 
 // What the reader keeps between renders. version changes when the shape
 // does, so a state from an older claude-gauge is rebuilt, not misread.
-const TRANSCRIPT_STATE_VERSION = 3;
+const TRANSCRIPT_STATE_VERSION = 4;
 
 interface TranscriptState {
   version: number;
@@ -1514,7 +1548,7 @@ interface TranscriptState {
   // The tool calls with no result yet, by call id, oldest first. A call
   // that was running when the user sent a prompt has ended, but its result
   // may still come, and then counts.
-  pending: (ToolCall & { id: string; ended?: boolean })[];
+  pending: (ToolCall & { id: string; ended?: boolean; skill?: string })[];
   completed: Record<string, number>;
   // The subagents, by the id of the call that started them, in the order
   // they started. One in the background keeps running past its call's
@@ -1524,6 +1558,12 @@ interface TranscriptState {
   // result yet: a call changes the list once its result says it worked.
   todos: TodoEntry[];
   todoCalls: TodoCall[];
+  // The skills used and the MCP servers called, in the order last used,
+  // and the skill the user's last command names, until the skill's text
+  // shows it was a skill and not a built-in command.
+  skills: string[];
+  mcp: McpServer[];
+  command?: string;
 }
 
 // A todo as the reader keeps it: by the id the task tools gave it, if any.
@@ -1553,6 +1593,12 @@ const AGENT_TOOLS = ['Agent', 'Task'];
 // The tools that write the todo list: TodoWrite replaces it whole, and the
 // task tools that replaced it in Claude Code 2.1 add a task and change one.
 const TODO_TOOLS = ['TodoWrite', 'TaskCreate', 'TaskUpdate'];
+
+// The skills and MCP servers kept at most, the most recently used.
+const SKILLS_KEPT = 20;
+
+// The text Claude Code adds as a meta message when a skill runs.
+const SKILL_TEXT = 'Base directory for this skill:';
 
 // The fs calls the reader makes, so a test can count the bytes it reads.
 type TranscriptFs = Pick<typeof fs, 'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync'>;
@@ -1696,7 +1742,7 @@ function createdTaskId(block: ContentBlock, record: TranscriptRecord): string | 
 // TodoWrite replaces the list, TaskCreate adds a pending task, and
 // TaskUpdate changes one, or drops it when it is deleted.
 function applyTodoCall(state: TranscriptState, todoCall: TodoCall, block: ContentBlock, record: TranscriptRecord): void {
-  if (block.is_error === true || (isObject(record.toolUseResult) && record.toolUseResult.success === false)) return;
+  if (resultFailed(block, record)) return;
   const input = isObject(todoCall.input) ? todoCall.input : {};
   if (todoCall.name === 'TodoWrite') {
     state.todos = writtenTodos(input);
@@ -1720,6 +1766,33 @@ function applyTodoCall(state: TranscriptState, todoCall: TodoCall, block: Conten
   }
 }
 
+// The MCP server a tool belongs to, from the name Claude Code gives an MCP
+// server's tools: mcp__github__search_issues is github's.
+const mcpServerOf = (tool: string): string | undefined => /^mcp__(.+?)__./.exec(tool)?.[1];
+
+// A skill's name as the Skill tool or a command names it, with no slash.
+const skillName = (value: string | undefined): string | undefined => value?.trim().replace(/^\//, '') || undefined;
+
+// The skill a prompt's command names, from the text Claude Code records for
+// a slash command: <command-name>/tdd</command-name>.
+const commandOf = (content: unknown): string | undefined => skillName(/<command-name>([^<]*)<\/command-name>/.exec(textOf(content))?.[1]);
+
+// A skill as used now: it moves to the end, and the oldest past SKILLS_KEPT drop out.
+function useSkill(state: TranscriptState, name: string): void {
+  state.skills = [...state.skills.filter((s) => s !== name), name].slice(-SKILLS_KEPT);
+}
+
+// An MCP server as called now: it moves to the end, keeping whether its
+// latest call failed, and the oldest past SKILLS_KEPT drop out.
+function useServer(state: TranscriptState, name: string): void {
+  const server = state.mcp.find((s) => s.name === name) ?? { name };
+  state.mcp = [...state.mcp.filter((s) => s !== server), server].slice(-SKILLS_KEPT);
+}
+
+// A result that says its call did not work: an error, or data that says so.
+const resultFailed = (block: ContentBlock, record: TranscriptRecord) =>
+  block.is_error === true || (isObject(record.toolUseResult) && record.toolUseResult.success === false);
+
 // The ended subagents past the newest ENDED_KEPT drop out; running ones stay.
 function capAgents(state: TranscriptState): void {
   let ended = 0;
@@ -1733,12 +1806,20 @@ function capAgents(state: TranscriptState): void {
 // as they are for --latest. A prompt from the user ends the turn, so a call
 // still running then was interrupted: it no longer shows as running, and a
 // subagent in the foreground shows as stopped. One in the background runs on
-// until its task notification.
+// until its task notification. A prompt that runs a command names a skill
+// when the next record is the skill's text.
 function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   if (!record || typeof record !== 'object' || record.isSidechain) return;
   const at = timeOf(record);
   const content = record.message?.content;
   const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
+  const results = blocks.some((b) => b.type === 'tool_result');
+  const { command } = state;
+  delete state.command;
+  if (record.type === 'user' && record.isMeta && !results) {
+    if (command && textOf(content).startsWith(SKILL_TEXT)) useSkill(state, command);
+    return;
+  }
   // A task notification ends a task in the background, and is no prompt.
   const notified = record.type === 'user' ? taskNotification(record) : undefined;
   if (notified) {
@@ -1747,8 +1828,10 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
     capAgents(state);
     return;
   }
-  if (record.type === 'user' && !record.isMeta && !blocks.some((b) => b.type === 'tool_result')) {
+  if (record.type === 'user' && !results) {
     if (typeof content === 'string' || blocks.length) {
+      const named = commandOf(content);
+      if (named) state.command = named;
       state.pending = state.pending.map((p) => ({ ...p, ended: true })).slice(-ENDED_KEPT);
       for (const agent of state.agents) if (agent.endedAt === undefined && !agent.background) endAgent(agent, at, true);
       capAgents(state);
@@ -1758,7 +1841,10 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   for (const block of blocks) {
     if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
       const target = toolTarget(block.input);
-      state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}) }];
+      const skill = block.name === 'Skill' ? skillName(stringAt(block.input, 'skill')) : undefined;
+      state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}), ...(skill ? { skill } : {}) }];
+      const server = mcpServerOf(block.name);
+      if (server) useServer(state, server);
       if (AGENT_TOOLS.includes(block.name)) startAgent(state, block, at);
       if (TODO_TOOLS.includes(block.name)) state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
     } else if (record.type === 'user' && block.type === 'tool_result') {
@@ -1773,6 +1859,10 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
       if (!call) continue;
       state.pending = state.pending.filter((p) => p !== call);
       state.completed[call.name] = (state.completed[call.name] ?? 0) + 1;
+      if (call.skill && !resultFailed(block, record)) useSkill(state, call.skill);
+      const server = state.mcp.find((s) => s.name === mcpServerOf(call.name));
+      if (server && resultFailed(block, record)) server.failed = true;
+      else if (server) delete server.failed;
     }
   }
   capAgents(state);
@@ -1822,6 +1912,8 @@ function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptSta
       Array.isArray(state.agents) &&
       Array.isArray(state.todos) &&
       Array.isArray(state.todoCalls) &&
+      Array.isArray(state.skills) &&
+      Array.isArray(state.mcp) &&
       state.completed &&
       typeof state.completed === 'object';
     return valid ? state : undefined;
@@ -1864,7 +1956,7 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
   const state: TranscriptState = unchanged
     ? saved
-    : { version: TRANSCRIPT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0, pending: [], completed: {}, agents: [], todos: [], todoCalls: [] };
+    : { version: TRANSCRIPT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0, pending: [], completed: {}, agents: [], todos: [], todoCalls: [], skills: [], mcp: [] };
 
   if (stat.size > state.offset || !unchanged) {
     state.offset = readLines(io, file, state.offset, stat.size, (line) => {
@@ -1881,7 +1973,8 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
   const agents = state.agents.map(({ id, background, ...agent }) => agent);
   const todos = state.todos.map(({ id, ...todo }) => todo);
-  return { tools: { running, completed: { ...state.completed } }, agents, todos };
+  const mcp = state.mcp.map((server) => ({ ...server }));
+  return { tools: { running, completed: { ...state.completed } }, agents, todos, skills: [...state.skills], mcp };
 }
 
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
@@ -2061,7 +2154,7 @@ export {
   COMMAND_TIMEOUT_MS,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, Setup, Memory };
+export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, McpServer, Setup, Memory };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
