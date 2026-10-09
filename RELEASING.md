@@ -104,7 +104,7 @@ After step 5, the tag is public, so do not move it or tag the version again. Rea
 - If the tests fail in step 7, or a check fails in step 6, nothing is published. Fix the cause on a branch, merge it, and release the next patch version. If the npm check fails, the Node version in `.github/workflows/release.yml` bundles an npm older than 11.5.1, so raise the Node version there.
 - If the section is missing or empty in step 8, nothing is published. A rerun reads the same tagged `CHANGELOG.md`, so it fails again. Release the next patch version, and check its section in the dry run first.
 - If `npm publish` fails in step 10, the GitHub release exists already. The usual causes are in the trusted publisher on npmjs.com:
-  - A field does not match the repository or the workflow exactly. npm then fails with `ENEEDAUTH` ("Unable to authenticate"). Check the four fields in [Set up once](#set-up-once), and check that `repository.url` in `package.json` names jv-k/claude-gauge.
+  - A field does not match the repository or the workflow exactly. npm then cannot sign in, and fails with `ENEEDAUTH` ("Unable to authenticate"), `E401` or `E404`. Check the four fields in [Set up once](#set-up-once), and check that `repository.url` in `package.json` names jv-k/claude-gauge.
   - The trusted publisher expired, because its first publish did not succeed within 2 days. Delete it and add it again.
   - **npm publish** is not ticked under the allowed actions.
 

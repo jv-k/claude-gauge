@@ -27,29 +27,34 @@ jobs:
       # gh release create needs to write the release.
       contents: write
       # npm publish trades the workflow's OIDC token for a short-lived npm
-      # token through the trusted publisher, and signs the provenance with it.
+      # token through the trusted publisher. The provenance is signed with
+      # the same OIDC identity.
       id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-      # Trusted publishing needs npm 11.5.1 or later. Node 24 bundles npm 11,
-      # as in npm's own example workflow, so the job uses Node 24 rather than
-      # upgrading npm in place on Node 22, whose bundled npm is 10.
+      # Trusted publishing needs npm 11.5.1 or later. Recent Node 24 releases
+      # bundle it, and npm's own example workflow uses Node 24, so the job
+      # uses Node 24 rather than upgrading npm in place on Node 22, whose
+      # bundled npm is 10. The next step checks the npm that Node 24 brings.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-          # Points npm at the public registry. The publish step stores and
-          # reads no token: npm gets one from the trusted publisher.
+          # Writes an .npmrc for the public registry, with a token line that
+          # setup-node fills with a placeholder. The workflow passes no npm
+          # token. npm tries the trusted publisher first, and signs in there.
           registry-url: https://registry.npmjs.org
       # Fails before anything is public when the bundled npm is too old for
       # trusted publishing.
       - name: Check that npm is 11.5.1 or later
+        env:
+          MINIMUM_NPM: 11.5.1
         run: |
-          version=$(npm --version)
-          echo "npm ${version}"
-          if ! printf '%s\n' 11.5.1 "${version}" | sort -V -C; then
-            echo "::error::Trusted publishing needs npm 11.5.1 or later, but the job has npm ${version}."
+          npm_version=$(npm --version)
+          echo "npm ${npm_version}"
+          if ! printf '%s\n' "${MINIMUM_NPM}" "${npm_version}" | sort -V -C; then
+            echo "::error::Trusted publishing needs npm ${MINIMUM_NPM} or later, but the job has npm ${npm_version}."
             exit 1
           fi
       - run: pnpm install --frozen-lockfile
