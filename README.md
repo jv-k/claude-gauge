@@ -233,6 +233,8 @@ The `claude-gauge` command has four commands:
 | `claude-gauge uninstall` | Takes claude-gauge out of your settings and puts back the status line it replaced. |
 | `claude-gauge update` | Copies the scripts of the version you run into `~/.claude/claude-gauge/runtime/`, and keeps your switches. |
 
+`configure` starts its questions from the bars you set up. The first question keeps them as they are, and each later question offers your current value. Switches that it does not ask about, such as `--text`, stay as they are.
+
 `setup` and `configure` ask their questions when you give them no bar switches. With bar switches they ask nothing, which suits scripts and dotfiles:
 
 | Switch | Effect |

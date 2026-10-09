@@ -1,15 +1,16 @@
 // The questions claude-gauge setup and configure ask when run with no bar
 // switches: take the defaults in one answer, or walk through the status
 // line's rows and parts, its bar size, theme and labels, and the token line,
-// with a preview of the status line redrawn after each answer. It returns
-// the switches for each bar, for the CLI to write; it reads and writes no
-// settings itself.
+// with a preview of the status line redrawn after each answer. configure
+// starts from the bars set up now: the first answer keeps them, and each
+// question offers the value set up. It returns the switches for each bar, as
+// words, for the CLI to write; it reads and writes no settings itself.
 //
 // The questions go through a WizardIo, so a test can script the answers. The
 // preview renders the payload the status line saved last, else a sample.
 
 import * as fs from 'node:fs';
-import { render, parseArgs, PARTS, THEMES, DEFAULT_ROWS } from './statusline';
+import { render, parseArgs, PARTS, THEMES, DEFAULT_ROWS, SWITCHES } from './statusline';
 import type { StatusData, Part } from './statusline';
 
 interface WizardIo {
@@ -19,15 +20,27 @@ interface WizardIo {
   write(text: string): void;
 }
 
-interface WizardOptions {
-  // The status line's rows when run with these switches.
-  preview: (statusLineSwitches: string) => string;
+// The switches of each bar set up now, as words: undefined when the bar is
+// not set up.
+interface Installed {
+  statusLine?: string[];
+  tokenLine?: string[];
 }
 
-// The switches for each bar: a string to run it with, null to leave it out.
+interface WizardOptions {
+  // The status line's rows when run with these switches.
+  preview: (statusLineSwitches: readonly string[]) => string;
+  // The bars configure found. The wizard starts from them, and from the
+  // factory defaults when neither bar is set up.
+  installed?: Installed;
+}
+
+// The switches for each bar, as words: the words to run it with, null to
+// leave it out. A status line left undefined stays as it is: only a yes to
+// keeping the bars when it is not set up gives that.
 interface WizardChoices {
-  statusLine: string;
-  tokenLine: string | null;
+  statusLine?: string[];
+  tokenLine: string[] | null;
 }
 
 // The input ended before the last question: nothing is written.
@@ -46,22 +59,69 @@ interface StatusChoices {
   segments: (typeof SEGMENTS)[number];
   theme: string;
   labels: boolean;
+  // The switches the wizard does not ask about, as words, kept as they are.
+  others: string[];
 }
 
-const DEFAULT_CHOICES: StatusChoices = { rows: DEFAULT_ROWS, segments: 5, theme: 'default', labels: true };
+const DEFAULT_CHOICES: StatusChoices = { rows: DEFAULT_ROWS, segments: 5, theme: 'default', labels: true, others: [] };
+
+// Where the wizard starts: the status line choices, whether the token line
+// is on, and the token line's switches to keep when it stays on.
+interface Start {
+  status: StatusChoices;
+  tokenLine: boolean;
+  tokenSwitches: string[];
+}
 
 const sameRows = (a: Part[][], b: Part[][]) => JSON.stringify(a) === JSON.stringify(b);
 
-// The fewest switches that give `choices`: none for the defaults. A row not
-// chosen yet is left out.
-function switchesFor({ rows, segments, theme, labels }: StatusChoices): string {
+// The fewest switches that give `choices`: none for the defaults, then the
+// switches the wizard does not ask about. A row not chosen yet is left out.
+function switchesFor({ rows, segments, theme, labels, others }: StatusChoices): string[] {
   const chosen = rows.filter((row) => row.length);
   const words: string[] = [];
   if (!sameRows(chosen, DEFAULT_ROWS)) for (const row of chosen) words.push('--show', row.join(','));
   if (segments !== 5) words.push('--segments', String(segments));
   if (theme !== 'default') words.push('--theme', theme);
   if (!labels) words.push('--no-labels');
-  return words.join(' ');
+  return [...words, ...others];
+}
+
+// The status line choices that `words` give, read as the status line reads
+// its switches: a switch that takes a value takes the next word, unless it
+// has one after `=`, and the last --segments or --theme wins. A part name or
+// theme the status line does not know reads as the status line shows it:
+// left out, or the default theme.
+function statusChoicesOf(words: readonly string[]): StatusChoices {
+  const status: StatusChoices = { ...DEFAULT_CHOICES, rows: [], others: [] };
+  for (let i = 0; i < words.length; i++) {
+    const start = i;
+    const [name, inline] = words[i].split(/=(.*)/s);
+    const known = SWITCHES.find((s) => s.name === name && s.apply);
+    const value = known?.value ? (inline ?? words[++i] ?? '') : '';
+    if (name === '--show') {
+      const row = value.split(',').map((p) => p.trim()).filter((p): p is Part => (PARTS as readonly string[]).includes(p));
+      if (row.length) status.rows.push(row);
+    } else if (name === '--segments') status.segments = Number(value) === 10 ? 10 : 5;
+    else if (name === '--theme') status.theme = THEMES.includes(value.trim()) ? value.trim() : 'default';
+    else if (name === '--no-labels') status.labels = false;
+    else status.others.push(...words.slice(start, i + 1));
+  }
+  if (!status.rows.length) status.rows = DEFAULT_ROWS;
+  return status;
+}
+
+const isSetUp = (installed: Installed | undefined): installed is Installed =>
+  installed?.statusLine !== undefined || installed?.tokenLine !== undefined;
+
+// The start from the bars set up, else from the factory defaults.
+function startFrom(installed: Installed | undefined): Start {
+  if (!isSetUp(installed)) return { status: DEFAULT_CHOICES, tokenLine: true, tokenSwitches: [] };
+  return {
+    status: statusChoicesOf(installed.statusLine ?? []),
+    tokenLine: installed.tokenLine !== undefined,
+    tokenSwitches: installed.tokenLine ?? [],
+  };
 }
 
 // Asks until `read` takes the answer: it returns the value, or a retry that
@@ -100,56 +160,68 @@ function readParts(fallback: Part[] | undefined) {
   };
 }
 
-async function runWizard(io: WizardIo, { preview }: WizardOptions): Promise<WizardChoices | null> {
-  let status: StatusChoices = { ...DEFAULT_CHOICES };
-  let tokenLine = true;
+async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): Promise<WizardChoices | null> {
+  const start = startFrom(installed);
+  let status: StatusChoices = { ...start.status };
+  let tokenLine = start.tokenLine;
   const show = () => {
     const rows = preview(switchesFor(status));
     io.write(`\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\n`);
     io.write(`Token line: ${tokenLine ? 'on, when each turn ends' : 'off'}\n\n`);
   };
 
-  io.write('The status line with the defaults:\n');
-  show();
-  if (await confirm(io, 'Use the defaults: both bars, with the parts above?', true)) return { statusLine: '', tokenLine: '' };
+  if (isSetUp(installed)) {
+    io.write(`The status line ${installed.statusLine ? 'as set up now' : 'with the defaults'}:\n`);
+    show();
+    if (await confirm(io, 'Keep the current bars, with the parts above?', true)) {
+      return { ...(installed.statusLine ? { statusLine: installed.statusLine } : {}), tokenLine: installed.tokenLine ?? null };
+    }
+  } else {
+    io.write('The status line with the defaults:\n');
+    show();
+    if (await confirm(io, 'Use the defaults: both bars, with the parts above?', true)) return { statusLine: [], tokenLine: [] };
+  }
 
+  // A row set up, else the default row there.
+  const rowAt = (i: number): Part[] | undefined => start.status.rows[i] ?? DEFAULT_ROWS[i];
+  const rowsNow = Math.min(start.status.rows.length, MAX_ROWS);
   io.write(`\nThe parts: ${PARTS.join(', ')}.\nREADME.md says what each shows. Press Enter to keep the value in brackets.\n`);
-  const count = await askFor(io, `How many status line rows, 1 to ${MAX_ROWS}? [${DEFAULT_ROWS.length}] `, (answer) => {
-    const n = answer ? Number(answer) : DEFAULT_ROWS.length;
+  const count = await askFor(io, `How many status line rows, 1 to ${MAX_ROWS}? [${rowsNow}] `, (answer) => {
+    const n = answer ? Number(answer) : rowsNow;
     return Number.isInteger(n) && n >= 1 && n <= MAX_ROWS ? n : { retry: `Answer a number from 1 to ${MAX_ROWS}.` };
   });
-  status = { ...status, rows: Array.from({ length: count }, (_, i) => DEFAULT_ROWS[i] ?? []) };
+  status = { ...status, rows: Array.from({ length: count }, (_, i) => rowAt(i) ?? []) };
   show();
 
   for (let i = 0; i < count; i++) {
-    const fallback = DEFAULT_ROWS[i];
+    const fallback = rowAt(i);
     const hint = fallback ? ` [${fallback.join(',')}]` : '';
     const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${hint} `, readParts(fallback));
     status = { ...status, rows: status.rows.map((row, j) => (j === i ? parts : row)) };
     show();
   }
 
-  const segments = await askFor(io, `Cells per bar, ${SEGMENTS.join(' or ')}? [${SEGMENTS[0]}] `, (answer) =>
-    SEGMENTS.find((n) => String(n) === (answer || String(SEGMENTS[0]))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` },
+  const segments = await askFor(io, `Cells per bar, ${SEGMENTS.join(' or ')}? [${start.status.segments}] `, (answer) =>
+    SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` },
   );
   status = { ...status, segments };
   show();
 
-  const theme = await askFor(io, `Theme: ${THEMES.join(', ')}? [default] `, (answer) => {
-    const name = answer.toLowerCase() || 'default';
+  const theme = await askFor(io, `Theme: ${THEMES.join(', ')}? [${start.status.theme}] `, (answer) => {
+    const name = answer.toLowerCase() || start.status.theme;
     return THEMES.includes(name) ? name : { retry: `Unknown theme: ${answer}. Answer one of ${THEMES.join(', ')}.` };
   });
   status = { ...status, theme };
   show();
 
-  status = { ...status, labels: await confirm(io, 'Labels in front of the values, such as ctx and 5h?', true) };
+  status = { ...status, labels: await confirm(io, 'Labels in front of the values, such as ctx and 5h?', start.status.labels) };
   show();
 
-  tokenLine = await confirm(io, 'Add the token line, shown when each turn ends?', true);
+  tokenLine = await confirm(io, 'Add the token line, shown when each turn ends?', start.tokenLine);
   show();
 
   if (!(await confirm(io, 'Write these choices?', true))) return null;
-  return { statusLine: switchesFor(status), tokenLine: tokenLine ? '' : null };
+  return { statusLine: switchesFor(status), tokenLine: tokenLine ? start.tokenSwitches : null };
 }
 
 const REPO = 'jv-k/claude-gauge';
@@ -206,12 +278,12 @@ function loadPayload(file: string, nowMs = Date.now()): StatusData {
   return samplePayload(nowMs);
 }
 
-// The preview: the status line's rows for `payload`, with the given switches.
-// The switches are split into words as the settings command splits them.
+// The preview: the status line's rows for `payload`, with the given switches
+// as words, as the settings command passes them.
 function previewer(payload: StatusData, options: Omit<Parameters<typeof render>[1] & object, 'config'> = {}) {
-  return (switches: string) => render(payload, { ...options, config: parseArgs(switches.split(/\s+/).filter(Boolean)) });
+  return (switches: readonly string[]) => render(payload, { ...options, config: parseArgs([...switches]) });
 }
 
 export { runWizard, offerStar, confirm, EndOfAnswers, samplePayload, loadPayload, previewer, switchesFor };
 
-export type { WizardIo, WizardOptions, WizardChoices, StarOptions };
+export type { WizardIo, WizardOptions, WizardChoices, Installed, StarOptions };

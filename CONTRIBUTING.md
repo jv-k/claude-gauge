@@ -30,7 +30,7 @@ pnpm test
 | `src/statusline.ts` | The status line. |
 | `src/tokenline.ts` | The token line. |
 | `src/cli.ts` | The `claude-gauge` command: `setup`, `configure`, `uninstall` and `update`. With no bar switches, `setup` and `configure` run the wizard. |
-| `src/wizard.ts` | The wizard's questions, with a preview of the status line after each answer, and the offer to star the repo. It returns the bars' switches and writes no file. |
+| `src/wizard.ts` | The wizard's questions, with a preview of the status line after each answer, and the offer to star the repo. `configure` starts it from the switches set up now, and `setup` from the defaults. It returns the bars' switches and writes no file. |
 | `src/settings.ts` | `plan()`, which works out the next `settings.json` from the current one and the user's choices, without reading or writing a file. |
 | `src/settings-file.ts` | Reads `settings.json`, and writes it atomically, through a symlink, after a timestamped backup. |
 | `src/launcher.ts` | The plugin route's launcher. `setup`, run from the plugin, copies it into the state folder and points the settings at it, and it runs the scripts from the newest installed plugin version. |
