@@ -31,9 +31,12 @@ const bothWindows = () =>
     seven_day: { used_percentage: 41.2, resets_at: at(NOW + 3 * DAY) },
   });
 
+// What git status prints on a clean main branch with no upstream.
+const onMain = () => '# branch.head main\n';
+
 // Renders with the given switches, colours stripped.
 const run = (data, args = []) =>
-  plain(render(data, { nowMs: NOW, branchOf: () => 'main', config: parseArgs(args) }));
+  plain(render(data, { nowMs: NOW, statusOf: onMain, config: parseArgs(args) }));
 
 test('shows two rows by default: the headroom figures, then the session', () => {
   const data = bothWindows();
@@ -80,12 +83,12 @@ test('a --show with no known part adds no row', () => {
 
 test('rows handed in from JavaScript render unknown part names as nothing', () => {
   const rows = [['weather', 'model', 'constructor', 'toString', '__proto__'], ['hasOwnProperty']];
-  assert.equal(plain(render(bothWindows(), { nowMs: NOW, branchOf: () => 'main', config: { rows } })), 'Opus');
+  assert.equal(plain(render(bothWindows(), { nowMs: NOW, statusOf: onMain, config: { rows } })), 'Opus');
 });
 
 test('a row with nothing to show drops out', () => {
   const noBranch = plain(
-    render(bothWindows(), { nowMs: NOW, branchOf: () => '', config: parseArgs(['--show', 'branch', '--show', 'model']) }),
+    render(bothWindows(), { nowMs: NOW, statusOf: () => '', config: parseArgs(['--show', 'branch', '--show', 'model']) }),
   );
   assert.equal(noBranch, 'Opus');
 });
@@ -646,9 +649,17 @@ const CONTROL = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069
 const OWN_COLOURS = /\x1b\[(?:0|0;3\d|0;90|38;5;\d{1,3})m/g;
 
 // Renders the parts with the given payload, branch, setup and switches, and
-// checks that the only control codes left are claude-gauge's own colours.
+// checks that the only control codes left are claude-gauge's own colours. The
+// branch comes from git's fallback read, unless options give a statusOf.
 const renderClean = (data, show, branch = 'main', setup = NOTHING_LOADED, args = [], options = {}) => {
-  const raw = render(data, { nowMs: NOW, branchOf: () => branch, setupOf: () => setup, config: parseArgs(['--show', show, ...args]), ...options });
+  const raw = render(data, {
+    nowMs: NOW,
+    statusOf: () => undefined,
+    branchOf: () => branch,
+    setupOf: () => setup,
+    config: parseArgs(['--show', show, ...args]),
+    ...options,
+  });
   assert.doesNotMatch(raw.replace(OWN_COLOURS, ''), CONTROL, JSON.stringify(raw));
   return plain(raw);
 };
@@ -743,8 +754,11 @@ test('every part prints hostile payload text without its control codes', () => {
   const setup = { claudeMd: 1, rules: 0, mcp: 0, hooks: 0, plan: h('Claude Max 20x'), user: h('me@example.com') };
   // The parts that print text from a switch, and the memory reading.
   const args = ['--text', h('label'), '--command', 'ctx'];
-  const options = { memoryOf: () => ({ used: GIB, total: 2 * GIB }), commandOutputOf: () => h('output'), transcript: () => activity };
-  for (const part of PARTS) assert.ok(renderClean(data, part, h('main'), setup, args, options), part);
+  // A changed file whose name holds the hostile text, less the line breaks
+  // that would end git's line.
+  const statusOf = () => `# branch.head ${h('main')}\n? ${h('notes.txt').replace(/[\r\n]/g, '')}\n`;
+  const options = { statusOf, memoryOf: () => ({ used: GIB, total: 2 * GIB }), commandOutputOf: () => h('output'), transcript: () => activity };
+  for (const part of PARTS) assert.ok(renderClean(data, part, undefined, setup, args, options), part);
   assert.equal(
     renderClean(data, 'model,effort,style,agent,version,lines,ctx'),
     'Opus │ effort high │ style explanatory │ agent reviewer │ v2.1.90 │ +15 −23 │ ctx 43% ▓▓░░░ 86.0k',
@@ -763,7 +777,7 @@ test('hostile text from the transcript prints without its control codes', () => 
 test('the folder git runs in keeps its name as it is', () => {
   const dir = `/home/me/pro\x1b[2Jject`;
   let seen;
-  render({ workspace: { current_dir: dir } }, { config: parseArgs(['--show', 'branch']), branchOf: (cwd) => ((seen = cwd), 'main') });
+  render({ workspace: { current_dir: dir } }, { config: parseArgs(['--show', 'branch']), statusOf: (cwd) => ((seen = cwd), onMain()) });
   assert.equal(seen, dir);
 });
 
@@ -861,7 +875,7 @@ test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () =>
 
 // Renders with the given switches and terminal width, colours stripped.
 const runAt = (columns, data, args) =>
-  plain(render(data, { nowMs: NOW, branchOf: () => 'main', config: parseArgs(args), columns }));
+  plain(render(data, { nowMs: NOW, statusOf: onMain, config: parseArgs(args), columns }));
 
 test('--right pads its parts to the end of the row, to the terminal width', () => {
   const data = { model: { display_name: 'Opus' } };

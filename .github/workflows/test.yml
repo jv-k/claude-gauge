@@ -1,0 +1,27 @@
+# The git parts run the real git on Windows, where paths, line endings and
+# process spawning differ most from macOS and Linux. The full matrix of
+# systems and runtimes is issue #3's.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  git-windows:
+    name: Git parts on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: node --test test/git.test.js
