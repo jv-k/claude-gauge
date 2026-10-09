@@ -643,7 +643,10 @@ test('every part prints hostile payload text without its control codes', () => {
     rate_limits: { five_hour: { used_percentage: 10 }, seven_day: { used_percentage: 20 }, spend_limit: { used_percentage: 30 } },
     transcript_path: '/home/me/session.jsonl',
   };
-  const activity = { tools: { running: [{ name: h('Edit'), target: h('src/a.ts') }], completed: { [h('Read')]: 2 } } };
+  const activity = {
+    tools: { running: [{ name: h('Edit'), target: h('src/a.ts') }], completed: { [h('Read')]: 2 } },
+    agents: [{ type: h('Explore'), model: h('Haiku'), description: h('Map it') }],
+  };
   const setup = { claudeMd: 1, rules: 0, mcp: 0, hooks: 0, plan: h('Claude Max 20x'), user: h('me@example.com') };
   // The parts that print text from a switch, and the memory reading.
   const args = ['--text', h('label'), '--command', 'ctx'];

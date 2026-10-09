@@ -177,6 +177,18 @@ test('a result that arrives after a prompt still counts', () => {
   assert.equal(renderTools(file), '✓ Bash ×1');
 });
 
+test('a task notification is not a prompt: the tools running then still show as running', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'session.jsonl');
+  const notification = {
+    type: 'user',
+    origin: { kind: 'task-notification' },
+    message: { role: 'user', content: '<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>x</tool-use-id>\n<status>completed</status>\n</task-notification>' },
+  };
+  fs.writeFileSync(file, jsonl([toolUse('a', 'Bash', { command: 'make' }), notification]));
+  assert.equal(renderTools(file), '◐ Bash make');
+});
+
 test('every call in a parallel batch counts, however many run at once', () => {
   const dir = tmpDir();
   const file = path.join(dir, 'session.jsonl');
