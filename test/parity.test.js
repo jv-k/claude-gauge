@@ -18,13 +18,23 @@ const withoutBun = !hasBun && 'bun is not installed';
 // A config folder of its own, so a terminal render here never saves usage
 // into the real one.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+// No COLUMNS of the caller's: an example that needs a width names its own.
 const env = { ...process.env, CLAUDE_CONFIG_DIR: tmp };
+delete env.COLUMNS;
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
-const node = (script, args, input) =>
-  execFileSync(process.execPath, [path.join(root, 'dist', `${script}.js`), ...args], { env, input, encoding: 'utf8' });
-const bun = (script, args, input) =>
-  execFileSync('bun', [path.join(root, 'src', `${script}.ts`), ...args], { env, input, encoding: 'utf8' });
+const node = (script, args, input, columns) =>
+  execFileSync(process.execPath, [path.join(root, 'dist', `${script}.js`), ...args], {
+    env: columns ? { ...env, COLUMNS: String(columns) } : env,
+    input,
+    encoding: 'utf8',
+  });
+const bun = (script, args, input, columns) =>
+  execFileSync('bun', [path.join(root, 'src', `${script}.ts`), ...args], {
+    env: columns ? { ...env, COLUMNS: String(columns) } : env,
+    input,
+    encoding: 'utf8',
+  });
 
 // The README's status line payload, in a folder outside any git repository,
 // so the branch part drops out and repo falls back to the folder name.
@@ -44,7 +54,8 @@ const payload = JSON.stringify({
 });
 
 // The README examples' switches, less the parts that read the clock, so two
-// runs a moment apart print the same bytes.
+// runs a moment apart print the same bytes, and the terminal width an
+// example needs.
 const statusExamples = [
   [
     ['--show', 'ctx,5h,7d', '--show', 'duration,repo,branch,model,effort', '--no-reset'],
@@ -55,6 +66,15 @@ const statusExamples = [
     'ctx 43% ▓▓▓▓░░░░░░ 86.0k │ 5h 9% ▓░░░░░░░░░ │ 7d 41% ▓▓▓▓░░░░░░\n',
   ],
   [['--show', 'ctx,5h,7d,model', '--no-labels', '--no-bars', '--no-reset', '--12h'], '43% 86.0k │ 9% │ 41% │ Opus 5.5\n'],
+  [
+    ['--show', 'ctx,5h,7d', '--show', 'duration,repo,branch,model,effort', '--no-reset', '--compact'],
+    'c 43% ▓▓░░░ 86.0k│5h 9% ░░░┃░│7d 41% ▓▓░┃░\n1h12m│project│Opus 5.5│eff high\n',
+  ],
+  [
+    ['--show', 'ctx,5h,7d', '--show', 'duration,repo,branch,model,effort', '--right', 'model,effort', '--no-reset'],
+    'ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░░┃░ │ 7d 41% ▓▓░┃░\n1h12m │ project                       Opus 5.5 │ effort high\n',
+    60,
+  ],
 ];
 
 // A transcript of one prompt and two API responses, as the Stop hook sees it.
@@ -82,8 +102,8 @@ const tokenExamples = [
 ];
 
 test('the built status line prints the README examples', () => {
-  for (const [args, expected] of statusExamples) {
-    assert.equal(plain(node('statusline', args, payload)), expected, args.join(' '));
+  for (const [args, expected, columns] of statusExamples) {
+    assert.equal(plain(node('statusline', args, payload, columns)), expected, args.join(' '));
   }
 });
 
@@ -94,8 +114,8 @@ test('the built token line prints the README example as a Stop hook message', ()
 });
 
 test('bun runs the status line from source with the same bytes as the build', { skip: withoutBun }, () => {
-  for (const [args] of statusExamples) {
-    assert.equal(bun('statusline', args, payload), node('statusline', args, payload), args.join(' '));
+  for (const [args, , columns] of statusExamples) {
+    assert.equal(bun('statusline', args, payload, columns), node('statusline', args, payload, columns), args.join(' '));
   }
 });
 

@@ -220,6 +220,8 @@ Both scripts take switches on the command line, so you set them in the `command`
 | `--no-pace` | Drops the pace markers. |
 | `--no-reset` | Drops the reset times. |
 | `--12h` | Shows the `time` part and reset times on the 12-hour clock. Default: 24-hour. |
+| `--compact` | Fits narrow terminals: `│` between parts with no spaces round it, and shorter labels: `c` for `ctx`, `eff` for `effort`, `sty` for `style`, `agt` for `agent`, `cch` for `cache` and `spd` for `spend`. The other labels are short already. |
+| `--right <parts>` | The parts to right-align, separated by commas. In each row that shows any of them, they move to the end of the row, in the row's order, and spaces fill the gap so the row ends at the terminal's right edge. Claude Code gives the terminal width in `COLUMNS`. When the width is unknown, as with `--latest`, or the row is too long to leave a gap, the row is left as it is. Repeat `--right` to name more parts. |
 | `--latest` | Prints the rows for the calling session from its transcript, as plain text, instead of reading Claude Code's input. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 | `--window <size>` | With `--latest`: the context window size, for example `200k` or `1m`, as for the token line. |
 | `--instruct` | As a SessionStart hook: in the VS Code extension and the desktop app, prints an instruction that has Claude end each reply with the `--latest` rows; in the terminal CLI, prints nothing. The other switches pass through to the command it names. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
@@ -252,6 +254,24 @@ As short as it gets: no labels, no bars, the 12-hour clock:
 --show ctx,5h,7d,model --no-labels --no-bars --12h
 
 43% 86.0k │ 9% → 02:10 pm │ 41% → 3d │ Opus 5.5
+```
+
+Narrow terminals, with `--compact`:
+
+```text
+--show ctx,5h,7d --show repo,branch,model,effort --compact
+
+c 43% ▓▓░░░ 86.0k│5h 9% ░░┃░░ → 14:10│7d 41% ▓▓░┃░ → 3d
+jv-k/claude-gauge│⎇ main│Opus 5.5│eff high
+```
+
+The model and effort at the right edge of a 72-column terminal, with `--right`:
+
+```text
+--show ctx,5h,7d --show repo,branch,model,effort --right model,effort
+
+ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
+jv-k/claude-gauge │ ⎇ main                        Opus 5.5 │ effort high
 ```
 
 Three rows for pull-request work:

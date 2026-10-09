@@ -97,6 +97,9 @@ interface Config {
   pace: boolean;
   reset: boolean;
   hour12: boolean;
+  compact: boolean;
+  // The parts --right moves to the end of their row.
+  right: Part[];
 }
 
 // What parseArgs returns and render takes: any subset of the config, with
@@ -111,6 +114,8 @@ const DEFAULTS: Config = {
   pace: true,
   reset: true,
   hour12: false,
+  compact: false,
+  right: [],
 };
 
 interface Switch {
@@ -140,6 +145,15 @@ const SWITCHES: readonly Switch[] = [
   { name: '--no-pace', description: 'drop the pace markers', apply: (config) => { config.pace = false; } },
   { name: '--no-reset', description: 'drop the reset times', apply: (config) => { config.reset = false; } },
   { name: '--12h', description: '12-hour clock for the time part and reset times', apply: (config) => { config.hour12 = true; } },
+  { name: '--compact', description: 'shorter separators and labels, for narrow terminals', apply: (config) => { config.compact = true; } },
+  {
+    name: '--right',
+    value: '<parts>',
+    description: 'the parts to right-align within their row, comma-separated, when the terminal width is known',
+    apply: (config, value) => {
+      config.right = [...(config.right ?? []), ...value.split(',').map((p) => p.trim()).filter(isPart)];
+    },
+  },
   { name: '--latest', description: "print the calling session's rows from its transcript, as plain text" },
   { name: '--window', value: '<size>', description: 'with --latest: the context window size, such as 200k or 1m' },
   { name: '--instruct', description: 'as a SessionStart hook: have Claude end each reply with the --latest rows' },
@@ -196,6 +210,15 @@ function sanitiseAll<T>(value: T): T {
   }
   return value;
 }
+
+// The labels --compact shortens, and their short forms. A label not named
+// here is short already.
+const COMPACT_LABELS: Record<string, string> = { ctx: 'c', effort: 'eff', style: 'sty', agent: 'agt', cache: 'cch', spend: 'spd' };
+
+// A part's label and the space after it: none with --no-labels, the short
+// form with --compact.
+const labelOf = (config: Config, name: string) =>
+  config.labels ? `${config.compact ? (COMPACT_LABELS[name] ?? name) : name} ` : '';
 
 // Ten usage levels: dark green at 0-10%, deep red above 90%.
 const LEVELS = [22, 28, 34, 100, 142, 178, 172, 166, 160, 124].map(ansi256);
@@ -349,7 +372,7 @@ function usageBar(
 // Claude Code has not reported yet.
 function windowPart(name: '5h' | '7d', data: StatusData, config: Config, nowMs: number): string {
   const window = WINDOWS[name];
-  const label = config.labels ? `${name} ` : '';
+  const label = labelOf(config, name);
   const limit = data.rate_limits?.[window.key];
   if (limit?.used_percentage == null) return `${YELLOW}${label}~${RESET}`;
 
@@ -380,7 +403,7 @@ function contextPart(data: StatusData, config: Config): string {
   if (tokens == null && size) tokens = Math.round((pct * size) / 100);
 
   const color = pct <= 50 ? CYAN : pct <= 75 ? YELLOW : LEVELS[8];
-  const label = config.labels ? 'ctx ' : '';
+  const label = labelOf(config, 'ctx');
   const bar = config.bars ? ` ${cellsFor(pct, config.segments)}` : '';
   const count = tokens != null ? ` ${fmt(tokens)}` : '';
   return `${color}${label}${Math.round(pct)}%${bar}${count}${RESET}`;
@@ -440,7 +463,7 @@ function namePart(data: StatusData): string {
 // show only when on; style shows only when it is not the default.
 function effortPart(data: StatusData, config: Config): string {
   const level = data.effort?.level;
-  return level ? `${YELLOW}${config.labels ? 'effort ' : ''}${level}${RESET}` : '';
+  return level ? `${YELLOW}${labelOf(config, 'effort')}${level}${RESET}` : '';
 }
 
 const thinkingPart = (data: StatusData) => (data.thinking?.enabled ? `${YELLOW}think${RESET}` : '');
@@ -450,7 +473,7 @@ const fastPart = (data: StatusData) => (data.fast_mode ? `${YELLOW}fast${RESET}`
 function stylePart(data: StatusData, config: Config): string {
   const name = data.output_style?.name;
   if (!name || name === 'default') return '';
-  return `${GRAY}${config.labels ? 'style ' : ''}${name}${RESET}`;
+  return `${GRAY}${labelOf(config, 'style')}${name}${RESET}`;
 }
 
 // The repository as owner/name from the origin remote. Without one (outside
@@ -471,13 +494,13 @@ const worktreeName = (data: StatusData) => data.workspace?.git_worktree || data.
 function branchPart(data: StatusData, config: Config, branch: string): string {
   if (!branch) return '';
   const wt = worktreeName(data);
-  const inWorktree = wt ? ` (${config.labels ? 'wt ' : ''}${wt})` : '';
+  const inWorktree = wt ? ` (${labelOf(config, 'wt')}${wt})` : '';
   return `${GREEN}⎇ ${branch}${inWorktree}${RESET}`;
 }
 
 function worktreePart(data: StatusData, config: Config): string {
   const wt = worktreeName(data);
-  return wt ? `${GRAY}${config.labels ? 'wt ' : ''}${wt}${RESET}` : '';
+  return wt ? `${GRAY}${labelOf(config, 'wt')}${wt}${RESET}` : '';
 }
 
 // The branch's open pull request, coloured by its review state. A GitLab
@@ -494,7 +517,7 @@ function prPart(data: StatusData): string {
 
 function agentPart(data: StatusData, config: Config): string {
   const name = data.agent?.name;
-  return name ? `${GRAY}${config.labels ? 'agent ' : ''}${name}${RESET}` : '';
+  return name ? `${GRAY}${labelOf(config, 'agent')}${name}${RESET}` : '';
 }
 
 // The prompt cache's hit ratio and whether it is still warm. A high hit
@@ -502,7 +525,7 @@ function agentPart(data: StatusData, config: Config): string {
 function cachePart(data: StatusData, config: Config): string {
   const cache = data.prompt_cache;
   if (!cache) return '';
-  const label = config.labels ? 'cache ' : '';
+  const label = labelOf(config, 'cache');
   const state = cache.warm ? 'warm' : 'cold';
   if (cache.hit_ratio == null) return `${GRAY}${label}${state}${RESET}`;
   const hit = Math.round(cache.hit_ratio * 100);
@@ -519,7 +542,7 @@ function spendPart(data: StatusData, config: Config): string {
   if (limit.used_usd != null && limit.limit_usd != null) {
     return `${color}$${Math.round(limit.used_usd)}/$${Math.round(limit.limit_usd)}${RESET}`;
   }
-  return `${color}${config.labels ? 'spend ' : ''}${Math.round(limit.used_percentage)}%${RESET}`;
+  return `${color}${labelOf(config, 'spend')}${Math.round(limit.used_percentage)}%${RESET}`;
 }
 
 const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
@@ -528,9 +551,43 @@ interface RenderOptions {
   config?: Overrides;
   nowMs?: number;
   branchOf?: (cwd: string) => string;
+  // The terminal's width in columns, when it is known.
+  columns?: number;
 }
 
-function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch }: RenderOptions = {}): string {
+// A terminal width, from render's option or the text of COLUMNS, which
+// Claude Code sets for the status line command; unknown unless it is a whole
+// number above 0.
+const columnsOf = (value: number | string | undefined): number | undefined => {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+};
+
+// The columns a rendered text takes: its characters, less claude-gauge's own
+// colour codes, the only escapes left after sanitising. A wide character,
+// such as an emoji in a session name, counts as one.
+const visibleWidth = (text: string) => [...text.replace(/\x1b\[[0-9;]*m/g, '')].length;
+
+// A row's shown parts joined by the separator. With a known width, the parts
+// --right names move to the end of the row, in row order, and spaces fill
+// the gap so the row ends at the terminal's edge. A row with none of those
+// parts, or too little room for a gap as wide as the separator, is left as
+// it is.
+function joinRow(shown: { part: string; text: string }[], separator: string, config: Config, columns: number | undefined): string {
+  const join = (parts: typeof shown) => parts.map((p) => p.text).join(separator);
+  const right = shown.filter((p) => (config.right as string[]).includes(p.part));
+  if (columns === undefined || !right.length) return join(shown);
+  const left = join(shown.filter((p) => !right.includes(p)));
+  const end = join(right);
+  const gap = columns - visibleWidth(left) - visibleWidth(end);
+  if (gap < (left ? visibleWidth(separator) : 0)) return join(shown);
+  return `${left}${' '.repeat(gap)}${end}`;
+}
+
+function render(
+  data: StatusData,
+  { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch, columns }: RenderOptions = {},
+): string {
   const merged = { ...DEFAULTS, ...overrides };
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
@@ -544,16 +601,23 @@ function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), 
     branchOf: (dir) => sanitise(branchOf(dir)),
   };
 
+  const separator = `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
+  const width = columnsOf(columns);
+
   // One output line per row. A part with nothing to show drops out of its
   // row, and a row left with no parts drops out of the status line.
   return config.rows
     .map((row) =>
-      row
-        // Rows handed in from JavaScript may name parts the registry lacks;
-        // those render as nothing, like every other part with nothing to show.
-        .map((part) => (isPart(part) ? PART_REGISTRY[part].build(input) : ''))
-        .filter(Boolean)
-        .join(`${GRAY} │ ${RESET}`),
+      joinRow(
+        row
+          // Rows handed in from JavaScript may name parts the registry lacks;
+          // those render as nothing, like every other part with nothing to show.
+          .map((part) => ({ part, text: isPart(part) ? PART_REGISTRY[part].build(input) : '' }))
+          .filter((p) => p.text),
+        separator,
+        config,
+        width,
+      ),
     )
     .filter(Boolean)
     .join('\n');
@@ -789,7 +853,7 @@ if (isMain) {
         /* render what we can from an empty payload rather than print nothing */
       }
       saveUsage(data, nowMs);
-      process.stdout.write(render(data, { config, nowMs }) + '\n');
+      process.stdout.write(render(data, { config, nowMs, columns: columnsOf(process.env.COLUMNS) }) + '\n');
     });
   }
 }

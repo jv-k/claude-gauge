@@ -419,3 +419,65 @@ test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () =>
   assert.match(text, /^## Status line in replies\n/);
   assert.match(text, /statusline\.js --latest --window 1m\n/);
 });
+
+// Renders with the given switches and terminal width, colours stripped.
+const within = (columns, data, args) =>
+  plain(render(data, { nowMs: NOW, branchOf: () => 'main', config: parseArgs(args), columns }));
+
+test('--right pads its parts to the end of the row, to the terminal width', () => {
+  const data = { model: { display_name: 'Opus' } };
+  assert.equal(within(20, data, ['--show', 'time,model', '--right', 'model']), '12:00           Opus');
+  // A row of right-aligned parts only is padded at its start.
+  assert.equal(within(10, data, ['--show', 'model', '--right', 'model']), '      Opus');
+  // The colour codes take no room: the visible row is the terminal's width.
+  const raw = render(data, { nowMs: NOW, config: parseArgs(['--show', 'time,model', '--right', 'model']), columns: 20 });
+  assert.ok(raw.length > 20);
+  assert.equal(plain(raw).length, 20);
+});
+
+test('--right moves its parts to the end in row order, and keeps their separators', () => {
+  const data = { model: { display_name: 'Opus' }, effort: { level: 'high' }, version: '2.1.90' };
+  const args = ['--show', 'model,time,effort,version', '--right', 'version,model'];
+  assert.equal(within(40, data, args), '12:00 │ effort high       Opus │ v2.1.90');
+  assert.equal(within(30, data, [...args, '--compact']), '12:00│eff high    Opus│v2.1.90');
+  // Repeating --right adds to the parts it names; unknown names are ignored.
+  assert.equal(within(40, data, [...args.slice(0, 2), '--right', 'model,weather', '--right', 'version']), within(40, data, args));
+});
+
+test('--right leaves rows unchanged when the terminal width is unknown', () => {
+  const data = { model: { display_name: 'Opus' } };
+  const args = ['--show', 'time,model', '--right', 'model'];
+  for (const columns of [undefined, 0, -5, NaN, 2.5]) assert.equal(within(columns, data, args), '12:00 │ Opus', String(columns));
+});
+
+test('--right leaves a row unchanged when it does not fit, or has no right-aligned part to show', () => {
+  const data = { model: { display_name: 'Opus' } };
+  // Padding narrower than the separator would run the parts together.
+  assert.equal(within(11, data, ['--show', 'time,model', '--right', 'model']), '12:00 │ Opus');
+  assert.equal(within(12, data, ['--show', 'time,model', '--right', 'model']), '12:00   Opus');
+  assert.equal(within(3, data, ['--show', 'model', '--right', 'model']), 'Opus');
+  // pr has nothing to show, so the row has nothing to align.
+  assert.equal(within(20, data, ['--show', 'time,model,pr', '--right', 'pr']), '12:00 │ Opus');
+  // Only the rows holding a right-aligned part are padded.
+  assert.equal(within(10, data, ['--show', 'time', '--show', 'model', '--right', 'model']), '12:00\n      Opus');
+});
+
+test('the status line program takes the terminal width from COLUMNS', () => {
+  const { execFileSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const script = path.join(__dirname, '..', 'dist', 'statusline.js');
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-')) };
+  delete env.COLUMNS;
+  const statusLine = (columns) =>
+    plain(
+      execFileSync(process.execPath, [script, '--show', 'dir,model', '--right', 'model'], {
+        env: columns === undefined ? env : { ...env, COLUMNS: columns },
+        input: JSON.stringify({ model: { display_name: 'Opus' }, workspace: { current_dir: '/home/me/project' } }),
+        encoding: 'utf8',
+      }),
+    );
+  assert.equal(statusLine('20'), 'project         Opus\n');
+  for (const columns of [undefined, '', 'wide', '0']) assert.equal(statusLine(columns), 'project │ Opus\n', String(columns));
+});
