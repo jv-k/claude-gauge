@@ -23,12 +23,15 @@ import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 // What a part's builder reads: the payload, the config, the clock, the
-// folder Claude Code runs in, and the git branch reader.
+// folder Claude Code runs in, and the git branch reader. render sanitises the
+// payload, the folder's name and the branch before any part sees them.
 interface PartContext {
   data: StatusData;
   config: Config;
   nowMs: number;
+  // The folder's path as it is, for git to run in, and its name to print.
   cwd: string;
+  folder: string;
   branchOf: (cwd: string) => string;
 }
 
@@ -49,11 +52,11 @@ const partRegistry = {
   '7d': { description: 'weekly usage, with pace marker and days to reset', row: 0, build: ({ data, config, nowMs }) => windowPart('7d', data, config, nowMs) },
   time: { description: 'current local time', row: 1, build: ({ config, nowMs }) => timePart(config, nowMs) },
   duration: { description: 'how long the session has run', row: 1, build: ({ data }) => durationPart(data) },
-  repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, cwd }) => repoPart(data, cwd) },
+  repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, folder }) => repoPart(data, folder) },
   branch: { description: 'current git branch, and the linked worktree', row: 1, build: ({ data, config, cwd, branchOf }) => branchPart(data, config, branchOf(cwd)) },
   model: { description: 'model name', row: 1, build: ({ data }) => (data.model?.display_name ? `${YELLOW}${data.model.display_name}${RESET}` : '') },
   effort: { description: 'reasoning effort', row: 1, build: ({ data, config }) => effortPart(data, config) },
-  dir: { description: 'folder Claude Code runs in', build: ({ cwd }) => `${BLUE}${sanitise(path.basename(cwd))}${RESET}` },
+  dir: { description: 'folder Claude Code runs in', build: ({ folder }) => `${BLUE}${folder}${RESET}` },
   cost: { description: 'estimated session cost', build: ({ data }) => costPart(data) },
   lines: { description: 'lines added and removed this session', build: ({ data }) => linesPart(data) },
   name: { description: 'session name or title', build: ({ data }) => namePart(data) },
@@ -179,7 +182,9 @@ const CONTROL_CHARACTER = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2
 
 // Text from outside claude-gauge (the payload, the transcript, git), safe to
 // print: nothing in it can move the cursor, change colours or reorder the
-// row. claude-gauge's own colours are added around it afterwards.
+// row. claude-gauge's own colours are added around it afterwards. render
+// cleans what reaches the parts through their context; a part that prints
+// text from anywhere else, such as a switch or a command, calls this itself.
 const sanitise = (text: string) => text.replace(ESCAPE_SEQUENCE, '').replace(CONTROL_CHARACTER, '');
 
 // A parsed payload with every string in it sanitised, at any depth.
@@ -451,9 +456,9 @@ function stylePart(data: StatusData, config: Config): string {
 // The repository as owner/name from the origin remote. Without one (outside
 // git, or no origin) it falls back to the folder name, so a row that leads
 // with repo never loses its location.
-function repoPart(data: StatusData, cwd: string): string {
+function repoPart(data: StatusData, folder: string): string {
   const repo = data.workspace?.repo;
-  const shown = repo?.owner && repo?.name ? `${repo.owner}/${repo.name}` : sanitise(path.basename(cwd));
+  const shown = repo?.owner && repo?.name ? `${repo.owner}/${repo.name}` : folder;
   return `${GRAY}${shown}${RESET}`;
 }
 
@@ -528,10 +533,16 @@ interface RenderOptions {
 function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch }: RenderOptions = {}): string {
   const merged = { ...DEFAULTS, ...overrides };
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
-  // The folder as it is, since git runs in it; the parts print it sanitised.
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
 
-  const input: PartContext = { data: sanitiseAll(data), config, nowMs, cwd, branchOf: (dir) => sanitise(branchOf(dir)) };
+  const input: PartContext = {
+    data: sanitiseAll(data),
+    config,
+    nowMs,
+    cwd,
+    folder: sanitise(path.basename(cwd)),
+    branchOf: (dir) => sanitise(branchOf(dir)),
+  };
 
   // One output line per row. A part with nothing to show drops out of its
   // row, and a row left with no parts drops out of the status line.

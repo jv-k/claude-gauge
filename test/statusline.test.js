@@ -230,10 +230,15 @@ test('version shows the Claude Code version', () => {
 // what came before, and reverse the text, in 7-bit and 8-bit forms.
 const HOSTILE = [
   '\x1b[2J\x1b[H', // CSI: erase the screen, cursor home
+  '\x1b[1;31m\x1b[38;2;255;0;0m', // CSI: colours
   '\x1b]0;pwned\x07', // OSC: window title, BEL-terminated
   '\x1b]8;;https://evil.example\x1b\\', // OSC 8: hyperlink, ST-terminated
+  '\x1b]52;c;cHduZWQ=\x07', // OSC 52: write the clipboard
   '\x1bP1$r\x1b\\', // DCS string
+  '\x1b_payload\x1b\\', // APC string
+  '\x1b(0', // character set switch
   '\x9b31m', // 8-bit CSI
+  '\x9d0;pwned\x9c', // 8-bit OSC and ST
   '\x07\b\r\n\t\x7f\x85', // C0, DEL and C1 characters
   '\u202e\u2066\u200f', // bidi override, isolate and mark
 ].join('');
@@ -242,11 +247,15 @@ const HOSTILE = [
 // and the bidi formatting characters.
 const CONTROL = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 
+// claude-gauge's own colour codes: reset, the 16 colours it names, and the
+// 256-colour levels. HOSTILE's colours are none of these.
+const OWN_COLOURS = /\x1b\[(?:0|0;3\d|0;90|38;5;\d{1,3})m/g;
+
 // Renders the parts with the given payload and branch, and checks that the
 // only control codes left are claude-gauge's own colours.
 const renderClean = (data, show, branch = 'main') => {
   const raw = render(data, { nowMs: NOW, branchOf: () => branch, config: parseArgs(['--show', show]) });
-  assert.doesNotMatch(plain(raw), CONTROL, JSON.stringify(raw));
+  assert.doesNotMatch(raw.replace(OWN_COLOURS, ''), CONTROL, JSON.stringify(raw));
   return plain(raw);
 };
 
@@ -254,6 +263,8 @@ test('a hostile session name prints without its control codes', () => {
   assert.equal(renderClean({ session_name: `fix ${HOSTILE}the bug` }, 'name'), 'fix the bug');
   // Cut to 30 characters after the codes are gone, not before.
   assert.equal(renderClean({ session_name: `${HOSTILE}a session title of exactly thirty` }, 'name'), 'a session title of exactly th…');
+  // An OSC with no terminator runs to the end, as a terminal reads it.
+  assert.equal(renderClean({ session_name: 'title\x1b]0;pwned' }, 'name'), 'title');
 });
 
 test('a hostile branch from git, and a hostile worktree name, print without their control codes', () => {
