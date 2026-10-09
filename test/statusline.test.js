@@ -253,8 +253,8 @@ const OWN_COLOURS = /\x1b\[(?:0|0;3\d|0;90|38;5;\d{1,3})m/g;
 
 // Renders the parts with the given payload and branch, and checks that the
 // only control codes left are claude-gauge's own colours.
-const renderClean = (data, show, branch = 'main') => {
-  const raw = render(data, { nowMs: NOW, branchOf: () => branch, config: parseArgs(['--show', show]) });
+const renderClean = (data, show, branch = 'main', transcript = undefined) => {
+  const raw = render(data, { nowMs: NOW, branchOf: () => branch, config: parseArgs(['--show', show]), transcript });
   assert.doesNotMatch(raw.replace(OWN_COLOURS, ''), CONTROL, JSON.stringify(raw));
   return plain(raw);
 };
@@ -305,8 +305,10 @@ test('every part prints hostile payload text without its control codes', () => {
     agent: { name: h('reviewer') },
     prompt_cache: { warm: true, hit_ratio: 0.5 },
     rate_limits: { five_hour: { used_percentage: 10 }, seven_day: { used_percentage: 20 }, spend_limit: { used_percentage: 30 } },
+    transcript_path: '/home/me/session.jsonl',
   };
-  for (const part of PARTS) assert.ok(renderClean(data, part, h('main')), part);
+  const activity = { tools: { running: [{ name: h('Edit'), target: h('src/a.ts') }], completed: { [h('Read')]: 2 } } };
+  for (const part of PARTS) assert.ok(renderClean(data, part, h('main'), () => activity), part);
   assert.equal(
     renderClean(data, 'model,effort,style,agent,version,lines,ctx'),
     'Opus │ effort high │ style explanatory │ agent reviewer │ v2.1.90 │ +15 −23 │ ctx 43% ▓▓░░░ 86.0k',

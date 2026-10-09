@@ -10,8 +10,9 @@
 //
 // Everything comes from Claude Code's own payload
 // (https://code.claude.com/docs/en/statusline): `rate_limits` carries the
-// claude.ai 5-hour and 7-day windows. The only side call is
-// `git branch --show-current`.
+// claude.ai 5-hour and 7-day windows. The side calls are `git branch
+// --show-current` and, only when a part that needs it is shown, a read of the
+// bytes the session transcript has gained since the last render.
 //
 // The parts it can show are in PART_REGISTRY and the switches it takes in
 // SWITCHES, both below. README.md documents each in a table, and a test fails
@@ -21,6 +22,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 // What a part's builder reads: the payload, the config, the clock, the
 // folder Claude Code runs in, and the git branch reader. render sanitises the
@@ -33,6 +35,9 @@ interface PartContext {
   cwd: string;
   folder: string;
   branchOf: (cwd: string) => string;
+  // What the session transcript shows, read on the first call only, so a
+  // render that shows no transcript part never reads it.
+  activity: () => TranscriptActivity;
 }
 
 interface PartSpec {
@@ -69,6 +74,7 @@ const partRegistry = {
   cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config }) => cachePart(data, config) },
   spend: { description: 'spend against a gateway spend limit', build: ({ data, config }) => spendPart(data, config) },
   version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
+  tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, cwd }) => toolsPart(activity(), cwd) },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -261,6 +267,7 @@ interface RateLimit {
 
 interface StatusData {
   cwd?: string;
+  transcript_path?: string;
   version?: string;
   session_name?: string;
   fast_mode?: boolean;
@@ -551,12 +558,46 @@ function spendPart(data: StatusData, config: Config): string {
 
 const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
 
+// The tools part shows the completed tools used most, up to this many, and
+// cuts a target to this many characters.
+const TOOLS_SHOWN = 5;
+const TARGET_CHARS = 30;
+
+// Tools whose target is a file: a cut keeps the end, where its name is.
+const FILE_TOOLS = ['Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit'];
+
+// A tool's target as the part prints it: a path inside the folder Claude
+// Code runs in made relative to it, then cut to TARGET_CHARS.
+function shortTarget(name: string, target: string, cwd: string): string {
+  const relative = path.isAbsolute(target) ? path.relative(cwd, target) : '';
+  const shown = relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? relative : target;
+  if (shown.length <= TARGET_CHARS) return shown;
+  return FILE_TOOLS.includes(name) ? `…${shown.slice(-(TARGET_CHARS - 1))}` : `${shown.slice(0, TARGET_CHARS - 1)}…`;
+}
+
+// The tool running now, with its target, then the completed tools used most,
+// with counts: ◐ Edit src/a.ts ✓ Read ×12 ✓ Bash ×3.
+function toolsPart(activity: TranscriptActivity, cwd: string): string {
+  const { running, completed } = activity.tools;
+  const items: string[] = [];
+  const now = running.at(-1);
+  if (now) items.push(`${YELLOW}◐ ${now.name}${now.target ? ` ${shortTarget(now.name, now.target, cwd)}` : ''}${RESET}`);
+  const done = Object.entries(completed)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, TOOLS_SHOWN);
+  for (const [name, count] of done) items.push(`${GREEN}✓${RESET} ${GRAY}${name} ×${count}${RESET}`);
+  return items.join(' ');
+}
+
 interface RenderOptions {
   config?: Overrides;
   nowMs?: number;
   branchOf?: (cwd: string) => string;
   // The terminal's width in columns, when it is known.
   columns?: number;
+  // Reads what a transcript shows; by default incrementally, with its state
+  // in the state folder.
+  transcript?: (file: string) => TranscriptActivity;
 }
 
 // A terminal width, from render's option or the text of COLUMNS, which
@@ -606,11 +647,24 @@ function joinRow(shown: ShownPart[], separator: string, right: readonly string[]
 
 function render(
   data: StatusData,
-  { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch, columns }: RenderOptions = {},
+  { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch, columns, transcript = readTranscriptActivity }: RenderOptions = {},
 ): string {
   const merged = { ...DEFAULTS, ...overrides };
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
+
+  // The transcript is read at most once, and only when a part asks. A
+  // transcript that cannot be read shows nothing rather than fails.
+  let activity: TranscriptActivity | undefined;
+  const readActivity = (): TranscriptActivity => {
+    const file = data.transcript_path;
+    if (typeof file !== 'string' || !file) return emptyActivity();
+    try {
+      return sanitiseActivity(transcript(file));
+    } catch {
+      return emptyActivity();
+    }
+  };
 
   const input: PartContext = {
     data: sanitiseAll(data),
@@ -619,6 +673,7 @@ function render(
     cwd,
     folder: sanitise(path.basename(cwd)),
     branchOf: (dir) => sanitise(branchOf(dir)),
+    activity: () => (activity ??= readActivity()),
   };
 
   const separator = `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
@@ -672,6 +727,198 @@ function loadUsage(nowMs: number): StatusData['rate_limits'] | undefined {
   } catch {
     return undefined;
   }
+}
+
+// The transcript reader. A transcript only grows while its session runs, so
+// each render reads just the bytes added since the last one, from an offset
+// kept per transcript in the state folder with what the earlier bytes showed.
+// A transcript that shrank or was replaced by another file is read again
+// from the start.
+
+// A tool call: the tool's name and what it works on, if anything.
+interface ToolCall {
+  name: string;
+  target?: string;
+}
+
+// What a transcript shows: the tool calls still running, oldest first, and
+// how many calls of each tool have completed.
+interface TranscriptActivity {
+  tools: { running: ToolCall[]; completed: Record<string, number> };
+}
+
+const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} } });
+
+// Activity with every name and target sanitised. Two tool names that differ
+// only in control codes count as one.
+function sanitiseActivity({ tools }: TranscriptActivity): TranscriptActivity {
+  const running = tools.running.map(({ name, target }) => ({ name: sanitise(name), ...(target ? { target: sanitise(target) } : {}) }));
+  const completed: Record<string, number> = {};
+  for (const [name, count] of Object.entries(tools.completed)) completed[sanitise(name)] = (completed[sanitise(name)] ?? 0) + count;
+  return { tools: { running, completed } };
+}
+
+// What the reader keeps between renders. version changes when the shape
+// does, so a state from an older claude-gauge is rebuilt, not misread.
+const TRANSCRIPT_STATE_VERSION = 1;
+
+interface TranscriptState {
+  version: number;
+  // The transcript, and the file it was: a replaced file has a new inode.
+  file: string;
+  dev: number;
+  ino: number;
+  // The bytes read so far, always up to the end of a whole line.
+  offset: number;
+  // The tool calls with no result yet, by call id, oldest first.
+  pending: (ToolCall & { id: string })[];
+  completed: Record<string, number>;
+}
+
+// The tool calls kept as running at most: a call whose result never came
+// must not grow the state for ever.
+const PENDING_KEPT = 20;
+
+// The fs calls the reader makes, so a test can count the bytes it reads.
+type TranscriptFs = Pick<typeof fs, 'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync'>;
+
+interface TranscriptReadOptions {
+  stateDir?: string;
+  fs?: TranscriptFs;
+}
+
+const transcriptStateDir = () => path.join(configDir(), 'claude-gauge', '.state', 'transcripts');
+
+// The input field that names what a tool works on, most telling first.
+const TARGET_FIELDS = ['file_path', 'notebook_path', 'pattern', 'command', 'url', 'query', 'description', 'skill', 'path'];
+
+function toolTarget(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  for (const field of TARGET_FIELDS) {
+    const value = (input as Record<string, unknown>)[field];
+    if (typeof value === 'string' && value.trim()) return value.trim().split('\n')[0];
+  }
+  return undefined;
+}
+
+interface ContentBlock {
+  type?: string;
+  id?: unknown;
+  name?: unknown;
+  input?: unknown;
+  tool_use_id?: unknown;
+}
+
+// One transcript record applied to the state. Subagent records are left out,
+// as they are for --latest. A prompt from the user ends the turn, so a call
+// still marked running then was interrupted.
+function applyRecord(state: TranscriptState, record: TranscriptRecord & { isMeta?: boolean }): void {
+  if (!record || typeof record !== 'object' || record.isSidechain) return;
+  const content = (record.message as { content?: unknown } | undefined)?.content;
+  const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
+  if (record.type === 'user' && !record.isMeta && !blocks.some((b) => b.type === 'tool_result')) {
+    if (typeof content === 'string' || blocks.length) state.pending = [];
+    return;
+  }
+  for (const block of blocks) {
+    if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+      const target = toolTarget(block.input);
+      state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}) }].slice(-PENDING_KEPT);
+    } else if (record.type === 'user' && block.type === 'tool_result') {
+      const call = state.pending.find((p) => p.id === block.tool_use_id);
+      if (!call) continue;
+      state.pending = state.pending.filter((p) => p !== call);
+      state.completed[call.name] = (state.completed[call.name] ?? 0) + 1;
+    }
+  }
+}
+
+// Reads the transcript from offset to size, applying each whole line, and
+// returns the offset after the last one. A line still being written is left
+// for the next render.
+function readLines(io: TranscriptFs, file: string, offset: number, size: number, apply: (line: string) => void): number {
+  const fd = io.openSync(file, 'r');
+  try {
+    const chunk = Buffer.alloc(1 << 16);
+    let rest = Buffer.alloc(0);
+    let position = offset;
+    while (position < size) {
+      const n = io.readSync(fd, chunk, 0, Math.min(chunk.length, size - position), position);
+      if (n <= 0) break;
+      position += n;
+      const data = Buffer.concat([rest, chunk.subarray(0, n)]);
+      const end = data.lastIndexOf(0x0a);
+      if (end < 0) {
+        rest = data;
+        continue;
+      }
+      for (const line of data.subarray(0, end).toString('utf8').split('\n')) apply(line);
+      rest = data.subarray(end + 1);
+    }
+    return position - rest.length;
+  } finally {
+    io.closeSync(fd);
+  }
+}
+
+function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptState | undefined {
+  try {
+    const state = JSON.parse(String(io.readFileSync(stateFile, 'utf8'))) as TranscriptState;
+    const valid =
+      state?.version === TRANSCRIPT_STATE_VERSION &&
+      Number.isInteger(state.offset) &&
+      Array.isArray(state.pending) &&
+      state.completed &&
+      typeof state.completed === 'object';
+    return valid ? state : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Best effort, like saveUsage. The state is written whole to a file of its
+// own, then renamed over the old one, so a render running alongside never
+// reads half a state.
+function saveTranscriptState(io: TranscriptFs, stateFile: string, state: TranscriptState): void {
+  try {
+    io.mkdirSync(path.dirname(stateFile), { recursive: true });
+    const temporary = `${stateFile}.${process.pid}.tmp`;
+    io.writeFileSync(temporary, JSON.stringify(state));
+    io.renameSync(temporary, stateFile);
+  } catch {
+    /* read-only home or similar: the next render reads from the start */
+  }
+}
+
+// What the transcript shows, reading only what it gained since the last
+// call. A transcript that does not exist shows nothing.
+function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(), fs: io = fs }: TranscriptReadOptions = {}): TranscriptActivity {
+  let stat: fs.Stats;
+  try {
+    stat = io.statSync(file);
+  } catch {
+    return emptyActivity();
+  }
+  const stateFile = path.join(stateDir, `${createHash('sha1').update(file).digest('hex')}.json`);
+  const saved = loadTranscriptState(io, stateFile);
+  const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
+  const state: TranscriptState = unchanged
+    ? saved
+    : { version: TRANSCRIPT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0, pending: [], completed: {} };
+
+  if (stat.size > state.offset || !unchanged) {
+    state.offset = readLines(io, file, state.offset, stat.size, (line) => {
+      // Only lines that can hold a tool call, a result or a prompt are parsed.
+      if (!line.includes('"tool_') && !line.includes('"user"')) return;
+      try {
+        applyRecord(state, JSON.parse(line));
+      } catch {
+        /* not a record: skip it */
+      }
+    });
+    saveTranscriptState(io, stateFile, state);
+  }
+  return { tools: { running: state.pending.map(({ id: _id, ...call }) => call), completed: { ...state.completed } } };
 }
 
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
@@ -835,9 +1082,10 @@ export {
   worktreeFromGitDir,
   instruction,
   INSTRUCT_HOSTS,
+  readTranscriptActivity,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord };
+export type { StatusData, Config, Overrides, Part, TranscriptRecord, TranscriptActivity };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
@@ -858,6 +1106,7 @@ if (isMain) {
     const transcript = latestTranscript(process.cwd());
     const records = transcript ? readRecords(transcript) : [];
     const data = payloadFromTranscript(records, { nowMs, window, usage: loadUsage(nowMs) });
+    if (transcript) data.transcript_path = transcript;
     const cwd = data.workspace?.current_dir;
     if (data.workspace && cwd) Object.assign(data.workspace, gitWorkspace(cwd));
     // Plain text: it is pasted into a reply, where colour codes show as junk.
