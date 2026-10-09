@@ -2798,7 +2798,7 @@ const INSTRUCT_HOSTS = ['claude-vscode', 'claude-desktop', 'claude-desktop-3p'];
 
 // A shell word: as is when plain, else in single quotes. ~ stays bare so the
 // shell expands a ~/ path.
-const shellWord = (s: string) => (/^[\w@%+=:,.\/~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+const shellWord = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
 function instruction(argv: string[], { host, script }: { host: string | undefined; script: string }): string | null {
   if (host === undefined || !INSTRUCT_HOSTS.includes(host)) return null;

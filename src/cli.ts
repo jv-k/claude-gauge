@@ -107,7 +107,8 @@ function parseArgs(argv: string[]): Args {
     });
     seen.push(known);
   }
-  const stray = args.command && seen.find((s) => !s.commands.includes(args.command!));
+  const { command } = args;
+  const stray = command && seen.find((s) => !s.commands.includes(command));
   if (stray) throw new UsageError(`${args.command} takes no ${stray.names[0]}`);
   return args;
 }

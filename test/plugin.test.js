@@ -136,7 +136,7 @@ test('the launcher picks the newest installed version, by version number, then b
 
   // 1.10.0 is newer than 1.9.0, though it sorts first as text. The exit
   // status, the switches and the input pass through.
-  let r = runLauncher(dir, 'statusline.js', ['--show', 'ctx'], '{"a":1}');
+  const r = runLauncher(dir, 'statusline.js', ['--show', 'ctx'], '{"a":1}');
   assert.equal(r.stdout, '1.10.0 statusline.js --show ctx <{"a":1}>');
   assert.equal(r.status, 3);
   assert.match(runLauncher(dir, 'tokenline.js').stdout, /^1\.10\.0 tokenline\.js/);
