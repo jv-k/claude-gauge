@@ -731,9 +731,10 @@ function ledgerFrom(value: unknown): Ledger {
   return { days: table(days), sessions: table(sessions) };
 }
 
-// A ledger value as a number of dollars, or undefined when it is not one: the
-// file is outside claude-gauge's control.
-const dollars = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+// A number from a file or a reader outside claude-gauge's control, such as a
+// ledger value or a transcript counter, or undefined when it is not a finite
+// one.
+const finite = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 
 // A local day as the ledger keys it.
 const dayKey = (ms: number) => {
@@ -745,9 +746,9 @@ const dayKey = (ms: number) => {
 // cost when the ledger has not seen it, or when its cost fell, which means it
 // started again from zero.
 function unrecorded(ledger: Ledger, data: StatusData): number {
-  const usd = dollars(data.cost?.total_cost_usd);
+  const usd = finite(data.cost?.total_cost_usd);
   if (usd === undefined) return 0;
-  const recorded = data.session_id ? dollars(ledger.sessions[data.session_id]?.usd) : undefined;
+  const recorded = data.session_id ? finite(ledger.sessions[data.session_id]?.usd) : undefined;
   return recorded === undefined || usd < recorded ? usd : usd - recorded;
 }
 
@@ -766,8 +767,8 @@ function periodDays(period: Period, nowMs: number): string[] {
 // those days, and what this session has spent since it was last recorded.
 // Nothing shows when neither has anything to add.
 function spentPart(period: Period, { data, config, nowMs, ledger }: PartContext): string {
-  const byDay = periodDays(period, nowMs).map((day) => dollars(ledger.days[day]));
-  const known = byDay.some((usd) => usd !== undefined) || dollars(data.cost?.total_cost_usd) !== undefined;
+  const byDay = periodDays(period, nowMs).map((day) => finite(ledger.days[day]));
+  const known = byDay.some((usd) => usd !== undefined) || finite(data.cost?.total_cost_usd) !== undefined;
   if (!known) return '';
   const usd = byDay.reduce<number>((sum, day) => sum + (day ?? 0), 0) + unrecorded(ledger, data);
   return `${GRAY}${labelOf(config, period)}$${usd.toFixed(2)}${RESET}`;
@@ -1420,11 +1421,11 @@ function withLock(file: string, write: (held: () => boolean) => void): void {
 function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() }: { file?: string; nowMs?: number } = {}): Ledger {
   let ledger = readLedger(file);
   const id = data.session_id;
-  const usd = dollars(data.cost?.total_cost_usd);
+  const usd = finite(data.cost?.total_cost_usd);
   if (typeof id !== 'string' || !id || usd === undefined) return ledger;
   const last = ledger.sessions[id];
-  if (dollars(last?.usd) === usd) return ledger;
-  const since = nowMs - (dollars(last?.at) ?? -Infinity);
+  if (finite(last?.usd) === usd) return ledger;
+  const since = nowMs - (finite(last?.at) ?? -Infinity);
   if (since >= 0 && since < LEDGER_THROTTLE_MS) return ledger;
 
   const temp = `${file}.${process.pid}.tmp`;
@@ -1433,7 +1434,7 @@ function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() 
     withLock(file, (held) => {
       const fresh = readLedger(file);
       const day = dayKey(nowMs);
-      fresh.days[day] = (dollars(fresh.days[day]) ?? 0) + unrecorded(fresh, data);
+      fresh.days[day] = (finite(fresh.days[day]) ?? 0) + unrecorded(fresh, data);
       fresh.sessions[id] = { usd, at: nowMs };
       forgetOld(fresh, nowMs);
       fs.writeFileSync(temp, JSON.stringify(fresh));
@@ -1459,11 +1460,11 @@ function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() 
 function forgetOld(ledger: Ledger, nowMs: number): void {
   const oldest = dayKey(nowMs - LEDGER_KEEP_MS);
   for (const [day, usd] of Object.entries(ledger.days)) {
-    if (day < oldest || dollars(usd) === undefined) delete ledger.days[day];
+    if (day < oldest || finite(usd) === undefined) delete ledger.days[day];
   }
   for (const [id, entry] of Object.entries(ledger.sessions)) {
-    const at = dollars(entry?.at);
-    if (at === undefined || at < nowMs - LEDGER_KEEP_MS || dollars(entry?.usd) === undefined) delete ledger.sessions[id];
+    const at = finite(entry?.at);
+    if (at === undefined || at < nowMs - LEDGER_KEEP_MS || finite(entry?.usd) === undefined) delete ledger.sessions[id];
   }
 }
 
@@ -1518,9 +1519,6 @@ interface TranscriptActivity {
 
 const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [], compactions: 0 });
 
-// A number from a reader, or undefined when it is not a finite one.
-const finite = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
-
 // Activity with every name and target sanitised. Two tool names that differ
 // only in control codes count as one.
 // A reader handed in from JavaScript may leave the agents, the todos and the
@@ -1540,14 +1538,15 @@ function sanitiseActivity({ tools, agents = [], todos = [], compactions, lastRep
     ...(activeForm ? { activeForm: sanitise(activeForm) } : {}),
     status,
   }));
-  const [reply, perSecond] = [finite(lastReplyAt), finite(speed)];
+  const replyAt = finite(lastReplyAt);
+  const tokensPerSecond = finite(speed);
   return {
     tools: { running, completed },
     agents: cleanAgents,
     todos: cleanTodos,
     compactions: finite(compactions) ?? 0,
-    ...(reply !== undefined ? { lastReplyAt: reply } : {}),
-    ...(perSecond !== undefined ? { speed: perSecond } : {}),
+    ...(replyAt !== undefined ? { lastReplyAt: replyAt } : {}),
+    ...(tokensPerSecond !== undefined ? { speed: tokensPerSecond } : {}),
   };
 }
 

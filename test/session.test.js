@@ -110,6 +110,9 @@ function activityIn(records, { append = [] } = {}) {
   return activity;
 }
 
+// The reply fields of an activity, leaving out those it does not have.
+const pick = ({ lastReplyAt, speed }) => ({ ...(lastReplyAt !== undefined ? { lastReplyAt } : {}), ...(speed !== undefined ? { speed } : {}) });
+
 test('the reader counts the compactions in the session', () => {
   assert.equal(activityIn([prompt(ago(600))]).compactions, 0);
   const once = [prompt(ago(600)), compacted(ago(500))];
@@ -150,9 +153,6 @@ test("a subagent's replies are left out", () => {
   const nested = [prompt(ago(60)), text(ago(58), 'msg_1', 100), text(ago(5), 'msg_2', 100, { isSidechain: true })];
   assert.deepEqual(pick(activityIn(nested)), { lastReplyAt: ago(58), speed: 50 });
 });
-
-// The reply fields of an activity, leaving out those it does not have.
-const pick = ({ lastReplyAt, speed }) => ({ ...(lastReplyAt !== undefined ? { lastReplyAt } : {}), ...(speed !== undefined ? { speed } : {}) });
 
 test('the program shows the session counters from a transcript', () => {
   const dir = tmpDir();
