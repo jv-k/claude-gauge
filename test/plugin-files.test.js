@@ -19,7 +19,7 @@ const commands = path.join(root, 'commands');
 
 test('the marketplace lists the repository root as the claude-gauge plugin', () => {
   assert.equal(marketplace.name, 'claude-gauge');
-  assert.ok(marketplace.owner && marketplace.owner.name, 'a marketplace needs an owner name');
+  assert.ok(marketplace.owner?.name, 'a marketplace needs an owner name');
   assert.deepEqual(
     marketplace.plugins.map((p) => [p.name, p.source]),
     [['claude-gauge', './']],

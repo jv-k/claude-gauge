@@ -765,12 +765,16 @@ function readGit(cwd: string, statusOf: (cwd: string) => string | undefined, bra
 // Reset times are rounded to the nearest minute, so 6:59:45 shows as 07:00.
 const resetDate = (epochSeconds: number) => new Date(Math.round(epochSeconds / 60) * 60 * 1000);
 
+// hourCycle, not hour12: with hour12, Node 18 and 20 put en-GB on the 0-11
+// clock, so noon reads 00:00 pm. hourCycle names the clock outright.
+const clockOf = (config: Config): Intl.DateTimeFormatOptions => ({
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: config.hour12 ? 'h12' : 'h23',
+});
+
 function formatTime(epochSeconds: number, config: Config): string {
-  return resetDate(epochSeconds).toLocaleTimeString('en-GB', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: config.hour12,
-  });
+  return resetDate(epochSeconds).toLocaleTimeString('en-GB', clockOf(config));
 }
 
 // The weekly window resets days away: show the calendar days until the
@@ -876,7 +880,7 @@ function contextPart(data: StatusData, config: Config, theme: Theme): string {
 
 // The current local time, on the same clock as the reset times.
 function timePart(config: Config, theme: Theme, nowMs: number): string {
-  const time = new Date(nowMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: config.hour12 });
+  const time = new Date(nowMs).toLocaleTimeString('en-GB', clockOf(config));
   return `${theme.muted}${time}${RESET}`;
 }
 
@@ -2794,7 +2798,7 @@ const INSTRUCT_HOSTS = ['claude-vscode', 'claude-desktop', 'claude-desktop-3p'];
 
 // A shell word: as is when plain, else in single quotes. ~ stays bare so the
 // shell expands a ~/ path.
-const shellWord = (s: string) => (/^[\w@%+=:,.\/~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+const shellWord = (s: string) => (/^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
 function instruction(argv: string[], { host, script }: { host: string | undefined; script: string }): string | null {
   if (host === undefined || !INSTRUCT_HOSTS.includes(host)) return null;

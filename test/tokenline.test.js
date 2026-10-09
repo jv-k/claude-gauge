@@ -112,5 +112,6 @@ test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () =>
       encoding: 'utf8',
     });
   assert.equal(run('cli'), '');
-  assert.match(run('claude-vscode'), /^## Token line in replies\n[\s\S]*tokenline\.js --latest\n/);
+  // A Windows path holds a backslash, so the script comes in quotes there.
+  assert.match(run('claude-vscode'), /^## Token line in replies\n[\s\S]*tokenline\.js'? --latest\n/);
 });

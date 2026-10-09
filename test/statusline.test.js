@@ -284,6 +284,9 @@ test('limit names every exhausted window: 5h, 7d, each model and the spend limit
 test('time shows the current local time, on the 24-hour clock unless --12h', () => {
   assert.equal(run({}, ['--show', 'time']), '12:00');
   assert.equal(run({}, ['--show', 'time', '--12h']), '12:00 pm');
+  // A reset time at noon reads 12:00 pm on the 12-hour clock too, not 00:00 pm.
+  const noon = payload({ five_hour: { used_percentage: 9, resets_at: at(NOW + 20_000) } });
+  assert.equal(run(noon, ['--show', '5h', '--no-bars', '--12h']), '5h 9% → 12:00 pm');
 });
 
 test('duration counts seconds, minutes, hours and days, leaving off a zero lower unit', () => {
@@ -364,10 +367,13 @@ const linked = (data, args, status = onMain()) =>
   render(data, { nowMs: NOW, statusOf: () => status, hostname: 'box', config: parseArgs(args) });
 
 test('dir and repo link to the folder Claude Code runs in, as a file URL on this host', () => {
-  const data = { workspace: { current_dir: '/home/me/my project', repo: { host: 'github.com', owner: 'jv-k', name: 'claude-gauge' } } };
+  // A Windows folder has a drive, and its URL path starts with it.
+  const [cwd, url] =
+    process.platform === 'win32' ? ['C:\\home\\me\\my project', 'file://box/C:/home/me/my%20project'] : ['/home/me/my project', 'file://box/home/me/my%20project'];
+  const data = { workspace: { current_dir: cwd, repo: { host: 'github.com', owner: 'jv-k', name: 'claude-gauge' } } };
   assert.deepEqual(linksIn(linked(data, ['--show', 'dir,repo'])), [
-    ['file://box/home/me/my%20project', 'my project'],
-    ['file://box/home/me/my%20project', 'jv-k/claude-gauge'],
+    [url, 'my project'],
+    [url, 'jv-k/claude-gauge'],
   ]);
 });
 
@@ -842,8 +848,10 @@ test('a hostile branch from git, and a hostile worktree name, print without thei
 test('a hostile repo, from the remote or the folder name, prints without its control codes', () => {
   const repo = { host: 'github.com', owner: `jv-${HOSTILE}k`, name: `claude-${HOSTILE}gauge` };
   assert.equal(renderClean({ workspace: { current_dir: '/home/me/project', repo } }, 'repo'), 'jv-k/claude-gauge');
-  // A folder name cannot hold a slash, so the hyperlink's URL loses its own.
-  const folder = { workspace: { current_dir: `/home/me/pro${HOSTILE.replaceAll('/', '')}ject` } };
+  // A folder name cannot hold a slash, or on Windows a backslash, so the
+  // hyperlink's URL loses its own.
+  const name = HOSTILE.replaceAll('/', '').replaceAll(require('node:path').sep, '');
+  const folder = { workspace: { current_dir: `/home/me/pro${name}ject` } };
   assert.equal(renderClean(folder, 'repo,dir'), 'project │ project');
 });
 
@@ -1040,7 +1048,8 @@ test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () =>
   assert.equal(run('cli'), '');
   const text = run('claude-desktop');
   assert.match(text, /^## Status line in replies\n/);
-  assert.match(text, /statusline\.js --latest --window 1m\n/);
+  // A Windows path holds a backslash, so the script comes in quotes there.
+  assert.match(text, /statusline\.js'? --latest --window 1m\n/);
 });
 
 // Renders with the given switches and terminal width, colours stripped.

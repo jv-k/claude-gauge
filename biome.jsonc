@@ -1,0 +1,36 @@
+// Biome lints the sources, the tests and the scripts. The formatter is off:
+// pnpm lint checks for faults, not layout. The rules turned off below each
+// fight a pattern this code uses on purpose.
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": { "includes": ["src/**", "test/**", "scripts/**"] },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        // The lines match and strip terminal escape codes, which start with \x1b.
+        "noControlCharactersInRegex": "off",
+        // The tests and scripts are CommonJS, where 'use strict' is not implied.
+        "noRedundantUseStrict": "off",
+        // (list ??= []).push(item) builds a list on its first use.
+        "noAssignInExpressions": "off",
+        // The tests hold shell commands, whose ${...} the shell expands.
+        "noTemplateCurlyInString": "off"
+      },
+      "complexity": {
+        // The test stand-ins record a call and return in one arrow function.
+        "noCommaOperator": "off",
+        // The tests match the bars' column layout, space for space.
+        "noAdjacentSpacesInRegex": "off"
+      },
+      "style": {
+        // The code joins short strings with + where a template reads worse.
+        "useTemplate": "off"
+      }
+    }
+  }
+}

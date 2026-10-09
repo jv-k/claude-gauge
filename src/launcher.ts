@@ -65,7 +65,7 @@ function newest(versions: string, script: string): string | undefined {
         time: fs.statSync(folder).mtimeMs,
       });
     } catch {
-      continue;
+      // A version folder that cannot be read is skipped.
     }
   }
   return found.sort(compare)[0]?.file;

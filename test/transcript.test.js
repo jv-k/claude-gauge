@@ -16,6 +16,8 @@ const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
 
 const CWD = '/home/me/project';
+// A path relative to CWD as the part prints it, with this system's separator.
+const rel = (p) => p.replaceAll('/', path.sep);
 
 // Transcript records as Claude Code writes them: a tool call in an assistant
 // message, its result in the next user message.
@@ -56,7 +58,7 @@ function countingFs() {
 
 test('tools shows the running tool with its target, and completed tools with counts', () => {
   const activity = { tools: { running: [{ name: 'Edit', target: `${CWD}/src/a.ts` }], completed: { Read: 12, Bash: 3 } } };
-  assert.equal(renderTools('/t.jsonl', { reader: () => activity }), '◐ Edit src/a.ts ✓ Read ×12 ✓ Bash ×3');
+  assert.equal(renderTools('/t.jsonl', { reader: () => activity }), `◐ Edit ${rel('src/a.ts')} ✓ Read ×12 ✓ Bash ×3`);
 });
 
 test('tools reads them from the transcript', () => {
@@ -64,7 +66,7 @@ test('tools reads them from the transcript', () => {
   const file = path.join(dir, 'session.jsonl');
   const reads = Array.from({ length: 12 }, (_, i) => [toolUse(`r${i}`, 'Read', { file_path: `${CWD}/f${i}.ts` }), toolResult(`r${i}`)]).flat();
   fs.writeFileSync(file, jsonl([prompt('go'), ...reads, toolUse('e1', 'Edit', { file_path: `${CWD}/src/a.ts` })]));
-  assert.equal(renderTools(file, { stateDir: path.join(dir, 'state') }), '◐ Edit src/a.ts ✓ Read ×12');
+  assert.equal(renderTools(file, { stateDir: path.join(dir, 'state') }), `◐ Edit ${rel('src/a.ts')} ✓ Read ×12`);
 });
 
 test('no transcript read happens when no transcript part is shown', () => {
@@ -210,7 +212,7 @@ test('tools shows the five most used tools, and long targets cut to 30 character
   );
   // A path keeps its end, where the file name is.
   const deep = [{ name: 'Read', target: `${CWD}/src/components/settings/panels/advanced.tsx` }];
-  assert.equal(renderTools('/t.jsonl', { reader: () => ({ tools: { running: deep, completed: {} } }) }), '◐ Read …/settings/panels/advanced.tsx');
+  assert.equal(renderTools('/t.jsonl', { reader: () => ({ tools: { running: deep, completed: {} } }) }), `◐ Read …${rel('/settings/panels/advanced.tsx')}`);
 });
 
 test('tools has nothing to show without a transcript or tool calls', () => {

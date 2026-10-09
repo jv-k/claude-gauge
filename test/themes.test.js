@@ -37,9 +37,13 @@ const payload = {
 };
 
 // On the host "host", so the repo's link to the folder is the same on every
-// machine.
+// machine. Windows resolves /home/me/project onto the current drive, so the
+// drive letter comes out of the link there.
 const snapshot = (theme) =>
-  render(payload, { nowMs: NOW, statusOf: () => '# branch.head main\n', hostname: 'host', config: parseArgs(['--theme', theme]) }).replaceAll('\x1b', '\\e').replaceAll('\x07', '\\a') + '\n';
+  render(payload, { nowMs: NOW, statusOf: () => '# branch.head main\n', hostname: 'host', config: parseArgs(['--theme', theme]) })
+    .replace(/file:\/\/host\/[A-Za-z]:\//g, 'file://host/')
+    .replaceAll('\x1b', '\\e')
+    .replaceAll('\x07', '\\a') + '\n';
 
 const file = (theme) => path.join(dir, `${theme}.txt`);
 
