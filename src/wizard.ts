@@ -3,8 +3,9 @@
 // line's rows and parts, its bar size, theme and labels, and the token line
 // and its parts, with a preview of the status line redrawn after each
 // answer. configure starts from the bars set up now: the first answer keeps
-// them, and each question offers the value set up. It returns the switches for each bar, as
-// words, for the CLI to write; it reads and writes no settings itself.
+// them, and each question offers the value set up. It returns the switches
+// for each bar, as words, for the CLI to write; it reads and writes no
+// settings itself.
 //
 // The questions go through a WizardIo, so a test can script the answers. The
 // preview renders the payload the status line saved last, else a sample.
@@ -69,14 +70,15 @@ interface WizardStart {
   tokenSwitches: string[];
 }
 
-const sameRows = (a: Part[][], b: Part[][]) => JSON.stringify(a) === JSON.stringify(b);
+// Whether two lists of parts, or of rows of parts, are the same, in order.
+const same = (a: readonly unknown[], b: readonly unknown[]) => JSON.stringify(a) === JSON.stringify(b);
 
 // The fewest switches that give `choices`: none for the defaults, then the
 // switches the wizard does not ask about. A row not chosen yet is left out.
 function switchesFor({ rows, segments, theme, labels, others }: StatusChoices): string[] {
   const chosen = rows.filter((row) => row.length);
   const words: string[] = [];
-  if (!sameRows(chosen, DEFAULT_ROWS)) for (const row of chosen) words.push('--show', row.join(','));
+  if (!same(chosen, DEFAULT_ROWS)) for (const row of chosen) words.push('--show', row.join(','));
   if (segments !== 5) words.push('--segments', String(segments));
   if (theme !== 'default') words.push('--theme', theme);
   if (!labels) words.push('--no-labels');
@@ -157,15 +159,21 @@ function readParts<P extends string>(fallback: P[] | undefined, known: readonly 
 // reads them: all of them without a --show it can use.
 const tokenPartsOf = (switches: readonly string[]): TokenPart[] => parseTokenArgs(switches).show ?? [...TOKEN_PARTS];
 
-const sameParts = (a: readonly string[], b: readonly string[]) => a.join(',') === b.join(',');
-
-// The token line's switches for `parts`: the switches set up when the parts
-// are the ones they show, else those switches without their --show, after a
-// --show for the parts unless they are all of them, in order.
+// The token line's switches for `parts`. Parts the installed switches show
+// already keep those switches as they are. Other parts drop the installed
+// --show and keep the rest. All five parts, in order, need no --show; any
+// other list goes first, as --show <parts>.
 function tokenSwitchesFor(parts: TokenPart[], installed: string[]): string[] {
-  if (sameParts(parts, tokenPartsOf(installed))) return installed;
+  if (same(parts, tokenPartsOf(installed))) return installed;
   const others = readTokenSwitches(installed).filter(({ name }) => name !== '--show').flatMap(({ words }) => words);
-  return sameParts(parts, TOKEN_PARTS) ? others : ['--show', parts.join(','), ...others];
+  return same(parts, TOKEN_PARTS) ? others : ['--show', parts.join(','), ...others];
+}
+
+// Reads the token line's parts: `all` for all five, else a list as readParts
+// reads it.
+function readTokenParts(fallback: TokenPart[]) {
+  const list = readParts(fallback, TOKEN_PARTS, `The token line parts are ${TOKEN_PARTS.join(', ')}.`);
+  return (answer: string) => (/^all$/i.test(answer) ? [...TOKEN_PARTS] : list(answer));
 }
 
 async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): Promise<WizardChoices | null> {
@@ -231,9 +239,8 @@ async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): P
   let tokenSwitches = start.tokenSwitches;
   if (tokenLine) {
     const fallback = tokenPartsOf(start.tokenSwitches);
-    const where = `The token line parts are ${TOKEN_PARTS.join(', ')}.`;
-    const question = `Token line parts: all of them, req,out,ctx, or your own list from ${TOKEN_PARTS.join(', ')}? [${fallback.join(',')}] `;
-    tokenSwitches = tokenSwitchesFor(await askFor(io, question, readParts(fallback, TOKEN_PARTS, where)), start.tokenSwitches);
+    const question = `Token line parts: all, req,out,ctx, or your own list from ${TOKEN_PARTS.join(', ')}? [${fallback.join(',')}] `;
+    tokenSwitches = tokenSwitchesFor(await askFor(io, question, readTokenParts(fallback)), start.tokenSwitches);
   }
 
   if (!(await confirm(io, 'Write these choices?', true))) return null;

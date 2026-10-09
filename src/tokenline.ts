@@ -41,11 +41,12 @@ interface Options {
   window?: string;
 }
 
-// The switches that take a value.
-const VALUED = ['--show', '--segments', '--window'];
+// The switches that take a value. parseArgs reads each of them.
+const TAKES_VALUE = ['--show', '--segments', '--window'];
 
 // One switch as readSwitches reads it: its name, its value, and the words it
-// was read from.
+// was read from. The status line has its own copy of this reader, because
+// each script runs alone, from the copy that setup makes.
 interface ReadSwitch {
   name: string;
   value: string;
@@ -60,7 +61,7 @@ function readSwitches(argv: readonly string[]): ReadSwitch[] {
   for (let i = 0; i < argv.length; i++) {
     const start = i;
     const [name, inline] = argv[i].split(/=(.*)/s);
-    const value = VALUED.includes(name) ? (inline ?? argv[++i] ?? '') : '';
+    const value = TAKES_VALUE.includes(name) ? (inline ?? argv[++i] ?? '') : '';
     read.push({ name, value, words: argv.slice(start, i + 1) });
   }
   return read;

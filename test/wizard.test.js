@@ -152,6 +152,10 @@ test('configure: the token line parts start from the installed --show, Enter kee
 
   const all = scripted([...enterAtStatusLine, '', 'time,req,out,cache,ctx', 'y']);
   assert.deepEqual(await runWizard(all, { preview, installed }), { statusLine: [], tokenLine: ['--window', '1m', '--segments=10'] }, 'all five need no --show');
+  for (const word of ['all', 'All']) {
+    const named = scripted([...enterAtStatusLine, '', word, 'y']);
+    assert.deepEqual(await runWizard(named, { preview, installed }), { statusLine: [], tokenLine: ['--window', '1m', '--segments=10'] }, `${word} answers all five`);
+  }
 
   // A --show with no part the token line knows shows all five.
   const unknown = scripted([...enterAtStatusLine, '', '', 'y']);
