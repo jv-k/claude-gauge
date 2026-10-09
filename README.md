@@ -6,7 +6,7 @@ Two small bars for [Claude Code](https://code.claude.com) that show how much roo
 
 ```text
 ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
-11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main │ Opus 5.5 │ effort high
+11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main* ↑1 │ Opus 5.5 │ effort high
 ```
 
 **Token line**, shown when each turn ends:
@@ -37,7 +37,7 @@ The default rows hold these parts, in this order. The name in the first column i
 | `time` | `11:10` | The current local time, or `11:10 am` with `--12h`. |
 | `duration` | `1h12m` | How long the session has run: `45s`, `12m`, `1h12m`, `2d3h`. |
 | `repo` | `jv-k/claude-gauge` | The repository from the `origin` remote. Without one it shows the folder name. |
-| `branch` | `⎇ main` | The current git branch. Inside a linked worktree it names that too: `⎇ feat-x (wt my-feature)`. |
+| `branch` | `⎇ main* ↑1` | The current git branch. `*` follows it when the work tree has changes, untracked files included, and `↑n` and `↓n` show the commits it is ahead of and behind its upstream. Inside a linked worktree it names that too: `⎇ feat-x* (wt my-feature)`. |
 | `model` | `Opus 5.5` | The model. |
 | `effort` | `effort high` | The reasoning effort, following `/effort` changes, when the model supports effort. |
 
@@ -58,6 +58,8 @@ The default rows hold these parts, in this order. The name in the first column i
 
 For the first 9 minutes of the 5-hour window, and for about the first 50 minutes of the week, the marker uses the bar's own colour, because the projection is not reliable that early.
 
+**Git.** The `branch`, `git` and `files` parts share one `git status` call per render, made only when one of them is shown. If git takes more than a second, or prints more than a status line can use, `branch` shows the branch name alone and `git` and `files` stay out of the row. Outside a git repository, and on a detached HEAD, `branch` stays out too.
+
 **Reset times.** Reset times use the 24-hour clock and are rounded to the nearest minute.
 
 **`~`.** A usage part shows `~`, as in `5h ~`, when Claude Code has not sent usage data yet. This happens before the first response of a session, and on plans that have no such limits. The usage parts need a claude.ai Pro or Max subscription.
@@ -75,6 +77,8 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 | `thinking` | `think`, when extended thinking is on. | Only when on. |
 | `fast` | `fast`, when fast mode is on. | Only when on. |
 | `style` | The output style: `style explanatory`. | When it is not `default`. |
+| `git` | The work tree's changes, as counts: `!2 +1 ✘1 ?3` for modified, staged, deleted and untracked files. A file staged and then changed again counts as both modified and staged. | When the work tree has changes. |
+| `files` | Up to 3 changed files, the most recently changed first: `statusline.ts README.md notes.txt`. A deleted file comes last, because it has no time. | When the work tree has changes. |
 | `worktree` | The linked git worktree: `wt my-feature`. The `branch` part names it too: `⎇ feat-x (wt my-feature)`. | Inside a linked worktree. |
 | `pr` | The branch's open pull request and its review state: `#1234 approved`. Green when approved, yellow when pending, red when changes are requested, grey as a draft. A GitLab merge request reads `!1234`. | While a PR is open. |
 | `agent` | The agent: `agent security-reviewer`. | When Claude Code runs with `--agent`. |
@@ -190,7 +194,7 @@ The hook runs when a session starts, resumes, is cleared with `/clear`, or compa
 
 ```text
 ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
-11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main │ Opus 5.5 │ effort high
+11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main* ↑1 │ Opus 5.5 │ effort high
 12:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
 ```
 

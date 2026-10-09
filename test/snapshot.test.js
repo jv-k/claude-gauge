@@ -52,7 +52,7 @@ for (const file of files) {
     assert.ok(cases.length > 0, file);
     for (const block of cases) {
       const [args, ...rows] = block.split('\n');
-      const out = render(payload, { nowMs: NOW, branchOf: () => 'main', config: parseArgs(args.split(' ')) });
+      const out = render(payload, { nowMs: NOW, statusOf: () => '# branch.head main\n', config: parseArgs(args.split(' ')) });
       assert.equal(plain(out), rows.join('\n'), args);
     }
   });
