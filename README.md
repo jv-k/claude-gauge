@@ -85,6 +85,9 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 | `version` | The Claude Code version: `v2.1.90`. | Always. |
 | `env` | What Claude Code loads into the session: `env 2 md 4 rules 3 mcp 2 hooks`, for CLAUDE.md files, rules, MCP servers and hooks. A kind with none stays out. See [Environment and plan](#environment-and-plan). | When anything is loaded. |
 | `plan` | Your claude.ai plan and the account you are signed in with: `Claude Max 20x (me@example.com)`. | When the config names them. |
+| `ram` | The system's memory in use, as a percentage, a bar and the amount in gigabytes: `ram 66% ▓▓▓░░ 10.5G`. It takes the usage colours. See [Memory, text and command](#memory-text-and-command). | Always. |
+| `text` | Fixed text that you give with `--text`, such as a label for the machine: `work laptop`. | With `--text`. |
+| `command` | The first line of output of a shell command that you give with `--command`: `prod-eu`. See [Memory, text and command](#memory-text-and-command) for the rules it runs under. | With `--command`, when the command succeeds in time. |
 
 #### Environment and plan
 
@@ -98,6 +101,26 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 - **Account**: the email address of the signed-in account, from `.claude.json`.
 
 Plugin hooks and MCP servers are not counted.
+
+#### Memory, text and command
+
+`ram` reads the memory that each system's own monitor reports as in use, with no network call:
+
+- **macOS**: app memory, wired memory and compressed memory, from `vm_stat`. Activity Monitor shows the same sum as Memory Used.
+- **Linux**: the total less `MemAvailable`, from `/proc/meminfo`. Memory that the kernel uses as a cache and gives back on demand does not count as used.
+- **Windows**: the total less the available memory, as Node.js reports them.
+
+If the system figures cannot be read, `ram` uses the free and total memory that Node.js reports.
+
+`text` shows the value of `--text` as you give it. claude-gauge removes any terminal control codes from it first.
+
+`command` runs a shell command that you choose. These rules keep it safe and keep the status line fast:
+
+- **It runs only when you ask twice.** `--command` must name a command, and a `--show` row must name the `command` part. Without both, nothing runs.
+- **It runs as you wrote it.** claude-gauge passes the command to the system shell (`sh` on macOS and Linux, `cmd.exe` on Windows) with your permissions, in the folder Claude Code runs in, with no input. Claude Code renders the status line often, so use a quick command that only reads.
+- **It has 500 ms.** After 500 ms, claude-gauge stops the command and the part shows nothing. A slow or hung command delays the status line by 500 ms at most. A job that the command starts in the background can keep running after that.
+- **It shows one clean line.** The part shows the first line of output that has text in it. claude-gauge removes terminal control codes from that line, so the output cannot move the cursor, change colours or set the window title. Error output is discarded.
+- **It fails quietly.** When the command exits with an error, runs out of time, or prints more than 64 KB, the part shows nothing and the other parts show as usual.
 
 ### Token line
 
@@ -240,6 +263,8 @@ Both scripts take switches on the command line, so you set them in the `command`
 | `--12h` | Shows the `time` part and reset times on the 12-hour clock. Default: 24-hour. |
 | `--compact` | Fits narrow terminals: `│` between parts with no spaces round it, and shorter labels: `c` for `ctx`, `eff` for `effort`, `sty` for `style`, `agt` for `agent`, `cch` for `cache` and `spd` for `spend`. The other labels are short already. |
 | `--right <parts>` | The parts to right-align, separated by commas. In each row that shows any of them, they move to the end of the row, in the row's order, and spaces fill the gap so the row ends at the terminal's right edge. Claude Code gives the terminal width in `COLUMNS`. When the width is unknown, as with `--latest`, the row is too long to leave a gap, or the row holds characters whose width varies by terminal, such as CJK text and emoji, the row is left as it is. Repeat `--right` to name more parts. |
+| `--text <text>` | The text that the `text` part shows. Quote text that holds spaces: `--text 'work laptop'`. If you give `--text` more than once, the last one counts. |
+| `--command <command>` | The shell command that the `command` part runs. Quote the command as one value: `--command 'kubectl config current-context'`. It runs only when a `--show` row names `command`. See [Memory, text and command](#memory-text-and-command) for its rules. |
 | `--latest` | Prints the rows for the calling session from its transcript, as plain text, instead of reading Claude Code's input. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 | `--window <size>` | With `--latest`: the context window size, for example `200k` or `1m`, as for the token line. |
 | `--instruct` | As a SessionStart hook: in the VS Code extension and the desktop app, prints an instruction that has Claude end each reply with the `--latest` rows; in the terminal CLI, prints nothing. The other switches pass through to the command it names. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
