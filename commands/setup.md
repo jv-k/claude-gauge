@@ -17,6 +17,7 @@ Ask with one `AskUserQuestion` call, the recommended option first in each questi
 
 - **Which bars?** Both (recommended), the status line only, or the token line only.
 - **Defaults or your own?** The defaults (recommended), or choose the layout, bar size, theme and token line parts.
+- **Context window?** The token line cannot read the window size, so it assumes 200k until the context grows past it. Offer 1M (`--window 1m`) and 200k, the default, with no switch. Name your own context window in the question, and recommend the option that matches it. The answer applies only if the user chooses the token line.
 
 If the user chose their own, ask a second `AskUserQuestion` call with each question that applies to the bars they chose:
 
@@ -24,8 +25,6 @@ If the user chose their own, ask a second `AskUserQuestion` call with each quest
 - **Bar size?** 5 cells (recommended, the default), or 10 (`--segments 10`).
 - **Theme?** `default` (recommended), `mono`, `high-contrast` or `pastel` (`--theme <name>`).
 - **Token line parts?** All of them (recommended): `time,req,out,cache,ctx`. Offer `req,out,ctx` (`--show req,out,ctx`), or the user's own list from those five.
-
-Decide the context window yourself: if your own context window is 1M tokens, add `--window 1m` to the token line, so its percentage is right from the first turn.
 
 ## 3. Run setup
 

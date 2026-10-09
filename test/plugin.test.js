@@ -84,25 +84,29 @@ test('setup run from the plugin cache points the settings at the launcher, never
     statusLine: cmd(commandFor(path.join(launcher, 'statusline.js'), '--show ctx,5h,7d --segments 10')),
     hooks: { Stop: [entry(commandFor(path.join(launcher, 'tokenline.js'), '--window 1m'))] },
   });
-  assert.ok(!JSON.stringify(settingsOf(dir)).includes('plugins/cache'), 'no version folder in the settings');
+  assert.ok(!JSON.stringify(settingsOf(dir)).replace(/\\\\/g, '/').includes('plugins/cache'), 'no version folder in the settings');
   assert.ok(!fs.existsSync(runtimeOf(dir)), 'the plugin route copies no runtime');
 });
 
-test('the plugin route writes the same settings as the terminal route for the same answers, but for the script folder', () => {
-  const answers = [
-    ['setup', '--status-line', '--show ctx,5h,7d --show time,model --theme pastel', '--token-line', '--show req,ctx --window 1m'],
-    ['setup', '--yes'],
-    ['setup', '--status-line', '', '--no-token-line'],
+test('the three commands write the same settings on the plugin route as on the terminal route, but for the script folder', () => {
+  // Each run is the commands one slash command session would run, in order.
+  const sessions = [
+    [['setup', '--status-line', '--show ctx,5h,7d --show time,model --theme pastel', '--token-line', '--show req,ctx --window 1m', '--replace']],
+    [['setup', '--yes', '--replace'], ['configure', '--status-line', '--segments 10', '--no-token-line'], ['configure', '--token-line', '--window 1m']],
+    [['setup', '--status-line', '', '--no-token-line', '--replace'], ['configure', '--no-status-line'], ['uninstall']],
+    [['setup', '--yes', '--replace'], ['uninstall']],
   ];
-  for (const args of answers) {
+  for (const commands of sessions) {
     const before = { statusLine: cmd('~/bin/my-status.sh'), hooks: { Stop: [entry('afplay done.aiff')] } };
     const npm = configFolder(before);
     const viaPlugin = configFolder(before);
-    ok(run(npm, path.join(dist, 'cli.js'), [...args, '--replace']));
-    ok(run(viaPlugin, path.join(installVersion(viaPlugin, '1.0.0'), 'dist', 'cli.js'), [...args, '--replace']));
-
-    const asLauncher = JSON.stringify(settingsOf(npm)).split(runtimeOf(npm).replace(/\\/g, '/')).join(launcherOf(viaPlugin).replace(/\\/g, '/'));
-    assert.deepEqual(settingsOf(viaPlugin), JSON.parse(asLauncher), args.join(' '));
+    const pluginCli = path.join(installVersion(viaPlugin, '1.0.0'), 'dist', 'cli.js');
+    for (const args of commands) {
+      ok(run(npm, path.join(dist, 'cli.js'), args));
+      ok(run(viaPlugin, pluginCli, args));
+      const asLauncher = JSON.stringify(settingsOf(npm)).split(runtimeOf(npm).replace(/\\/g, '/')).join(launcherOf(viaPlugin).replace(/\\/g, '/'));
+      assert.deepEqual(settingsOf(viaPlugin), JSON.parse(asLauncher), args.join(' '));
+    }
   }
 });
 

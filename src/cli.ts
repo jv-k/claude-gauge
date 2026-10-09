@@ -327,8 +327,6 @@ function update(): void {
     return;
   }
   if (where.route === 'launcher') {
-    // A launcher from an older release is brought up to date as well.
-    if (fs.existsSync(path.join(dir, 'launch.js'))) writeLauncher(dir, where.versions);
     say(
       'This claude-gauge is the Claude Code plugin. Update it with /plugin in Claude Code.',
       `The settings run ${dir}, which runs the newest installed version, so an update needs no setup.`,

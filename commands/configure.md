@@ -15,14 +15,24 @@ If neither is there, tell the user to run `/claude-gauge:setup` first, and stop.
 
 ## 2. Ask what to change
 
-Ask with one `AskUserQuestion` call, the recommended option first in each question, and name the current choices in each question:
+`AskUserQuestion` takes at most four options per question, and the user can always type an answer of their own. Name the current choices in each question.
 
-- **Which bar?** The status line, the token line, or both. Offer to take a bar out, or to add the one that is missing.
-- **Status line rows?** Keep them (recommended), the default two rows (`ctx,5h,7d` above `time,duration,repo,branch,model,effort`), or one row of usage only (`--show 5h,7d`). The user can also type their own rows: each `--show` is one row, its parts separated by commas, from the parts tables in the claude-gauge README.
-- **Bar size and theme?** Keep them (recommended), 5 or 10 cells (`--segments 10`), and the theme: `default`, `mono`, `high-contrast` or `pastel` (`--theme <name>`).
-- **Token line parts?** Keep them (recommended), all of them (`time,req,out,cache,ctx`), or the user's own list from those five (`--show <parts>`).
+First ask one question, with one `AskUserQuestion` call:
 
-Ask only the questions that apply to the bars the user is changing.
+- **What to change?** Offer the status line, the token line, and taking a bar out. When only one bar is set up, offer to add the missing one in place of the bar that is not there.
+
+Then ask a second `AskUserQuestion` call with only the questions for the bar the user chose, the recommended option first in each. For the status line:
+
+- **Rows?** Keep them (recommended), the default two rows (`ctx,5h,7d` above `time,duration,repo,branch,model,effort`), or one row of usage only (`--show 5h,7d`). The user can also type their own rows: each `--show` is one row, its parts separated by commas, from the parts tables in the claude-gauge README.
+- **Bar size?** Keep it (recommended), 5 cells (the default), or 10 (`--segments 10`).
+- **Theme?** Keep it (recommended), or one of `default`, `mono`, `high-contrast` and `pastel` (`--theme <name>`) that is not the current one.
+
+For the token line:
+
+- **Parts?** Keep them (recommended), all of them (`time,req,out,cache,ctx`), or `req,out,ctx` (`--show req,out,ctx`). The user can also type their own list from those five.
+- **Context window?** Keep it (recommended), 1M (`--window 1m`), or 200k, the default, with no switch. Name your own context window in the question, as setup does.
+
+To take a bar out, ask which one. To add the missing bar, ask the same questions for it, with its defaults in place of "Keep", and pass its switches to `configure` as for a changed bar: `configure` adds a bar that is not there.
 
 ## 3. Run configure
 
