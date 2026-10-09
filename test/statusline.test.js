@@ -171,6 +171,10 @@ test('--color colours the whole part, and the pace marker keeps its own colour',
   // 62% three-fifths through the window projects 103%: the critical red.
   assert.deepEqual([...new Set(colours(raw))], ['\x1b[0;34m', '\x1b[38;5;160m', '\x1b[0;90m']);
   assert.equal(plain(raw), '5h 62% ▓▓▓┃░ → 14:00 │ ctx 43% ▓▓░░░ 86.0k │ +156 −23');
+  // mono's marker has no colour of its own, so it drops the override for the
+  // terminal's own colour rather than take the part's.
+  const mono = render(data, { nowMs: NOW, config: parseArgs(['--theme', 'mono', '--show', '5h', '--no-reset', '--color', '5h=blue']) });
+  assert.equal(mono, '\x1b[0;34m5h 62% ▓▓▓\x1b[0m┃\x1b[0m\x1b[0;34m░\x1b[0m');
 });
 
 test('--bar-filled and --bar-empty change the bar characters', () => {

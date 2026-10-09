@@ -490,8 +490,9 @@ function usageBar(
 
   const elapsed = window.seconds - remaining;
   const pos = Math.min(config.segments - 1, Math.max(0, Math.round((elapsed * config.segments) / window.seconds)));
-  // Early in a window the projection is noise, so keep the usage colour.
-  const marker = elapsed >= window.minElapsed ? paceColor(theme, (pct * window.seconds) / elapsed) : color;
+  // Early in a window the projection is noise, so keep the usage colour. A
+  // pace colour of '' (mono) resets, so the marker never takes a --color.
+  const marker = elapsed >= window.minElapsed ? paceColor(theme, (pct * window.seconds) / elapsed) || (color && RESET) : color;
   return ` ${cells.slice(0, pos).join('')}${marker}┃${RESET}${color}${cells.slice(pos + 1).join('')}`;
 }
 
