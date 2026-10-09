@@ -1,0 +1,15 @@
+{
+  "name": "claude-gauge",
+  "description": "claude-gauge: a status line and a token line for Claude Code.",
+  "owner": {
+    "name": "John Valai",
+    "url": "https://github.com/jv-k"
+  },
+  "plugins": [
+    {
+      "name": "claude-gauge",
+      "source": "./",
+      "description": "A status line and a token line for Claude Code: context, 5-hour and weekly usage with pace markers. Run /claude-gauge:setup to add them."
+    }
+  ]
+}
