@@ -143,6 +143,19 @@ test('a call the user interrupted does not mark its server', () => {
   assert.deepEqual(activityIn([c.record, prompt]).mcp, [{ name: 'linear' }]);
 });
 
+test('a call the user or a permission rule stopped neither marks its server nor clears its mark', () => {
+  const stops = [
+    { content: "The user doesn't want to proceed with this tool use. The tool use was rejected.", isError: true, toolUseResult: 'User rejected tool use' },
+    { content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }], isError: true },
+    { content: 'Permission to use mcp__linear__list_issues has been denied.', isError: true },
+  ];
+  for (const stop of stops) {
+    assert.deepEqual(activityIn(mcpCall('mcp__linear__list_issues', stop)).mcp, [{ name: 'linear' }], JSON.stringify(stop.content));
+    const broken = mcpCall('mcp__linear__list_issues', failed);
+    assert.deepEqual(activityIn([...broken, ...mcpCall('mcp__linear__get_issue', stop)]).mcp, [{ name: 'linear', failed: true }]);
+  }
+});
+
 test("a subagent's skills and MCP calls are left out", () => {
   const side = { isSidechain: true };
   const records = [...done('Skill', { skill: 'tdd' }, undefined, side), ...done('mcp__github__get_issue', {}, failed, side)];

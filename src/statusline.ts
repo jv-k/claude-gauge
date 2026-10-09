@@ -839,23 +839,26 @@ function todosPart(activity: TranscriptActivity, config: Config): string {
 
 // The skills part shows this many skills and this many MCP servers, and
 // every server whose latest call failed. A name is cut to DESCRIPTION_CHARS.
-const SKILLS_SHOWN = 3;
+const SKILLS_PART_SHOWN = 3;
 
 // The skills used, newest first, then the MCP servers called, those whose
 // latest call failed first: skills tdd code-review mcp ✗ linear github.
 function skillsPart(activity: TranscriptActivity, config: Config): string {
-  const halves: string[] = [];
-  const skills = [...activity.skills].reverse().slice(0, SKILLS_SHOWN);
-  if (skills.length) halves.push(`${GRAY}${labelOf(config, 'skills')}${skills.map((s) => cut(s, DESCRIPTION_CHARS)).join(' ')}${RESET}`);
+  // The skills, then the servers, each with its label: none when it has nothing.
+  const sections: string[] = [];
+  const section = (label: string, items: string[]) => {
+    if (items.length) sections.push(`${GRAY}${labelOf(config, label)}${RESET}${items.join(' ')}`);
+  };
+  const skills = [...activity.skills].reverse().slice(0, SKILLS_PART_SHOWN);
+  section('skills', skills.map((s) => `${GRAY}${cut(s, DESCRIPTION_CHARS)}${RESET}`));
   const newest = [...activity.mcp].reverse();
   const failing = newest.filter((s) => s.failed);
-  const working = newest.filter((s) => !s.failed).slice(0, Math.max(0, SKILLS_SHOWN - failing.length));
-  const servers = [
+  const working = newest.filter((s) => !s.failed).slice(0, Math.max(0, SKILLS_PART_SHOWN - failing.length));
+  section('mcp', [
     ...failing.map((s) => `${RED}✗ ${cut(s.name, DESCRIPTION_CHARS)}${RESET}`),
     ...working.map((s) => `${GRAY}${cut(s.name, DESCRIPTION_CHARS)}${RESET}`),
-  ];
-  if (servers.length) halves.push(`${GRAY}${labelOf(config, 'mcp')}${RESET}${servers.join(' ')}`);
-  return halves.join(' ');
+  ]);
+  return sections.join(' ');
 }
 
 // env and plan: what Claude Code loads into a session, and the account, read
@@ -1594,8 +1597,8 @@ const AGENT_TOOLS = ['Agent', 'Task'];
 // task tools that replaced it in Claude Code 2.1 add a task and change one.
 const TODO_TOOLS = ['TodoWrite', 'TaskCreate', 'TaskUpdate'];
 
-// The skills and MCP servers kept at most, the most recently used.
-const SKILLS_KEPT = 20;
+// The skills and the MCP servers kept at most, each the most recently used.
+const RECENT_KEPT = 20;
 
 // The text Claude Code adds as a meta message when a skill runs.
 const SKILL_TEXT = 'Base directory for this skill:';
@@ -1777,21 +1780,24 @@ const skillName = (value: string | undefined): string | undefined => value?.trim
 // a slash command: <command-name>/tdd</command-name>.
 const commandOf = (content: unknown): string | undefined => skillName(/<command-name>([^<]*)<\/command-name>/.exec(textOf(content))?.[1]);
 
-// A skill as used now: it moves to the end, and the oldest past SKILLS_KEPT drop out.
-function useSkill(state: TranscriptState, name: string): void {
-  state.skills = [...state.skills.filter((s) => s !== name), name].slice(-SKILLS_KEPT);
-}
+// A list in the order last used, with item moved to the end, and the
+// oldest past RECENT_KEPT dropped.
+const usedNow = <T>(list: T[], item: T): T[] => [...list.filter((i) => i !== item), item].slice(-RECENT_KEPT);
 
-// An MCP server as called now: it moves to the end, keeping whether its
-// latest call failed, and the oldest past SKILLS_KEPT drop out.
+// An MCP server as called now, keeping whether its latest call failed.
 function useServer(state: TranscriptState, name: string): void {
-  const server = state.mcp.find((s) => s.name === name) ?? { name };
-  state.mcp = [...state.mcp.filter((s) => s !== server), server].slice(-SKILLS_KEPT);
+  state.mcp = usedNow(state.mcp, state.mcp.find((s) => s.name === name) ?? { name });
 }
 
 // A result that says its call did not work: an error, or data that says so.
 const resultFailed = (block: ContentBlock, record: TranscriptRecord) =>
   block.is_error === true || (isObject(record.toolUseResult) && record.toolUseResult.success === false);
+
+// The error results Claude Code writes when the user rejects or interrupts a
+// call, or a permission rule denies it: the tool never ran, so they say
+// nothing about whether it works.
+const STOPPED_RESULTS = [/^The user doesn't want to proceed/, /^\[Request interrupted by user/, /^Permission to use /];
+const resultStopped = (block: ContentBlock) => STOPPED_RESULTS.some((stopped) => stopped.test(textOf(block.content).trim()));
 
 // The ended subagents past the newest ENDED_KEPT drop out; running ones stay.
 function capAgents(state: TranscriptState): void {
@@ -1817,7 +1823,7 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   const { command } = state;
   delete state.command;
   if (record.type === 'user' && record.isMeta && !results) {
-    if (command && textOf(content).startsWith(SKILL_TEXT)) useSkill(state, command);
+    if (command && textOf(content).startsWith(SKILL_TEXT)) state.skills = usedNow(state.skills, command);
     return;
   }
   // A task notification ends a task in the background, and is no prompt.
@@ -1859,10 +1865,12 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
       if (!call) continue;
       state.pending = state.pending.filter((p) => p !== call);
       state.completed[call.name] = (state.completed[call.name] ?? 0) + 1;
-      if (call.skill && !resultFailed(block, record)) useSkill(state, call.skill);
+      if (call.skill && !resultFailed(block, record)) state.skills = usedNow(state.skills, call.skill);
       const server = state.mcp.find((s) => s.name === mcpServerOf(call.name));
-      if (server && resultFailed(block, record)) server.failed = true;
-      else if (server) delete server.failed;
+      if (server && !resultStopped(block)) {
+        if (resultFailed(block, record)) server.failed = true;
+        else delete server.failed;
+      }
     }
   }
   capAgents(state);
