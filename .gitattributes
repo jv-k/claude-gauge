@@ -1,0 +1,3 @@
+# Every text file checks out with LF line endings, on Windows too, so the
+# suites compare snapshots and README examples byte for byte everywhere.
+* text=auto eol=lf

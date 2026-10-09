@@ -43,7 +43,7 @@ pnpm test
 | `.claude-plugin/` | The plugin marketplace that `/plugin marketplace add jv-k/claude-gauge` reads, and the plugin's manifest. The repository root is the plugin. |
 | `commands/` | The plugin's slash commands: `/claude-gauge:setup`, `/claude-gauge:configure` and `/claude-gauge:uninstall`. Each has Claude ask its questions, then runs the `claude-gauge` command. |
 | `INSTALL-WITH-CLAUDE.md` | The steps Claude follows when a user asks it to install claude-gauge. |
-| `.github/workflows/` | The `dist` workflow, which commits the build to `main`; the `test` workflow, which runs the git suite on Windows; and the `release` workflow, which publishes a release from a version tag. |
+| `.github/workflows/` | The `dist` workflow, which commits the build to `main`; the `test` workflow, which runs the suites on Node 18, 20 and 22 and on Bun, each on Linux, macOS and Windows, with the typecheck, the linter and a coverage report, on each pull request into `integration/1.0` or `main` and each push to `main`; and the `release` workflow, which publishes a release from a version tag. |
 | `docs/agents/` | How agent skills use the issue tracker, the triage labels and the domain docs. |
 
 ## Rules for a change
