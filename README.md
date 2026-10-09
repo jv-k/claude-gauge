@@ -331,7 +331,7 @@ The full input format is in the [status line docs](https://code.claude.com/docs/
 
 ### Releases
 
-Releases use [VerBump](https://github.com/jv-k/VerBump), and the tests must pass first. [RELEASING.md](RELEASING.md) gives the steps.
+Releases use [VerBump](https://github.com/jv-k/VerBump), and the tests must pass first. VerBump tags the version, and the `release` workflow then creates the GitHub release from the changelog and publishes the package to npm with provenance. [RELEASING.md](RELEASING.md) gives the steps.
 
 ## License
 
