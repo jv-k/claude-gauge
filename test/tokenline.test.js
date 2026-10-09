@@ -2,6 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { execFileSync, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { summarize, parseArgs, parseSize, contextWindow } = require('../dist/tokenline.js');
 
 const NOW = new Date(2026, 9, 7, 12, 5);
@@ -117,11 +121,34 @@ test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () =>
 });
 
 // --latest as a program: a home folder and a config folder of the test's own,
-// with one transcript in the projects folder of the one --latest should read.
-const latestRun = (runtime, { config, home, session = 'session-1' }) => {
-  const { execFileSync } = require('node:child_process');
-  const path = require('node:path');
-  const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CODE_SESSION_ID: session };
+// each holding a transcript only where the test writes one.
+const made = [];
+test.after(() => {
+  for (const dir of made) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+const tempFolder = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+  made.push(dir);
+  return dir;
+};
+
+// Both runs name the same session, as Claude Code exports it to the commands
+// it runs.
+const SESSION = 'session-1';
+
+// Writes a transcript of one request to <folder>/projects/<project>/<session>.jsonl.
+const writeTranscript = (folder) => {
+  const dir = path.join(folder, 'projects', '-some-project');
+  fs.mkdirSync(dir, { recursive: true });
+  const records = [prompt('go'), assistant('m1', usage(100, 6000, 100000))];
+  fs.writeFileSync(path.join(dir, `${SESSION}.jsonl`), records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+};
+
+// Runs --latest on the build under Node, or on the source under Bun, with
+// CLAUDE_CONFIG_DIR set to config, or unset when config is undefined.
+const latestRun = (runtime, { config, home }) => {
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CODE_SESSION_ID: SESSION };
   if (config === undefined) delete env.CLAUDE_CONFIG_DIR;
   else env.CLAUDE_CONFIG_DIR = config;
   const [command, script] =
@@ -129,46 +156,33 @@ const latestRun = (runtime, { config, home, session = 'session-1' }) => {
   return execFileSync(command, [script, '--latest', '--show', 'req,ctx'], { env, encoding: 'utf8' });
 };
 
-// A temporary folder with a transcript at <folder>/projects/<project>/<session>.jsonl.
-const withTranscript = (folder, session = 'session-1') => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const dir = path.join(folder, 'projects', '-some-project');
-  fs.mkdirSync(dir, { recursive: true });
-  const records = [prompt('go'), assistant('m1', usage(100, 6000, 100000))];
-  fs.writeFileSync(path.join(dir, `${session}.jsonl`), records.map((r) => JSON.stringify(r)).join('\n') + '\n');
-};
-
-const tempFolder = () => {
-  const fs = require('node:fs');
-  const os = require('node:os');
-  const path = require('node:path');
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
-};
+const LINE = '1 req │ ctx 53% ▓▓▓░░ 106k\n';
 
 test('--latest reads the transcript under CLAUDE_CONFIG_DIR when it is set', () => {
   const [home, config] = [tempFolder(), tempFolder()];
-  withTranscript(config);
-  assert.equal(latestRun('node', { config, home }), '1 req │ ctx 53% ▓▓▓░░ 106k\n');
+  writeTranscript(config);
+  assert.equal(latestRun('node', { config, home }), LINE);
 });
 
 test('--latest reads ~/.claude/projects when CLAUDE_CONFIG_DIR is unset or empty, and only then', () => {
-  const path = require('node:path');
   const home = tempFolder();
-  withTranscript(path.join(home, '.claude'));
-  assert.equal(latestRun('node', { config: undefined, home }), '1 req │ ctx 53% ▓▓▓░░ 106k\n');
-  assert.equal(latestRun('node', { config: '', home }), '1 req │ ctx 53% ▓▓▓░░ 106k\n');
+  writeTranscript(path.join(home, '.claude'));
+  assert.equal(latestRun('node', { config: undefined, home }), LINE);
+  assert.equal(latestRun('node', { config: '', home }), LINE);
   // A config folder without the transcript: the one in the home folder is not read.
   assert.equal(latestRun('node', { config: tempFolder(), home }), '');
 });
 
-const hasBun = require('node:child_process').spawnSync('bun', ['--version'], { encoding: 'utf8' }).status === 0;
+// The token line runs under Bun too, from its source. The check skips where
+// Bun is not installed, as the parity suite's do.
+const hasBun = spawnSync('bun', ['--version'], { encoding: 'utf8' }).status === 0;
+const withoutBun = !hasBun && 'bun is not installed';
 
-test('bun runs --latest from source and finds the same transcripts', { skip: !hasBun && 'bun is not installed' }, () => {
-  const path = require('node:path');
+test('bun runs --latest from source and finds the same transcripts', { skip: withoutBun }, () => {
   const [home, config] = [tempFolder(), tempFolder()];
-  withTranscript(config);
-  assert.equal(latestRun('bun', { config, home }), '1 req │ ctx 53% ▓▓▓░░ 106k\n');
-  withTranscript(path.join(home, '.claude'), 'session-2');
-  assert.equal(latestRun('bun', { config: undefined, home, session: 'session-2' }), '1 req │ ctx 53% ▓▓▓░░ 106k\n');
+  writeTranscript(config);
+  assert.equal(latestRun('bun', { config, home }), LINE);
+  const otherHome = tempFolder();
+  writeTranscript(path.join(otherHome, '.claude'));
+  assert.equal(latestRun('bun', { config: undefined, home: otherHome }), LINE);
 });

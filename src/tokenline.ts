@@ -225,7 +225,7 @@ function readRecords(transcriptPath: string): TranscriptRecord[] {
 // Claude Code's config folder: $CLAUDE_CONFIG_DIR when it is set and not
 // empty, else ~/.claude. The status line resolves it the same way, with its
 // own copy, because each script runs alone from the copy that setup makes.
-const configDirOf = (env: NodeJS.ProcessEnv, home: string) => env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+const configDirOf = (env: Record<string, string | undefined>, home: string) => env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
 
 function latestTranscript(cwd: string): string | null {
   const projects = path.join(configDirOf(process.env, os.homedir()), 'projects');
