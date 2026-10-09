@@ -249,9 +249,6 @@ test('usage errors exit 2 and say what to run', () => {
   const bare = run(dir, []);
   assert.equal(bare.status, 2);
   assert.match(bare.stderr, /setup \| configure \| uninstall \| update/);
-  const noChoice = run(dir, ['setup']);
-  assert.equal(noChoice.status, 2);
-  assert.match(noChoice.stderr, /--yes/);
   assert.equal(run(dir, ['setup', '--colour']).status, 2);
   assert.equal(run(dir, ['launch']).status, 2);
   assert.equal(run(dir, ['setup', '--status-line']).status, 2, 'a switch that needs a value');
@@ -306,4 +303,118 @@ test('uninstall stops at a saved status line it cannot read, and keeps the setti
   assert.match(r.stderr, /previous-statusline\.json .*Fix or delete it by hand/);
   assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
   assert.equal(fs.readFileSync(savedStatusLine(dir), 'utf8'), '{ "statusLine": ');
+});
+
+// The wizard, driven through the process with answers piped on stdin. PATH
+// holds only `bin`, so gh is there only when a test puts a fake one in.
+const ask = (dir, args, answers, { bin = emptyBin(), env = {} } = {}) =>
+  spawnSync(process.execPath, [path.join(dist, 'cli.js'), ...args], {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: dir, PATH: bin, Path: bin, ...env },
+    input: answers.map((a) => `${a}\n`).join(''),
+    encoding: 'utf8',
+  });
+
+function emptyBin() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-bin-'));
+  made.push(dir);
+  return dir;
+}
+
+// A folder holding a fake gh that logs each call's arguments, one call a line.
+function fakeGh() {
+  const bin = emptyBin();
+  const log = path.join(bin, 'calls.log');
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\necho "$*" >> '${log}'\n`, { mode: 0o755 });
+  return { bin, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []) };
+}
+
+const plainText = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
+
+test('setup with no switches asks, and one yes installs both bars as --yes does', () => {
+  const dir = configFolder();
+  const r = ask(dir, ['setup'], ['y']);
+  ok(r);
+  const runtime = runtimeOf(dir);
+  assert.deepEqual(settingsOf(dir), {
+    statusLine: cmd(commandFor(path.join(runtime, 'statusline.js'))),
+    hooks: { Stop: [entry(commandFor(path.join(runtime, 'tokenline.js')))] },
+  });
+  const out = plainText(r.stdout);
+  assert.match(out, /ctx 43% /, 'a preview from the sample payload');
+  assert.match(out, /Use the defaults/);
+  assert.match(out, /new Claude Code session/);
+  assert.doesNotMatch(out, /Star /, 'no gh, no star offer');
+});
+
+test('the wizard previews the payload the status line saved', () => {
+  const dir = configFolder();
+  fs.mkdirSync(path.join(dir, 'claude-gauge', '.state'), { recursive: true });
+  const saved = { model: { display_name: 'Saved Model' }, context_window: { used_percentage: 77 } };
+  fs.writeFileSync(path.join(dir, 'claude-gauge', '.state', 'last-payload.json'), JSON.stringify(saved));
+  const r = ask(dir, ['setup'], ['n', '1', 'model,ctx', '', 'mono', 'n', '', '']);
+  ok(r);
+  const out = plainText(r.stdout);
+  assert.match(out, /Saved Model/);
+  assert.match(out, /  Saved Model │ 77% /, 'the preview redrawn without labels');
+});
+
+test('the customise path writes the switches chosen, and can leave the token line out', () => {
+  const dir = configFolder();
+  ok(ask(dir, ['setup'], ['n', '2', 'ctx,5h', 'model', '10', 'pastel', 'n', 'n', 'y']));
+  assert.deepEqual(settingsOf(dir), {
+    statusLine: cmd(commandFor(path.join(runtimeOf(dir), 'statusline.js'), '--show ctx,5h --show model --segments 10 --theme pastel --no-labels')),
+  });
+});
+
+test('a no at the last question, or answers that end early, change nothing', () => {
+  const dir = configFolder();
+  const declined = ask(dir, ['setup'], ['n', '', '', '', '', '', '', '', 'n']);
+  ok(declined);
+  assert.match(declined.stdout, /Nothing changed/);
+  const ended = ask(dir, ['setup'], []);
+  assert.equal(ended.status, 1);
+  assert.match(ended.stderr, /answers ended/);
+  assert.ok(!fs.existsSync(path.join(dir, 'settings.json')));
+  assert.ok(!fs.existsSync(runtimeOf(dir)));
+});
+
+test('the wizard asks before it replaces a status line that is not claude-gauge', () => {
+  const mine = { type: 'command', command: '~/bin/my-status.sh' };
+  const dir = configFolder({ statusLine: mine });
+  const original = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
+  const kept = ask(dir, ['setup'], ['n']);
+  ok(kept);
+  assert.match(kept.stdout, /my-status\.sh/);
+  assert.match(kept.stdout, /Nothing changed/);
+  assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), original);
+
+  ok(ask(dir, ['setup'], ['y', 'y']));
+  assert.match(settingsOf(dir).statusLine.command, /statusline\.js$/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(savedStatusLine(dir), 'utf8')), { statusLine: mine });
+});
+
+test('configure with no switches runs the wizard on a set-up config, and offers no star', () => {
+  const dir = configFolder();
+  assert.equal(ask(dir, ['configure'], ['y']).status, 1, 'not set up yet');
+  ok(run(dir, ['setup', '--yes']));
+  const gh = fakeGh();
+  const r = ask(dir, ['configure'], ['n', '1', 'ctx', '', '', '', '', 'y'], { bin: gh.bin });
+  ok(r);
+  assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(runtimeOf(dir), 'statusline.js'), '--show ctx'));
+  assert.doesNotMatch(r.stdout, /Star /);
+  assert.deepEqual(gh.calls(), []);
+});
+
+test('setup ends by offering to star the repo with gh, and stars it only on a yes', { skip: process.platform === 'win32' && 'the fake gh is a shell script' }, () => {
+  const declined = fakeGh();
+  const no = ask(configFolder(), ['setup'], ['y', 'n'], { bin: declined.bin });
+  ok(no);
+  assert.match(no.stdout, /Star jv-k\/claude-gauge/);
+  assert.deepEqual(declined.calls().filter((c) => !c.startsWith('--version')), []);
+
+  const accepted = fakeGh();
+  const yes = ask(configFolder(), ['setup'], ['y', 'y'], { bin: accepted.bin });
+  ok(yes);
+  assert.deepEqual(accepted.calls().filter((c) => !c.startsWith('--version')), ['api --method PUT user/starred/jv-k/claude-gauge']);
+  assert.match(yes.stdout, /Thank you/);
 });

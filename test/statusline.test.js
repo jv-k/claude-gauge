@@ -1175,3 +1175,30 @@ test("the README's compact and --right example rows are what the status line pri
   assert.ok(readme.includes(`a 72-column terminal`));
   assert.ok(readme.includes(`\n${right}\n`), right);
 });
+
+test('each terminal render saves its payload to the state folder, overwriting the last, for the wizard to preview', () => {
+  const { execFileSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const script = path.join(__dirname, '..', 'dist', 'statusline.js');
+  const config = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
+  const saved = path.join(config, 'claude-gauge', '.state', 'last-payload.json');
+  const statusLine = (data) => execFileSync(process.execPath, [script, '--show', 'model'], { env, input: JSON.stringify(data), encoding: 'utf8' });
+
+  statusLine({ model: { display_name: 'Opus' }, session_id: 'one' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(saved, 'utf8')), { model: { display_name: 'Opus' }, session_id: 'one' });
+  statusLine({ model: { display_name: 'Sonnet' } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(saved, 'utf8')), { model: { display_name: 'Sonnet' } });
+  assert.ok(!fs.readFileSync(saved, 'utf8').includes('\n'), 'one compact line');
+  assert.deepEqual(fs.readdirSync(path.dirname(saved)).filter((f) => f.includes('last-payload')), ['last-payload.json'], 'one file, overwritten');
+
+  // A payload too big to be a status payload is not kept, so the file stays small.
+  statusLine({ model: { display_name: 'Haiku' }, junk: 'x'.repeat(200 * 1024) });
+  assert.ok(fs.statSync(saved).size < 64 * 1024);
+  // --latest renders from a transcript, not a payload, and saves none.
+  fs.rmSync(saved);
+  execFileSync(process.execPath, [script, '--latest'], { env: { ...env, CLAUDE_CODE_SESSION_ID: '' }, encoding: 'utf8' });
+  assert.ok(!fs.existsSync(saved));
+});

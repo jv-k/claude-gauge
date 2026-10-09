@@ -1862,6 +1862,35 @@ function saveUsage(data: StatusData, nowMs: number): void {
   }
 }
 
+// The last payload a terminal render read, for the claude-gauge wizard to
+// preview its choices with. One file, overwritten by each render.
+const payloadFile = () => stateFile('last-payload.json');
+
+// A payload past this size is not a status payload, and is not kept, so the
+// file stays small.
+const MAX_SAVED_PAYLOAD = 64 * 1024;
+
+// Best effort, like saveUsage. The payload is written beside the file and
+// renamed over it, so the wizard never reads half of one.
+function savePayload(data: StatusData): void {
+  const text = JSON.stringify(data);
+  if (text.length > MAX_SAVED_PAYLOAD) return;
+  const file = payloadFile();
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, text);
+    fs.renameSync(tmp, file);
+  } catch {
+    /* read-only home or similar: skip */
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* nothing to tidy */
+    }
+  }
+}
+
 // The saved windows, without any that have reset since they were saved.
 function loadUsage(nowMs: number): StatusData['rate_limits'] | undefined {
   try {
@@ -2853,6 +2882,7 @@ if (isMain) {
         /* render what we can from an empty payload rather than print nothing */
       }
       saveUsage(data, nowMs);
+      savePayload(data);
       const ledger = recordCost(data, { nowMs });
       process.stdout.write(render(data, { config, nowMs, ledger, columns: columnsOf(process.env.COLUMNS) }) + '\n');
     });

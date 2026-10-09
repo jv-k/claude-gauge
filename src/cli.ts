@@ -4,14 +4,17 @@
 // changes their switches, takes them out again, and updates the copy of the
 // scripts that the settings run.
 //
+//   claude-gauge setup
 //   claude-gauge setup --yes
 //   claude-gauge setup --status-line "--show ctx,5h,7d --segments 10" --token-line "--window 1m"
 //   claude-gauge configure --no-token-line
 //   claude-gauge uninstall
 //   claude-gauge update
 //
-// This is the non-interactive form, which the plugin's slash commands run
-// once Claude has asked the questions. The interactive wizard comes later.
+// setup and configure with no bar switches ask the questions themselves,
+// with a preview of the status line after each answer (wizard.ts). With
+// switches they ask nothing: the form the plugin's slash commands run once
+// Claude has asked the questions.
 //
 // Everything it keeps lives in the state folder, claude-gauge/ in the Claude
 // config folder ($CLAUDE_CONFIG_DIR, else ~/.claude): the copy of the
@@ -20,9 +23,13 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { plan, commandFor, installed } from './settings';
+import * as readline from 'node:readline';
+import { spawnSync } from 'node:child_process';
+import { plan, commandFor, installed, ownerOf } from './settings';
 import type { Choices, StatusLineSetting } from './settings';
 import { readSettings, writeSettings, writeAtomic } from './settings-file';
+import { runWizard, offerStar, confirm, loadPayload, previewer } from './wizard';
+import type { WizardIo } from './wizard';
 
 const USAGE = `Usage: claude-gauge <setup | configure | uninstall | update> [switches]
 
@@ -38,6 +45,9 @@ Switches for setup and configure:
   --no-token-line            leave the token line out
   --replace                  replace a status line that is not claude-gauge's
   --yes                      setup only: add each bar not chosen above, with no switches
+
+With none of the bar switches above, setup and configure ask which bars and
+parts you want, and show the status line after each answer.
 
 The bars' switches are in README.md, under Options. The settings file is
 $CLAUDE_CONFIG_DIR/settings.json, else ~/.claude/settings.json.
@@ -105,6 +115,7 @@ const configDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(),
 const settingsFile = () => path.join(configDir(), 'settings.json');
 const stateDir = () => path.join(configDir(), 'claude-gauge');
 const savedStatusLineFile = () => path.join(stateDir(), '.state', 'previous-statusline.json');
+const savedPayloadFile = () => path.join(stateDir(), '.state', 'last-payload.json');
 
 // The package this command runs from: dist/.. of this file.
 const packageRoot = path.resolve(__dirname, '..');
@@ -226,25 +237,70 @@ function apply({ statusLine, tokenLine }: Bars, replace: boolean): void {
   );
 }
 
-function setup(args: Args): void {
-  const chosen = args.statusLine !== undefined || args.tokenLine !== undefined;
-  if (!chosen && !args.yes) {
-    throw new UsageError(
-      'The interactive setup is not built yet. Run claude-gauge setup --yes for both bars with no switches, or choose each bar with --status-line, --token-line, --no-status-line and --no-token-line.',
-    );
+// The questions, asked on the terminal: each prompt on stdout, each answer a
+// line of stdin. Lines are queued as they arrive, so answers piped in all at
+// once each reach their question.
+function terminalIo(): WizardIo & { close: () => void } {
+  const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const lines = rl[Symbol.asyncIterator]();
+  return {
+    ask: async (question) => {
+      process.stdout.write(question);
+      const next = await lines.next();
+      return next.done ? undefined : next.value;
+    },
+    write: (text) => process.stdout.write(text),
+    close: () => rl.close(),
+  };
+}
+
+// Whether gh runs here, and the call that stars the repo with it.
+const hasGh = () => spawnSync('gh', ['--version'], { stdio: 'ignore' }).status === 0;
+const starWithGh = () => spawnSync('gh', ['api', '--method', 'PUT', 'user/starred/jv-k/claude-gauge'], { stdio: ['ignore', 'ignore', 'inherit'] }).status === 0;
+
+// setup or configure with no bar switches: asks before it replaces another
+// status line, then asks for the bars, and writes them. setup ends with the
+// star offer.
+async function interactive(command: 'setup' | 'configure', replace: boolean): Promise<void> {
+  const io = terminalIo();
+  try {
+    const file = settingsFile();
+    const current = readSettings(file).settings.statusLine as StatusLineSetting | undefined;
+    const owner = ownerOf(current);
+    if (!replace && (owner === 'other' || owner === 'claude-hud')) {
+      io.write(`${file} already runs ${owner === 'claude-hud' ? "claude-hud's status line" : 'another status line'}:\n  ${current?.command ?? JSON.stringify(current)}\n`);
+      if (!(await confirm(io, 'Replace it? claude-gauge saves it, and claude-gauge uninstall puts it back.', false))) {
+        say('Nothing changed.');
+        return;
+      }
+      replace = true;
+    }
+    const preview = previewer(loadPayload(savedPayloadFile()));
+    const choices = await runWizard(io, { preview });
+    if (!choices) {
+      say('Nothing changed.');
+      return;
+    }
+    apply(choices, replace);
+    if (command === 'setup') await offerStar(io, { hasGh, star: starWithGh });
+  } finally {
+    io.close();
   }
+}
+
+async function setup(args: Args): Promise<void> {
+  const chosen = args.statusLine !== undefined || args.tokenLine !== undefined;
+  if (!chosen && !args.yes) return interactive('setup', args.replace);
   const orDefault = (v: string | null | undefined) => (v === undefined && args.yes ? '' : v);
   apply({ statusLine: orDefault(args.statusLine), tokenLine: orDefault(args.tokenLine) }, args.replace);
 }
 
-function configure(args: Args): void {
-  if (args.statusLine === undefined && args.tokenLine === undefined) {
-    throw new UsageError('Say what to change: --status-line, --token-line, --no-status-line or --no-token-line.');
-  }
+async function configure(args: Args): Promise<void> {
   const file = settingsFile();
   if (!installed(readSettings(file).settings).any) {
     throw new Error(`claude-gauge is not set up in ${file}. Run claude-gauge setup first.`);
   }
+  if (args.statusLine === undefined && args.tokenLine === undefined) return interactive('configure', args.replace);
   apply(args, args.replace);
 }
 
@@ -284,7 +340,7 @@ function update(): void {
   say(`Updated claude-gauge in ${dir} to ${version()}.`);
 }
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
   try {
     const args = parseArgs(argv);
     if (args.help) {
@@ -293,8 +349,8 @@ function main(argv: string[]): number {
     }
     if (!args.command) throw new UsageError('Name a command.');
     switch (args.command) {
-      case 'setup': setup(args); break;
-      case 'configure': configure(args); break;
+      case 'setup': await setup(args); break;
+      case 'configure': await configure(args); break;
       case 'uninstall': uninstall(); break;
       case 'update': update(); break;
     }
@@ -309,4 +365,6 @@ function main(argv: string[]): number {
   }
 }
 
-process.exitCode = main(process.argv.slice(2));
+main(process.argv.slice(2)).then((code) => {
+  process.exitCode = code;
+});
