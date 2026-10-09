@@ -10,14 +10,14 @@
 //
 // Almost everything comes from Claude Code's own payload
 // (https://code.claude.com/docs/en/statusline): `rate_limits` carries the
-// claude.ai 5-hour and 7-day windows. The side calls are
-// `git branch --show-current`, `vm_stat` for the ram part on macOS, the
-// command --command names, for the command part, and, only when a part that
-// needs it is shown, a read of the bytes the session transcript has gained
-// since the last render. The env and plan parts read Claude Code's own config
-// files, and the model part reads the provider from the environment. The today
-// and week parts add the cost ledger, which each render keeps in the state
-// folder.
+// claude.ai 5-hour and 7-day windows, and any per-model weekly windows. The
+// side calls are `git branch --show-current`, `vm_stat` for the ram part on
+// macOS, the command --command names, for the command part, and, only when a
+// part that needs it is shown, a read of the bytes the session transcript has
+// gained since the last render. The env and plan parts read Claude Code's own
+// config files, and the model part reads the provider from the environment.
+// The today and week parts add the cost ledger, which each render keeps in the
+// state folder.
 //
 // The parts it can show are in PART_REGISTRY and the switches it takes in
 // SWITCHES, both below. README.md documents each in a table, and a test fails
@@ -112,8 +112,13 @@ const partRegistry = {
   agents: { description: 'running subagents, and those finished in the last minute', build: ({ activity, nowMs }) => agentsPart(activity(), nowMs) },
   todos: { description: 'the todo in progress, and how many todos are done', build: ({ activity, config }) => todosPart(activity(), config) },
   skills: { description: 'skills used, and MCP servers called, marking those whose last call failed', build: ({ activity, config }) => skillsPart(activity(), config) },
+  compactions: { description: 'how many times the conversation was compacted', build: ({ activity, config }) => compactionsPart(activity(), config) },
+  reply: { description: 'time since the last reply', build: ({ activity, config, nowMs }) => replyPart(activity(), config, nowMs) },
+  speed: { description: 'output tokens per second of the last response', build: ({ activity }) => speedPart(activity()) },
   env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
   plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
+  models: { description: 'per-model weekly usage, as 7d shows the week', build: ({ data, config, nowMs }) => modelsPart(data, config, nowMs) },
+  limit: { description: 'a notice naming each exhausted window and its reset', build: ({ data, config, nowMs }) => limitPart(data, config, nowMs) },
   ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, memory }) => ramPart(memory(), config) },
   text: { description: 'fixed text, with --text', build: ({ config }) => outsideText(config.text) },
   command: { description: 'first line of output of a shell command, with --command', build: ({ commandOutput }) => outsideText(commandOutput()) },
@@ -279,12 +284,25 @@ function sanitiseAll<T>(value: T): T {
 
 // The labels --compact shortens, and their short forms. A label not named
 // here is short already.
-const COMPACT_LABELS: Record<string, string> = { ctx: 'c', effort: 'eff', style: 'sty', agent: 'agt', cache: 'cch', spend: 'spd', today: 'tdy', week: 'wk' };
+const COMPACT_LABELS: Record<string, string> = {
+  ctx: 'c',
+  effort: 'eff',
+  style: 'sty',
+  agent: 'agt',
+  cache: 'cch',
+  spend: 'spd',
+  today: 'tdy',
+  week: 'wk',
+  compactions: 'cmp',
+};
 
 // A part's label and the space after it: none with --no-labels, the short
 // form with --compact.
 const labelOf = (config: Config, name: string) =>
   config.labels ? `${config.compact ? (COMPACT_LABELS[name] ?? name) : name} ` : '';
+
+// The separator between a row's segments.
+const separatorOf = (config: Config) => `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
 
 // Ten usage levels: dark green at 0-10%, deep red above 90%.
 const LEVELS = [22, 28, 34, 100, 142, 178, 172, 166, 160, 124].map(ansi256);
@@ -300,15 +318,19 @@ const paceColor = (projected: number) =>
   : projected < 120 ? ansi256(160) // critical
   : ansi256(135); // runaway
 
+// A reset as a window shows it: a time of day, or days away.
+type ResetText = (epochSeconds: number, config: Config, nowMs: number) => string;
+
 interface UsageWindow {
   key: 'five_hour' | 'seven_day';
   seconds: number;
   minElapsed: number;
+  resetText: ResetText;
 }
 
 const WINDOWS: Record<'5h' | '7d', UsageWindow> = {
-  '5h': { key: 'five_hour', seconds: 5 * 3600, minElapsed: 540 }, // 9 minutes
-  '7d': { key: 'seven_day', seconds: 7 * 86400, minElapsed: 3024 }, // about 50 minutes
+  '5h': { key: 'five_hour', seconds: 5 * 3600, minElapsed: 540, resetText: (at, config) => formatTime(at, config) }, // 9 minutes
+  '7d': { key: 'seven_day', seconds: 7 * 86400, minElapsed: 3024, resetText: (at, config, nowMs) => formatDaysOrTime(at, config, nowMs) }, // about 50 minutes
 };
 
 // The parts of Claude Code's payload the status line reads. Every field is
@@ -320,6 +342,9 @@ interface RateLimit {
   used_usd?: number | null;
   limit_usd?: number | null;
 }
+
+// A window Claude Code has reported a percentage for.
+type ReportedLimit = RateLimit & { used_percentage: number };
 
 interface StatusData {
   session_id?: string;
@@ -345,10 +370,13 @@ interface StatusData {
       cache_read_input_tokens?: number;
     };
   };
+  // Per-model weekly windows arrive beside the week as seven_day_<model>,
+  // such as seven_day_opus, when Claude Code sends them.
   rate_limits?: {
     five_hour?: RateLimit;
     seven_day?: RateLimit;
     spend_limit?: RateLimit;
+    [key: string]: RateLimit | null | undefined;
   };
   cost?: {
     total_duration_ms?: number;
@@ -370,6 +398,9 @@ const fmt = (n: number) =>
   : n >= 1e5 ? `${Math.round(n / 1e3)}k`
   : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k`
   : String(n);
+
+// A word with its first letter in capitals: opus → Opus.
+const capitalised = (word: string) => word[0].toUpperCase() + word.slice(1);
 
 // Bars come in 5 or 10 cells; anything else falls back to 5.
 const segmentsOf = (value: number | string | undefined) => (Number(value) === 10 ? 10 : 5);
@@ -443,16 +474,44 @@ function windowPart(name: '5h' | '7d', data: StatusData, config: Config, nowMs: 
   const label = labelOf(config, name);
   const limit = data.rate_limits?.[window.key];
   if (limit?.used_percentage == null) return `${YELLOW}${label}~${RESET}`;
+  return usageSegment(label, { ...limit, used_percentage: limit.used_percentage }, window, config, nowMs);
+}
 
+// A reported window's percentage, bar and reset, behind its label.
+function usageSegment(label: string, limit: ReportedLimit, window: UsageWindow, config: Config, nowMs: number): string {
   const pct = Math.round(limit.used_percentage);
   const color = levelColor(pct);
   const bar = config.bars ? usageBar(pct, color, window, limit.resets_at, config, nowMs) : '';
-  let reset = '';
-  if (config.reset && limit.resets_at) {
-    const when = name === '7d' ? formatDaysOrTime(limit.resets_at, config, nowMs) : formatTime(limit.resets_at, config);
-    reset = ` → ${when}`;
-  }
+  const reset = config.reset && limit.resets_at ? ` → ${window.resetText(limit.resets_at, config, nowMs)}` : '';
   return `${color}${label}${pct}%${bar}${reset}${RESET}`;
+}
+
+// The per-model weekly windows Claude Code reports, as seven_day_<model>
+// keys, sorted by key: the model's name and the window. Keys reach the row
+// unsanitised, so a name is letters, digits, underscores, dots and hyphens
+// only, and a key with anything else stays out. Underscores read as spaces:
+// seven_day_opus is Opus, seven_day_oauth_apps is Oauth Apps.
+function modelWindows(data: StatusData): { name: string; limit: ReportedLimit }[] {
+  return Object.entries(data.rate_limits ?? {})
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .flatMap(([key, limit]) => {
+      const model = /^seven_day_([a-z0-9][\w.-]*)$/i.exec(key)?.[1];
+      const used = limit?.used_percentage;
+      if (!model || used == null) return [];
+      const name = model.split('_').filter(Boolean).map(capitalised).join(' ');
+      return [{ name, limit: { ...limit, used_percentage: used } }];
+    });
+}
+
+// The models part: each per-model weekly window as 7d shows the week, with
+// the model's name after the 7d label. The name stays with --no-labels,
+// since without it two windows read alike.
+function modelsPart(data: StatusData, config: Config, nowMs: number): string {
+  return modelWindows(data)
+    .map(({ name, limit }) =>
+      usageSegment(`${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], config, nowMs),
+    )
+    .join(separatorOf(config));
 }
 
 // The context in the token line's shape: ctx 43% ▓▓░░░ 86.0k. Both figures
@@ -673,6 +732,27 @@ function planPart({ plan, user }: Setup): string {
   return shown ? `${GRAY}${shown}${RESET}` : '';
 }
 
+// The limit part: every window at 100% or more, by its full name (5h, 7d,
+// 7d Opus, spend) with or without --no-labels, since a notice that names no
+// window says nothing. A reset shows as its window's part shows it. The
+// spend part shows none, so a spend reset, when Claude Code sends one, shows
+// as days or a time of day, as the weekly resets do.
+function limitPart(data: StatusData, config: Config, nowMs: number): string {
+  const limits = data.rate_limits ?? {};
+  const windows: [string, RateLimit | null | undefined, ResetText][] = [
+    ['5h', limits.five_hour, WINDOWS['5h'].resetText],
+    ['7d', limits.seven_day, WINDOWS['7d'].resetText],
+    ...modelWindows(data).map(({ name, limit }): [string, RateLimit, ResetText] => [`7d ${name}`, limit, WINDOWS['7d'].resetText]),
+    ['spend', limits.spend_limit, formatDaysOrTime],
+  ];
+  const reached = windows
+    .filter(([, limit]) => (limit?.used_percentage ?? 0) >= 100)
+    .map(([name, limit, resetText]) =>
+      config.reset && limit?.resets_at ? `${name} → ${resetText(limit.resets_at, config, nowMs)}` : name,
+    );
+  return reached.length ? `${LEVELS[9]}limit reached: ${reached.join(', ')}${RESET}` : '';
+}
+
 // Bytes in gibibytes, as the OS monitors count them: 0.4G, 10.5G, 120G.
 const gib = (bytes: number) => {
   const n = bytes / 1024 ** 3;
@@ -719,9 +799,10 @@ function ledgerFrom(value: unknown): Ledger {
   return { days: table(days), sessions: table(sessions) };
 }
 
-// A ledger value as a number of dollars, or undefined when it is not one: the
-// file is outside claude-gauge's control.
-const dollars = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+// A number from a file or a reader outside claude-gauge's control, such as a
+// ledger value or a transcript counter, or undefined when it is not a finite
+// one.
+const finite = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 
 // A local day as the ledger keys it.
 const dayKey = (ms: number) => {
@@ -733,9 +814,9 @@ const dayKey = (ms: number) => {
 // cost when the ledger has not seen it, or when its cost fell, which means it
 // started again from zero.
 function unrecorded(ledger: Ledger, data: StatusData): number {
-  const usd = dollars(data.cost?.total_cost_usd);
+  const usd = finite(data.cost?.total_cost_usd);
   if (usd === undefined) return 0;
-  const recorded = data.session_id ? dollars(ledger.sessions[data.session_id]?.usd) : undefined;
+  const recorded = data.session_id ? finite(ledger.sessions[data.session_id]?.usd) : undefined;
   return recorded === undefined || usd < recorded ? usd : usd - recorded;
 }
 
@@ -754,8 +835,8 @@ function periodDays(period: Period, nowMs: number): string[] {
 // those days, and what this session has spent since it was last recorded.
 // Nothing shows when neither has anything to add.
 function spentPart(period: Period, { data, config, nowMs, ledger }: PartContext): string {
-  const byDay = periodDays(period, nowMs).map((day) => dollars(ledger.days[day]));
-  const known = byDay.some((usd) => usd !== undefined) || dollars(data.cost?.total_cost_usd) !== undefined;
+  const byDay = periodDays(period, nowMs).map((day) => finite(ledger.days[day]));
+  const known = byDay.some((usd) => usd !== undefined) || finite(data.cost?.total_cost_usd) !== undefined;
   if (!known) return '';
   const usd = byDay.reduce<number>((sum, day) => sum + (day ?? 0), 0) + unrecorded(ledger, data);
   return `${GRAY}${labelOf(config, period)}$${usd.toFixed(2)}${RESET}`;
@@ -861,6 +942,28 @@ function skillsPart(activity: TranscriptActivity, config: Config): string {
   return sections.join(' ');
 }
 
+// How many times the conversation was compacted: compactions 2. Nothing
+// before the first.
+function compactionsPart(activity: TranscriptActivity, config: Config): string {
+  const { compactions } = activity;
+  return compactions > 0 ? `${GRAY}${labelOf(config, 'compactions')}${compactions}${RESET}` : '';
+}
+
+// The time since Claude last replied: reply 3m ago. A reply stamped ahead of
+// this machine's clock counts as just now.
+function replyPart(activity: TranscriptActivity, config: Config, nowMs: number): string {
+  const { lastReplyAt } = activity;
+  if (lastReplyAt === undefined) return '';
+  return `${GRAY}${labelOf(config, 'reply')}${formatDuration(Math.max(0, nowMs - lastReplyAt))} ago${RESET}`;
+}
+
+// The output speed of the last response: 84 tok/s, or 6.3 tok/s below ten.
+function speedPart(activity: TranscriptActivity): string {
+  const { speed } = activity;
+  if (speed === undefined) return '';
+  return `${GRAY}${speed < 10 ? speed.toFixed(1) : Math.round(speed)} tok/s${RESET}`;
+}
+
 // env and plan: what Claude Code loads into a session, and the account, read
 // from the files it reads them from. Only local files, never the network or
 // the macOS Keychain, and a file that is missing or not JSON counts as empty.
@@ -951,7 +1054,7 @@ const hooksIn = (settings: JsonObject) =>
 function planName(type: string | undefined, tier: string | undefined): string | undefined {
   if (!type) return undefined;
   const multiple = /_(\d+x)$/.exec(tier ?? '')?.[1];
-  return ['Claude', type[0].toUpperCase() + type.slice(1), multiple].filter(Boolean).join(' ');
+  return ['Claude', capitalised(type), multiple].filter(Boolean).join(' ');
 }
 
 function readSetup(
@@ -1256,7 +1359,7 @@ function render(
     commandOutput: () => (commandOutput ??= config.command ? commandOutputOf(config.command, cwd) : ''),
   };
 
-  const separator = `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
+  const separator = separatorOf(config);
   const width = columnsOf(columns);
 
   // One output line per row. A part with nothing to show drops out of its
@@ -1410,11 +1513,11 @@ function withLock(file: string, write: (held: () => boolean) => void): void {
 function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() }: { file?: string; nowMs?: number } = {}): Ledger {
   let ledger = readLedger(file);
   const id = data.session_id;
-  const usd = dollars(data.cost?.total_cost_usd);
+  const usd = finite(data.cost?.total_cost_usd);
   if (typeof id !== 'string' || !id || usd === undefined) return ledger;
   const last = ledger.sessions[id];
-  if (dollars(last?.usd) === usd) return ledger;
-  const since = nowMs - (dollars(last?.at) ?? -Infinity);
+  if (finite(last?.usd) === usd) return ledger;
+  const since = nowMs - (finite(last?.at) ?? -Infinity);
   if (since >= 0 && since < LEDGER_THROTTLE_MS) return ledger;
 
   const temp = `${file}.${process.pid}.tmp`;
@@ -1423,7 +1526,7 @@ function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() 
     withLock(file, (held) => {
       const fresh = readLedger(file);
       const day = dayKey(nowMs);
-      fresh.days[day] = (dollars(fresh.days[day]) ?? 0) + unrecorded(fresh, data);
+      fresh.days[day] = (finite(fresh.days[day]) ?? 0) + unrecorded(fresh, data);
       fresh.sessions[id] = { usd, at: nowMs };
       forgetOld(fresh, nowMs);
       fs.writeFileSync(temp, JSON.stringify(fresh));
@@ -1449,11 +1552,11 @@ function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() 
 function forgetOld(ledger: Ledger, nowMs: number): void {
   const oldest = dayKey(nowMs - LEDGER_KEEP_MS);
   for (const [day, usd] of Object.entries(ledger.days)) {
-    if (day < oldest || dollars(usd) === undefined) delete ledger.days[day];
+    if (day < oldest || finite(usd) === undefined) delete ledger.days[day];
   }
   for (const [id, entry] of Object.entries(ledger.sessions)) {
-    const at = dollars(entry?.at);
-    if (at === undefined || at < nowMs - LEDGER_KEEP_MS || dollars(entry?.usd) === undefined) delete ledger.sessions[id];
+    const at = finite(entry?.at);
+    if (at === undefined || at < nowMs - LEDGER_KEEP_MS || finite(entry?.usd) === undefined) delete ledger.sessions[id];
   }
 }
 
@@ -1501,22 +1604,28 @@ interface McpServer {
 
 // What a transcript shows: the tool calls still running, oldest first, how
 // many calls of each tool have completed, the subagents, in the order they
-// started, the todo list, in its order, and the skills used and MCP servers
-// called, in the order last used.
+// started, the todo list, in its order, the skills used and MCP servers
+// called, in the order last used, and the session counters: how many times
+// the conversation was compacted, when Claude last replied, in ms since the
+// epoch, and the last response's output tokens per second.
 interface TranscriptActivity {
   tools: { running: ToolCall[]; completed: Record<string, number> };
   agents: AgentRun[];
   todos: Todo[];
   skills: string[];
   mcp: McpServer[];
+  compactions: number;
+  lastReplyAt?: number;
+  speed?: number;
 }
 
-const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [], skills: [], mcp: [] });
+const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [], skills: [], mcp: [], compactions: 0 });
 
 // Activity with every name and target sanitised. Two tool names that differ
 // only in control codes count as one.
-// A reader handed in from JavaScript may leave out all but the tools.
-function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [] }: TranscriptActivity): TranscriptActivity {
+// A reader handed in from JavaScript may leave out all but the tools, or give
+// counters that are not numbers.
+function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [], compactions, lastReplyAt, speed }: TranscriptActivity): TranscriptActivity {
   const running = tools.running.map(({ name, target }) => ({ name: sanitise(name), ...(target ? { target: sanitise(target) } : {}) }));
   const completed: Record<string, number> = {};
   for (const [name, count] of Object.entries(tools.completed)) completed[sanitise(name)] = (completed[sanitise(name)] ?? 0) + count;
@@ -1533,12 +1642,23 @@ function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [
   }));
   const cleanSkills = skills.map(sanitise);
   const cleanMcp = mcp.map(({ name, failed }) => ({ name: sanitise(name), ...(failed ? { failed } : {}) }));
-  return { tools: { running, completed }, agents: cleanAgents, todos: cleanTodos, skills: cleanSkills, mcp: cleanMcp };
+  const replyAt = finite(lastReplyAt);
+  const tokensPerSecond = finite(speed);
+  return {
+    tools: { running, completed },
+    agents: cleanAgents,
+    todos: cleanTodos,
+    skills: cleanSkills,
+    mcp: cleanMcp,
+    compactions: finite(compactions) ?? 0,
+    ...(replyAt !== undefined ? { lastReplyAt: replyAt } : {}),
+    ...(tokensPerSecond !== undefined ? { speed: tokensPerSecond } : {}),
+  };
 }
 
 // What the reader keeps between renders. version changes when the shape
 // does, so a state from an older claude-gauge is rebuilt, not misread.
-const TRANSCRIPT_STATE_VERSION = 4;
+const TRANSCRIPT_STATE_VERSION = 5;
 
 interface TranscriptState {
   version: number;
@@ -1567,6 +1687,22 @@ interface TranscriptState {
   skills: string[];
   mcp: McpServer[];
   command?: string;
+  // How many times the conversation was compacted.
+  compactions: number;
+  // When the last prompt or tool result came, which asks for the next
+  // response, and the last response so far.
+  askedAt?: number;
+  response?: ResponseEntry;
+}
+
+// A response as the reader keeps it: the message's id, when it was asked for
+// and when its last block came, in ms since the epoch, and its output tokens.
+// Claude Code writes a record per block, each with the message's final usage.
+interface ResponseEntry {
+  id: string;
+  askedAt: number;
+  endedAt: number;
+  tokens: number;
 }
 
 // A todo as the reader keeps it: by the id the task tools gave it, if any.
@@ -1808,6 +1944,29 @@ function capAgents(state: TranscriptState): void {
     .reverse();
 }
 
+// A response's record applied to the state: the first block of a message
+// starts a response, timed from the prompt or tool result that asked for it,
+// and each block after it moves the response's end. A reply Claude Code
+// writes itself, such as an API error, is no response of the model's.
+function applyResponse(state: TranscriptState, record: TranscriptRecord, at: number | undefined): void {
+  const message = record.message;
+  if (at === undefined || typeof message?.id !== 'string' || message.model === '<synthetic>') return;
+  const tokens = finite(message.usage?.output_tokens) ?? 0;
+  if (state.response?.id === message.id) {
+    state.response.endedAt = Math.max(state.response.endedAt, at);
+    state.response.tokens = tokens;
+  } else {
+    state.response = { id: message.id, askedAt: state.askedAt ?? at, endedAt: at, tokens };
+  }
+}
+
+// The last response's output tokens per second, when it had tokens and took
+// time to write.
+function speedOf(response: ResponseEntry | undefined): number | undefined {
+  const seconds = response ? (response.endedAt - response.askedAt) / 1000 : 0;
+  return response && response.tokens > 0 && seconds > 0 ? response.tokens / seconds : undefined;
+}
+
 // One transcript record applied to the state. Subagent records are left out,
 // as they are for --latest. A prompt from the user ends the turn, so a call
 // still running then was interrupted: it no longer shows as running, and a
@@ -1817,6 +1976,9 @@ function capAgents(state: TranscriptState): void {
 function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   if (!record || typeof record !== 'object' || record.isSidechain) return;
   const at = timeOf(record);
+  if (record.type === 'system' && record.subtype === 'compact_boundary') state.compactions++;
+  if (record.type === 'assistant') applyResponse(state, record, at);
+  if (record.type === 'user' && at !== undefined) state.askedAt = at;
   const content = record.message?.content;
   const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
   const results = blocks.some((b) => b.type === 'tool_result');
@@ -1922,6 +2084,7 @@ function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptSta
       Array.isArray(state.todoCalls) &&
       Array.isArray(state.skills) &&
       Array.isArray(state.mcp) &&
+      Number.isInteger(state.compactions) &&
       state.completed &&
       typeof state.completed === 'object';
     return valid ? state : undefined;
@@ -1964,12 +2127,27 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
   const state: TranscriptState = unchanged
     ? saved
-    : { version: TRANSCRIPT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0, pending: [], completed: {}, agents: [], todos: [], todoCalls: [], skills: [], mcp: [] };
+    : {
+        version: TRANSCRIPT_STATE_VERSION,
+        file,
+        dev: stat.dev,
+        ino: stat.ino,
+        offset: 0,
+        pending: [],
+        completed: {},
+        agents: [],
+        todos: [],
+        todoCalls: [],
+        skills: [],
+        mcp: [],
+        compactions: 0,
+      };
 
   if (stat.size > state.offset || !unchanged) {
     state.offset = readLines(io, file, state.offset, stat.size, (line) => {
-      // Only lines that can hold a tool call, a result or a prompt are parsed.
-      if (!line.includes('"tool_') && !line.includes('"user"')) return;
+      // Only lines that can hold a tool call, a result, a prompt, a response
+      // or a compaction are parsed.
+      if (!['"tool_', '"user"', '"assistant"', '"compact_boundary"'].some((key) => line.includes(key))) return;
       try {
         applyRecord(state, JSON.parse(line));
       } catch {
@@ -1982,7 +2160,18 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   const agents = state.agents.map(({ id, background, ...agent }) => agent);
   const todos = state.todos.map(({ id, ...todo }) => todo);
   const mcp = state.mcp.map((server) => ({ ...server }));
-  return { tools: { running, completed: { ...state.completed } }, agents, todos, skills: [...state.skills], mcp };
+  const lastReplyAt = state.response?.endedAt;
+  const speed = speedOf(state.response);
+  return {
+    tools: { running, completed: { ...state.completed } },
+    agents,
+    todos,
+    skills: [...state.skills],
+    mcp,
+    compactions: state.compactions,
+    ...(lastReplyAt !== undefined ? { lastReplyAt } : {}),
+    ...(speed !== undefined ? { speed } : {}),
+  };
 }
 
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
@@ -1991,7 +2180,7 @@ function modelName(id: string | undefined): string | undefined {
   const parts = id.replace(/^claude-/, '').split('-').filter((p) => !/^\d{8}$/.test(p));
   const family = parts.shift();
   if (!family) return id;
-  return [family[0].toUpperCase() + family.slice(1), parts.join('.')].filter(Boolean).join(' ');
+  return [capitalised(family), parts.join('.')].filter(Boolean).join(' ');
 }
 
 const SCALES: Record<string, number> = { '': 1, k: 1e3, m: 1e6 };
@@ -2006,6 +2195,8 @@ function windowSize(tokens: number, explicit: string | undefined): number {
 // A session transcript record, as far as the status line reads it.
 interface TranscriptRecord {
   type?: string;
+  // What a system record reports, such as compact_boundary for a compaction.
+  subtype?: string;
   cwd?: string;
   timestamp?: string;
   isSidechain?: boolean;
@@ -2017,9 +2208,11 @@ interface TranscriptRecord {
   origin?: unknown;
   effort?: string | { level?: string };
   message?: {
+    id?: string;
     model?: string;
     content?: unknown;
     usage?: {
+      output_tokens?: number;
       input_tokens?: number;
       cache_creation_input_tokens?: number;
       cache_read_input_tokens?: number;
