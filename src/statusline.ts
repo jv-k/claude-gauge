@@ -11,9 +11,13 @@
 // Almost everything comes from Claude Code's own payload
 // (https://code.claude.com/docs/en/statusline): `rate_limits` carries the
 // claude.ai 5-hour and 7-day windows, and any per-model weekly windows. The
-// only side call is `git branch --show-current`. The env and plan parts read
-// Claude Code's own config files, and the model part reads the provider from
-// the environment.
+// side calls are `git branch --show-current`, `vm_stat` for the ram part on
+// macOS, the command --command names, for the command part, and, only when a
+// part that needs it is shown, a read of the bytes the session transcript has
+// gained since the last render. The env and plan parts read Claude Code's own
+// config files, and the model part reads the provider from the environment.
+// The today and week parts add the cost ledger, which each render keeps in the
+// state folder.
 //
 // The parts it can show are in PART_REGISTRY and the switches it takes in
 // SWITCHES, both below. README.md documents each in a table, and a test fails
@@ -22,25 +26,36 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
-// What a part's builder reads: the payload, the config, the clock, the
-// folder Claude Code runs in, and the git branch reader. render sanitises the
-// payload, the folder's name and the branch before any part sees them.
+// What a part's builder reads: the payload, the config, the clock, the cost
+// ledger, the folder Claude Code runs in, and the git branch reader. render
+// sanitises the payload, the folder's name and the branch before any part
+// sees them.
 interface PartContext {
   data: StatusData;
   config: Config;
   nowMs: number;
+  ledger: Ledger;
   // The folder's path as it is, for git to run in, and its name to print.
   cwd: string;
   folder: string;
   branchOf: (cwd: string) => string;
+  // What the session transcript shows, read on the first call only, so a
+  // render that shows no transcript part never reads it.
+  activity: () => TranscriptActivity;
   // The environment Claude Code runs the command in, which names the API
   // provider.
   processEnv: Env;
   // What Claude Code loads for the folder, read from the files on disk the
   // first time a part asks.
   setup: () => Setup;
+  // The system's memory in use, read the first time a part asks.
+  memory: () => Memory | undefined;
+  // The first line of output of the command --command names, run the first
+  // time a part asks; not yet sanitised.
+  commandOutput: () => string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -91,10 +106,21 @@ const partRegistry = {
   cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config }) => cachePart(data, config) },
   spend: { description: 'spend against a gateway spend limit', build: ({ data, config }) => spendPart(data, config) },
   version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
+  today: { description: "today's spend across sessions, from the cost ledger", build: (ctx) => spentPart('today', ctx) },
+  week: { description: "this week's spend across sessions, from the cost ledger", build: (ctx) => spentPart('week', ctx) },
+  tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, cwd }) => toolsPart(activity(), cwd) },
+  agents: { description: 'running subagents, and those finished in the last minute', build: ({ activity, nowMs }) => agentsPart(activity(), nowMs) },
+  todos: { description: 'the todo in progress, and how many todos are done', build: ({ activity, config }) => todosPart(activity(), config) },
+  compactions: { description: 'how many times the conversation was compacted', build: ({ activity, config }) => compactionsPart(activity(), config) },
+  reply: { description: 'time since the last reply', build: ({ activity, config, nowMs }) => replyPart(activity(), config, nowMs) },
+  speed: { description: 'output tokens per second of the last response', build: ({ activity }) => speedPart(activity()) },
   env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
   plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
   models: { description: 'per-model weekly usage, as 7d shows the week', build: ({ data, config, nowMs }) => modelsPart(data, config, nowMs) },
   limit: { description: 'a notice naming each exhausted window and its reset', build: ({ data, config, nowMs }) => limitPart(data, config, nowMs) },
+  ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, memory }) => ramPart(memory(), config) },
+  text: { description: 'fixed text, with --text', build: ({ config }) => outsideText(config.text) },
+  command: { description: 'first line of output of a shell command, with --command', build: ({ commandOutput }) => outsideText(commandOutput()) },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -126,6 +152,11 @@ interface Config {
   compact: boolean;
   // The parts --right moves to the end of their row.
   right: Part[];
+  // What the text part prints, as --text gives it: not yet sanitised.
+  text: string;
+  // The shell command the command part runs, as --command gives it; none
+  // when empty.
+  command: string;
 }
 
 // What parseArgs returns and render takes: any subset of the config, with
@@ -142,6 +173,8 @@ const DEFAULTS: Config = {
   hour12: false,
   compact: false,
   right: [],
+  text: '',
+  command: '',
 };
 
 interface Switch {
@@ -179,6 +212,13 @@ const SWITCHES: readonly Switch[] = [
     apply: (config, value) => {
       config.right = [...(config.right ?? []), ...value.split(',').map((p) => p.trim()).filter(isPart)];
     },
+  },
+  { name: '--text', value: '<text>', description: 'the text the text part shows', apply: (config, value) => { config.text = value; } },
+  {
+    name: '--command',
+    value: '<command>',
+    description: 'the shell command the command part runs, with a short timeout',
+    apply: (config, value) => { config.command = value; },
   },
   { name: '--latest', description: "print the calling session's rows from its transcript, as plain text" },
   { name: '--window', value: '<size>', description: 'with --latest: the context window size, such as 200k or 1m' },
@@ -243,7 +283,17 @@ function sanitiseAll<T>(value: T): T {
 
 // The labels --compact shortens, and their short forms. A label not named
 // here is short already.
-const COMPACT_LABELS: Record<string, string> = { ctx: 'c', effort: 'eff', style: 'sty', agent: 'agt', cache: 'cch', spend: 'spd' };
+const COMPACT_LABELS: Record<string, string> = {
+  ctx: 'c',
+  effort: 'eff',
+  style: 'sty',
+  agent: 'agt',
+  cache: 'cch',
+  spend: 'spd',
+  today: 'tdy',
+  week: 'wk',
+  compactions: 'cmp',
+};
 
 // A part's label and the space after it: none with --no-labels, the short
 // form with --compact.
@@ -296,7 +346,9 @@ interface RateLimit {
 type ReportedLimit = RateLimit & { used_percentage: number };
 
 interface StatusData {
+  session_id?: string;
   cwd?: string;
+  transcript_path?: string;
   version?: string;
   session_name?: string;
   fast_mode?: boolean;
@@ -358,14 +410,14 @@ const cellsFor = (pct: number, segments: number) => {
   return '▓'.repeat(filled) + '░'.repeat(segments - filled);
 };
 
+// A program's output, with no input and a one-second timeout. Throws when
+// the program fails.
+const runQuietly = (command: string, args: string[], cwd?: string) =>
+  execFileSync(command, args, { cwd, timeout: 1000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+
 function git(cwd: string, args: string[]): string {
   try {
-    return execFileSync('git', args, {
-      cwd,
-      timeout: 1000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    return runQuietly('git', args, cwd).trim();
   } catch {
     return ''; // not a repository, or git is missing
   }
@@ -524,11 +576,18 @@ function linesPart(data: StatusData): string {
   return `${GREEN}+${added ?? 0}${RESET} ${RED}−${removed ?? 0}${RESET}`;
 }
 
+// Text cut to at most chars characters, ending in … when it was cut. It counts
+// code points, so a cut never splits an emoji in two.
+const cut = (text: string, chars: number) => {
+  const points = [...text];
+  return points.length <= chars ? text : `${points.slice(0, chars - 1).join('')}…`;
+};
+
 // The session's custom name or AI-generated title, cut to 30 characters.
 function namePart(data: StatusData): string {
   const name = data.session_name;
   if (!name) return '';
-  const shown = name.length > 30 ? `${name.slice(0, 29)}…` : name;
+  const shown = cut(name, 30);
   return `${GRAY}${shown}${RESET}`;
 }
 
@@ -693,7 +752,192 @@ function limitPart(data: StatusData, config: Config, nowMs: number): string {
   return reached.length ? `${LEVELS[9]}limit reached: ${reached.join(', ')}${RESET}` : '';
 }
 
+// Bytes in gibibytes, as the OS monitors count them: 0.4G, 10.5G, 120G.
+const gib = (bytes: number) => {
+  const n = bytes / 1024 ** 3;
+  return `${n >= 100 ? Math.round(n) : n.toFixed(1)}G`;
+};
+
+// The memory in use in the ctx part's shape: ram 66% ▓▓▓░░ 10.5G, on the
+// usage colours.
+function ramPart(memory: Memory | undefined, config: Config): string {
+  if (!memory) return '';
+  const pct = (memory.used * 100) / memory.total;
+  const bar = config.bars ? ` ${cellsFor(pct, config.segments)}` : '';
+  return `${levelColor(Math.round(pct))}${labelOf(config, 'ram')}${Math.round(pct)}%${bar} ${gib(memory.used)}${RESET}`;
+}
+
+// The text and command parts: text from --text or from the command's
+// output. Neither comes through render's sanitised payload, so the part
+// sanitises it here.
+function outsideText(raw: string): string {
+  const text = sanitise(raw);
+  return text ? `${GRAY}${text}${RESET}` : '';
+}
+
 const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
+
+// The cost ledger: what every session has spent, by local day, kept in the
+// state folder so that the today and week parts can add up spend across
+// sessions. Each session's cost as last recorded is kept too, so a render
+// records only what the session has spent since.
+interface Ledger {
+  // Spend in dollars, by local day as YYYY-MM-DD.
+  days: Record<string, number>;
+  // Each session's total cost when it was last recorded, and when that was.
+  sessions: Record<string, { usd: number; at: number }>;
+}
+
+// A ledger from whatever the file held: its two tables where they are
+// objects, else empty ones. The tables have no prototype, so a session id
+// such as __proto__ is a key like any other.
+function ledgerFrom(value: unknown): Ledger {
+  const isObject = (v: unknown): v is object => typeof v === 'object' && v !== null && !Array.isArray(v);
+  const table = (v: unknown) => Object.assign(Object.create(null), isObject(v) ? v : {});
+  const { days, sessions } = (isObject(value) ? value : {}) as Partial<Ledger>;
+  return { days: table(days), sessions: table(sessions) };
+}
+
+// A number from a file or a reader outside claude-gauge's control, such as a
+// ledger value or a transcript counter, or undefined when it is not a finite
+// one.
+const finite = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+
+// A local day as the ledger keys it.
+const dayKey = (ms: number) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// What the session has spent since the ledger last recorded it: all of its
+// cost when the ledger has not seen it, or when its cost fell, which means it
+// started again from zero.
+function unrecorded(ledger: Ledger, data: StatusData): number {
+  const usd = finite(data.cost?.total_cost_usd);
+  if (usd === undefined) return 0;
+  const recorded = data.session_id ? finite(ledger.sessions[data.session_id]?.usd) : undefined;
+  return recorded === undefined || usd < recorded ? usd : usd - recorded;
+}
+
+// The spans the today and week parts add up, each named as its part.
+type Period = 'today' | 'week';
+
+// The local days a period covers, newest first: today alone, or each day
+// back to Monday.
+function periodDays(period: Period, nowMs: number): string[] {
+  const now = new Date(nowMs);
+  const count = period === 'today' ? 1 : ((now.getDay() + 6) % 7) + 1;
+  return Array.from({ length: count }, (_, i) => dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i).getTime()));
+}
+
+// Spend across sessions for today or this week: what the ledger holds for
+// those days, and what this session has spent since it was last recorded.
+// Nothing shows when neither has anything to add.
+function spentPart(period: Period, { data, config, nowMs, ledger }: PartContext): string {
+  const byDay = periodDays(period, nowMs).map((day) => finite(ledger.days[day]));
+  const known = byDay.some((usd) => usd !== undefined) || finite(data.cost?.total_cost_usd) !== undefined;
+  if (!known) return '';
+  const usd = byDay.reduce<number>((sum, day) => sum + (day ?? 0), 0) + unrecorded(ledger, data);
+  return `${GRAY}${labelOf(config, period)}$${usd.toFixed(2)}${RESET}`;
+}
+
+// The tools part shows the completed tools used most, up to this many, and
+// cuts a target to this many characters.
+const TOOLS_SHOWN = 5;
+const TARGET_CHARS = 30;
+
+// Tools whose target is a file: a cut keeps the end, where its name is.
+const FILE_TOOLS = ['Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit'];
+
+// A tool's target as the part prints it: a path inside the folder Claude
+// Code runs in made relative to it, then cut to TARGET_CHARS.
+function shortTarget(name: string, target: string, cwd: string): string {
+  const relative = path.isAbsolute(target) ? path.relative(cwd, target) : '';
+  const shown = relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? relative : target;
+  if (shown.length <= TARGET_CHARS) return shown;
+  return FILE_TOOLS.includes(name) ? `…${shown.slice(-(TARGET_CHARS - 1))}` : cut(shown, TARGET_CHARS);
+}
+
+// The tool running now, with its target, then the completed tools used most,
+// with counts: ◐ Edit src/a.ts ✓ Read ×12 ✓ Bash ×3.
+function toolsPart(activity: TranscriptActivity, cwd: string): string {
+  const { running, completed } = activity.tools;
+  const items: string[] = [];
+  const now = running.at(-1);
+  if (now) items.push(`${YELLOW}◐ ${now.name}${now.target ? ` ${shortTarget(now.name, now.target, cwd)}` : ''}${RESET}`);
+  const done = Object.entries(completed)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, TOOLS_SHOWN);
+  for (const [name, count] of done) items.push(`${GREEN}✓${RESET} ${GRAY}${name} ×${count}${RESET}`);
+  return items.join(' ');
+}
+
+// The agents part shows this many subagents, those running first, and keeps
+// a finished one for AGENT_LINGER_MS. A description is cut to DESCRIPTION_CHARS.
+const AGENTS_SHOWN = 3;
+const AGENT_LINGER_MS = 60_000;
+const DESCRIPTION_CHARS = 30;
+
+// One subagent: ◐ Explore (Haiku 4.5) Find the config loader 1m while it
+// runs, ✓ when it finished, ✗ when it failed or was stopped.
+function agentItem(agent: AgentRun, nowMs: number): string {
+  const model = agent.model ? ` (${agent.model})` : '';
+  const description = agent.description ? ` ${cut(agent.description, DESCRIPTION_CHARS)}` : '';
+  const elapsed = agent.startedAt !== undefined ? ` ${formatDuration(Math.max(0, (agent.endedAt ?? nowMs) - agent.startedAt))}` : '';
+  const text = `${agent.type}${model}${description}${elapsed}`;
+  if (agent.endedAt === undefined) return `${YELLOW}◐ ${text}${RESET}`;
+  return `${agent.failed ? `${RED}✗` : `${GREEN}✓`}${RESET} ${GRAY}${text}${RESET}`;
+}
+
+// The subagents running now, oldest first, then those finished in the last
+// AGENT_LINGER_MS, newest first, up to AGENTS_SHOWN in all.
+function agentsPart(activity: TranscriptActivity, nowMs: number): string {
+  const { agents } = activity;
+  const running = agents.filter((a) => a.endedAt === undefined);
+  const finished = agents
+    .filter((a): a is AgentRun & { endedAt: number } => a.endedAt !== undefined && nowMs - a.endedAt < AGENT_LINGER_MS)
+    .sort((a, b) => b.endedAt - a.endedAt);
+  return [...running, ...finished]
+    .slice(0, AGENTS_SHOWN)
+    .map((a) => agentItem(a, nowMs))
+    .join(' ');
+}
+
+// The todo in progress, by the form Claude Code shows while it runs, then
+// how many todos are done: ◐ Writing the tests 1/3. With none in progress,
+// todos 1/3, and ✓ todos 3/3 once all are done.
+function todosPart(activity: TranscriptActivity, config: Config): string {
+  const { todos } = activity;
+  if (!todos.length) return '';
+  const done = todos.filter((t) => t.status === 'completed').length;
+  const count = `${done}/${todos.length}`;
+  const now = todos.find((t) => t.status === 'in_progress');
+  if (now) return `${YELLOW}◐ ${cut(now.activeForm || now.content, DESCRIPTION_CHARS)}${RESET} ${GRAY}${count}${RESET}`;
+  const text = `${GRAY}${labelOf(config, 'todos')}${count}${RESET}`;
+  return done === todos.length ? `${GREEN}✓${RESET} ${text}` : text;
+}
+
+// How many times the conversation was compacted: compactions 2. Nothing
+// before the first.
+function compactionsPart(activity: TranscriptActivity, config: Config): string {
+  const { compactions } = activity;
+  return compactions > 0 ? `${GRAY}${labelOf(config, 'compactions')}${compactions}${RESET}` : '';
+}
+
+// The time since Claude last replied: reply 3m ago. A reply stamped ahead of
+// this machine's clock counts as just now.
+function replyPart(activity: TranscriptActivity, config: Config, nowMs: number): string {
+  const { lastReplyAt } = activity;
+  if (lastReplyAt === undefined) return '';
+  return `${GRAY}${labelOf(config, 'reply')}${formatDuration(Math.max(0, nowMs - lastReplyAt))} ago${RESET}`;
+}
+
+// The output speed of the last response: 84 tok/s, or 6.3 tok/s below ten.
+function speedPart(activity: TranscriptActivity): string {
+  const { speed } = activity;
+  if (speed === undefined) return '';
+  return `${GRAY}${speed < 10 ? speed.toFixed(1) : Math.round(speed)} tok/s${RESET}`;
+}
 
 // env and plan: what Claude Code loads into a session, and the account, read
 // from the files it reads them from. Only local files, never the network or
@@ -855,14 +1099,136 @@ function readSetup(
   };
 }
 
+// ram: the system's memory in use, in bytes, read the way each OS's own
+// monitor reads it. Only local figures, from Node, a file or one short
+// command.
+interface Memory {
+  used: number;
+  total: number;
+}
+
+// Where readMemory reads from, for tests to replace: the OS, Node's figures,
+// a file reader and a command runner.
+interface MemorySources {
+  platform?: string;
+  totalmem?: () => number;
+  freemem?: () => number;
+  readFile?: (file: string) => string;
+  run?: (command: string, args: string[]) => string;
+}
+
+// A number after a name in text such as /proc/meminfo or vm_stat's output.
+const figureAfter = (text: string, name: string): number | undefined => {
+  const m = new RegExp(`^${name}:\\s*(\\d+)`, 'm').exec(text);
+  return m ? Number(m[1]) : undefined;
+};
+
+// Memory in use, or undefined when the total is unknown. Linux counts what
+// is not MemAvailable as used, so the page cache the kernel gives back on
+// demand stays out. macOS counts app memory, wired and compressed pages from
+// vm_stat, as Activity Monitor does, because Node's free figure there leaves
+// out the inactive pages and reads close to full. Windows, and any OS or
+// reading that fails, take Node's figures, which on Windows are the
+// available memory already.
+function readMemory({
+  platform = process.platform,
+  totalmem = os.totalmem,
+  freemem = os.freemem,
+  readFile = (file) => fs.readFileSync(file, 'utf8'),
+  run = runQuietly,
+}: MemorySources = {}): Memory | undefined {
+  const attempt = <T>(read: () => T): T | undefined => {
+    try {
+      return read();
+    } catch {
+      return undefined;
+    }
+  };
+  let reading: Memory | undefined;
+  if (platform === 'linux') {
+    const meminfo = attempt(() => readFile('/proc/meminfo')) ?? '';
+    const total = figureAfter(meminfo, 'MemTotal');
+    const available = figureAfter(meminfo, 'MemAvailable');
+    if (total && available != null) reading = { used: (total - available) * 1024, total: total * 1024 };
+  } else if (platform === 'darwin') {
+    const vmStat = attempt(() => run('vm_stat', [])) ?? '';
+    const pageSize = Number(/page size of (\d+) bytes/.exec(vmStat)?.[1]);
+    const anonymous = figureAfter(vmStat, 'Anonymous pages');
+    const wired = figureAfter(vmStat, 'Pages wired down');
+    const compressed = figureAfter(vmStat, 'Pages occupied by compressor') ?? 0;
+    const purgeable = figureAfter(vmStat, 'Pages purgeable') ?? 0;
+    const total = attempt(totalmem) ?? 0;
+    if (pageSize && anonymous != null && wired != null && total) {
+      reading = { used: (Math.max(0, anonymous - purgeable) + wired + compressed) * pageSize, total };
+    }
+  }
+  if (!reading) {
+    const total = attempt(totalmem) ?? 0;
+    const free = attempt(freemem) ?? 0;
+    if (total > 0) reading = { used: total - free, total };
+  }
+  return reading && { used: Math.min(reading.total, Math.max(0, reading.used)), total: reading.total };
+}
+
+// command: the one part that runs a command the user names. It runs only
+// when --command names one and a row shows the part, in the folder Claude
+// Code runs in, with no input. It has COMMAND_TIMEOUT_MS to finish, and is
+// then killed, so a slow or hung command costs the status line that long and
+// no longer. Its output is cut to the first line with text in it, and
+// capped at MAX_COMMAND_OUTPUT bytes; failure, a timeout or empty output
+// shows nothing.
+const COMMAND_TIMEOUT_MS = 500;
+const MAX_COMMAND_OUTPUT = 64 * 1024;
+
+function runCommand(command: string, cwd: string): string {
+  // Outside Windows the shell leads a process group of its own, so that
+  // whatever the command starts can be stopped with it.
+  // Node 18 and Bun take detached in spawnSync, though Node's types list it
+  // for spawn only.
+  const grouped = process.platform !== 'win32';
+  const options: SpawnSyncOptionsWithStringEncoding & { detached: boolean } = {
+    shell: true,
+    detached: grouped,
+    cwd,
+    timeout: COMMAND_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    maxBuffer: MAX_COMMAND_OUTPUT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  };
+  const result = spawnSync(command, options);
+  // The timeout kills the shell alone, and a job it put in the background
+  // outlives it, so stop the whole group, finished or not.
+  if (grouped && result.pid) {
+    try {
+      process.kill(-result.pid, 'SIGKILL');
+    } catch {
+      /* the group has exited already */
+    }
+  }
+  // Failed, timed out, too much output, or no such folder.
+  if (result.error || result.status !== 0) return '';
+  // The first line with text left once sanitised, so a line of control codes
+  // alone does not hide the line after it. The part sanitises what it shows.
+  return result.stdout.split(/\r?\n/).find((line) => sanitise(line).trim())?.trim() ?? '';
+}
+
 interface RenderOptions {
   config?: Overrides;
   nowMs?: number;
+  // The cost ledger, as read from the state folder.
+  ledger?: Ledger;
   branchOf?: (cwd: string) => string;
   env?: Env;
   setupOf?: (cwd: string) => Setup;
+  memoryOf?: () => Memory | undefined;
+  commandOutputOf?: (command: string, cwd: string) => string;
   // The terminal's width in columns, when it is known.
   columns?: number;
+  // Reads what a transcript shows; by default incrementally, with its state
+  // in the state folder.
+  transcript?: (file: string) => TranscriptActivity;
 }
 
 // A terminal width, from render's option or the text of COLUMNS, which
@@ -912,20 +1278,48 @@ function joinRow(shown: ShownPart[], separator: string, right: readonly string[]
 
 function render(
   data: StatusData,
-  { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch, env = process.env, setupOf, columns }: RenderOptions = {},
+  {
+    config: overrides = {},
+    nowMs = Date.now(),
+    branchOf = gitBranch,
+    env = process.env,
+    setupOf,
+    memoryOf = readMemory,
+    commandOutputOf = runCommand,
+    transcript = readTranscriptActivity,
+    columns,
+    ledger,
+  }: RenderOptions = {},
 ): string {
   const merged = { ...DEFAULTS, ...overrides };
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
 
+  // The transcript is read at most once, and only when a part asks. A
+  // transcript that cannot be read shows nothing rather than fails.
+  let activity: TranscriptActivity | undefined;
+  const readActivity = (): TranscriptActivity => {
+    const file = data.transcript_path;
+    if (typeof file !== 'string' || !file) return emptyActivity();
+    try {
+      return sanitiseActivity(transcript(file));
+    } catch {
+      return emptyActivity();
+    }
+  };
+
   let setup: Setup | undefined;
+  let memory: { reading: Memory | undefined } | undefined;
+  let commandOutput: string | undefined;
   const input: PartContext = {
     data: sanitiseAll(data),
     config,
     nowMs,
+    ledger: ledgerFrom(ledger),
     cwd,
     folder: sanitise(path.basename(cwd)),
     branchOf: (dir) => sanitise(branchOf(dir)),
+    activity: () => (activity ??= readActivity()),
     processEnv: env,
     // Read once per render, however many parts ask, and only when one does.
     setup: () => {
@@ -935,6 +1329,9 @@ function render(
       }
       return setup;
     },
+    memory: () => (memory ??= { reading: memoryOf() }).reading,
+    // Nothing runs without a command, and a command runs once per render.
+    commandOutput: () => (commandOutput ??= config.command ? commandOutputOf(config.command, cwd) : ''),
   };
 
   const separator = separatorOf(config);
@@ -961,10 +1358,13 @@ function render(
 
 // --latest: the status line where Claude Code runs none (the VS Code panel).
 // It rebuilds a payload from the session transcript, and takes the 5h and 7d
-// windows from the last terminal render, which saves them.
+// windows from the last terminal render, which saves them, and today and
+// week from the cost ledger terminal renders keep.
 
 const configDir = () => configDirOf(process.env, os.homedir());
-const usageFile = () => path.join(configDir(), 'claude-gauge', '.state', 'usage.json');
+// A file in the state folder.
+const stateFile = (name: string) => path.join(configDir(), 'claude-gauge', '.state', name);
+const usageFile = () => stateFile('usage.json');
 
 // Best effort: a failed save never breaks the status line.
 function saveUsage(data: StatusData, nowMs: number): void {
@@ -990,6 +1390,683 @@ function loadUsage(nowMs: number): StatusData['rate_limits'] | undefined {
   }
 }
 
+// The cost ledger file. Each terminal render records its session's cost in
+// it; the today and week parts read it, with --latest too.
+const ledgerFile = () => stateFile('ledger.json');
+
+// A session records its cost at most once in this time. The parts still show
+// its latest cost, as the spend the ledger has not recorded yet.
+const LEDGER_THROTTLE_MS = 10_000;
+
+// Days and sessions older than this drop out of the ledger.
+const LEDGER_KEEP_MS = 31 * 86400 * 1000;
+
+// A lock this old was left by a render that stopped while holding it.
+const STALE_LOCK_MS = 10_000;
+
+// How long a render waits for another to finish writing, in all.
+const LOCK_WAIT_MS = 100;
+
+// The ledger the file holds, or an empty one when there is none or it is not
+// JSON.
+function readLedger(file: string): Ledger {
+  try {
+    return ledgerFrom(JSON.parse(fs.readFileSync(file, 'utf8')));
+  } catch {
+    return ledgerFrom(undefined);
+  }
+}
+
+const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+const isStale = (file: string) => Date.now() - fs.statSync(file).mtimeMs > STALE_LOCK_MS;
+
+// Removes a lock a render left when it stopped while holding it. The lock is
+// first renamed to a name of this render's own, which only one render can do,
+// and then checked again, so a lock another render took in the meantime is
+// put back rather than removed.
+function breakStaleLock(lock: string, token: string): void {
+  const taken = `${lock}.${token}`;
+  try {
+    if (!isStale(lock)) return;
+    fs.renameSync(lock, taken);
+  } catch {
+    return; // the lock went, or another render took it first
+  }
+  try {
+    if (!isStale(taken)) fs.linkSync(taken, lock);
+  } catch {
+    /* a newer lock is in place: leave it */
+  }
+  fs.rmSync(taken, { force: true });
+}
+
+// Runs write while holding the ledger's lock, a file only one render at a
+// time can create, holding a token of the render's own. A render that cannot
+// take the lock in LOCK_WAIT_MS writes nothing, and loses nothing: its
+// session's spend stays unrecorded until a later render records it. write
+// gets held, which says whether the lock is still this render's: a render
+// that stopped for longer than STALE_LOCK_MS, as across a system sleep, can
+// find its lock broken and taken by another, and must then commit nothing.
+function withLock(file: string, write: (held: () => boolean) => void): void {
+  const lock = `${file}.lock`;
+  const token = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  for (let waited = 0; ; waited += 5) {
+    try {
+      fs.writeFileSync(lock, token, { flag: 'wx' });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      breakStaleLock(lock, token);
+      if (waited >= LOCK_WAIT_MS) return;
+      sleep(5);
+    }
+  }
+  const held = () => {
+    try {
+      return fs.readFileSync(lock, 'utf8') === token;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    write(held);
+  } finally {
+    // Only this render's own lock: another may hold it once this one was
+    // taken for stale.
+    if (held()) fs.rmSync(lock, { force: true });
+  }
+}
+
+// Records what the session has spent since the ledger last recorded it,
+// against today, and returns the ledger as it now stands. It writes only when
+// the cost has changed and LEDGER_THROTTLE_MS has passed since the session
+// last wrote. Under the lock it reads the file again, so a write never loses
+// another session's, and it replaces the file in one rename, so a reader never
+// sees half a ledger. Best effort: a failed write never breaks the status
+// line.
+function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() }: { file?: string; nowMs?: number } = {}): Ledger {
+  let ledger = readLedger(file);
+  const id = data.session_id;
+  const usd = finite(data.cost?.total_cost_usd);
+  if (typeof id !== 'string' || !id || usd === undefined) return ledger;
+  const last = ledger.sessions[id];
+  if (finite(last?.usd) === usd) return ledger;
+  const since = nowMs - (finite(last?.at) ?? -Infinity);
+  if (since >= 0 && since < LEDGER_THROTTLE_MS) return ledger;
+
+  const temp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    withLock(file, (held) => {
+      const fresh = readLedger(file);
+      const day = dayKey(nowMs);
+      fresh.days[day] = (finite(fresh.days[day]) ?? 0) + unrecorded(fresh, data);
+      fresh.sessions[id] = { usd, at: nowMs };
+      forgetOld(fresh, nowMs);
+      fs.writeFileSync(temp, JSON.stringify(fresh));
+      // A lock lost while this render stopped: the ledger read above may be
+      // out of date, so the session's spend waits for a later render.
+      if (!held()) return;
+      fs.renameSync(temp, file);
+      ledger = fresh;
+    });
+  } catch {
+    /* the folder cannot be written at all: the status line still shows */
+  }
+  try {
+    fs.rmSync(temp, { force: true });
+  } catch {
+    /* nothing was left */
+  }
+  return ledger;
+}
+
+// Drops the days and sessions older than LEDGER_KEEP_MS, and any entry that
+// is not a ledger entry.
+function forgetOld(ledger: Ledger, nowMs: number): void {
+  const oldest = dayKey(nowMs - LEDGER_KEEP_MS);
+  for (const [day, usd] of Object.entries(ledger.days)) {
+    if (day < oldest || finite(usd) === undefined) delete ledger.days[day];
+  }
+  for (const [id, entry] of Object.entries(ledger.sessions)) {
+    const at = finite(entry?.at);
+    if (at === undefined || at < nowMs - LEDGER_KEEP_MS || finite(entry?.usd) === undefined) delete ledger.sessions[id];
+  }
+}
+
+// The transcript reader. A transcript only grows while its session runs, so
+// each render reads just the bytes added since the last one, from an offset
+// kept per transcript in the state folder with what the earlier bytes showed.
+// A transcript that shrank or was replaced by another file is read again
+// from the start.
+
+// A tool call: the tool's name and what it works on, if anything.
+interface ToolCall {
+  name: string;
+  target?: string;
+}
+
+// A subagent the session started: its type, the model it runs on and the
+// description it was given, when the transcript names them, and when it
+// started and ended, in ms since the epoch. One with no end is running.
+interface AgentRun {
+  type: string;
+  model?: string;
+  description?: string;
+  startedAt?: number;
+  endedAt?: number;
+  // Ended without finishing its work: it failed, or was stopped.
+  failed?: boolean;
+}
+
+// A todo of the session's list: what to do, the form Claude Code shows
+// while it is in progress, and its status.
+interface Todo {
+  content: string;
+  activeForm?: string;
+  status: TodoStatus;
+}
+
+type TodoStatus = 'pending' | 'in_progress' | 'completed';
+
+// What a transcript shows: the tool calls still running, oldest first, how
+// many calls of each tool have completed, the subagents, in the order they
+// started, the todo list, in its order, and the session counters: how many
+// times the conversation was compacted, when Claude last replied, in ms since
+// the epoch, and the last response's output tokens per second.
+interface TranscriptActivity {
+  tools: { running: ToolCall[]; completed: Record<string, number> };
+  agents: AgentRun[];
+  todos: Todo[];
+  compactions: number;
+  lastReplyAt?: number;
+  speed?: number;
+}
+
+const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [], compactions: 0 });
+
+// Activity with every name and target sanitised. Two tool names that differ
+// only in control codes count as one.
+// A reader handed in from JavaScript may leave the agents, the todos and the
+// counters out, or give counters that are not numbers.
+function sanitiseActivity({ tools, agents = [], todos = [], compactions, lastReplyAt, speed }: TranscriptActivity): TranscriptActivity {
+  const running = tools.running.map(({ name, target }) => ({ name: sanitise(name), ...(target ? { target: sanitise(target) } : {}) }));
+  const completed: Record<string, number> = {};
+  for (const [name, count] of Object.entries(tools.completed)) completed[sanitise(name)] = (completed[sanitise(name)] ?? 0) + count;
+  const cleanAgents = agents.map(({ type, model, description, ...times }) => ({
+    ...times,
+    type: sanitise(type),
+    ...(model ? { model: sanitise(model) } : {}),
+    ...(description ? { description: sanitise(description) } : {}),
+  }));
+  const cleanTodos = todos.map(({ content, activeForm, status }) => ({
+    content: sanitise(content),
+    ...(activeForm ? { activeForm: sanitise(activeForm) } : {}),
+    status,
+  }));
+  const replyAt = finite(lastReplyAt);
+  const tokensPerSecond = finite(speed);
+  return {
+    tools: { running, completed },
+    agents: cleanAgents,
+    todos: cleanTodos,
+    compactions: finite(compactions) ?? 0,
+    ...(replyAt !== undefined ? { lastReplyAt: replyAt } : {}),
+    ...(tokensPerSecond !== undefined ? { speed: tokensPerSecond } : {}),
+  };
+}
+
+// What the reader keeps between renders. version changes when the shape
+// does, so a state from an older claude-gauge is rebuilt, not misread.
+const TRANSCRIPT_STATE_VERSION = 4;
+
+interface TranscriptState {
+  version: number;
+  // The transcript, and the file it was: a replaced file has a new inode.
+  file: string;
+  dev: number;
+  ino: number;
+  // The bytes read so far, always up to the end of a whole line.
+  offset: number;
+  // The tool calls with no result yet, by call id, oldest first. A call
+  // that was running when the user sent a prompt has ended, but its result
+  // may still come, and then counts.
+  pending: (ToolCall & { id: string; ended?: boolean })[];
+  completed: Record<string, number>;
+  // The subagents, by the id of the call that started them, in the order
+  // they started. One in the background keeps running past its call's
+  // result, until its task notification.
+  agents: AgentEntry[];
+  // The todo list, in its order, and the calls to the todo tools with no
+  // result yet: a call changes the list once its result says it worked.
+  todos: TodoEntry[];
+  todoCalls: TodoCall[];
+  // How many times the conversation was compacted.
+  compactions: number;
+  // When the last prompt or tool result came, which asks for the next
+  // response, and the last response so far.
+  askedAt?: number;
+  response?: ResponseEntry;
+}
+
+// A response as the reader keeps it: the message's id, when it was asked for
+// and when its last block came, in ms since the epoch, and its output tokens.
+// Claude Code writes a record per block, each with the message's final usage.
+interface ResponseEntry {
+  id: string;
+  askedAt: number;
+  endedAt: number;
+  tokens: number;
+}
+
+// A todo as the reader keeps it: by the id the task tools gave it, if any.
+type TodoEntry = Todo & { id?: string };
+
+// A call to a todo tool, kept until its result comes: its id, the tool and
+// what it was asked to write.
+interface TodoCall {
+  id: string;
+  name: string;
+  input: unknown;
+}
+
+// A subagent as the reader keeps it: by the id of the call that started it,
+// and whether it runs in the background.
+type AgentEntry = AgentRun & { id: string; background?: boolean };
+
+// The ended calls kept at most, newest first: a call whose result never
+// came must not grow the state for ever. Running calls are all kept, so a
+// large parallel batch counts in full. Ended subagents are capped the same,
+// and so are the todo tools' calls that wait for a result.
+const ENDED_KEPT = 20;
+
+// The tool that starts a subagent: Agent, named Task before Claude Code 2.1.
+const AGENT_TOOLS = ['Agent', 'Task'];
+
+// The tools that write the todo list: TodoWrite replaces it whole, and the
+// task tools that replaced it in Claude Code 2.1 add a task and change one.
+const TODO_TOOLS = ['TodoWrite', 'TaskCreate', 'TaskUpdate'];
+
+// The fs calls the reader makes, so a test can count the bytes it reads.
+type TranscriptFs = Pick<typeof fs, 'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync'>;
+
+interface TranscriptReadOptions {
+  stateDir?: string;
+  fs?: TranscriptFs;
+}
+
+const transcriptStateDir = () => path.join(configDir(), 'claude-gauge', '.state', 'transcripts');
+
+// The input field that names what a tool works on, most telling first.
+const TARGET_FIELDS = ['file_path', 'notebook_path', 'pattern', 'command', 'url', 'query', 'description', 'skill', 'path'];
+
+function toolTarget(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  for (const field of TARGET_FIELDS) {
+    const value = (input as Record<string, unknown>)[field];
+    if (typeof value === 'string' && value.trim()) return value.trim().split('\n')[0];
+  }
+  return undefined;
+}
+
+interface ContentBlock {
+  type?: string;
+  id?: unknown;
+  name?: unknown;
+  input?: unknown;
+  tool_use_id?: unknown;
+  is_error?: unknown;
+  text?: unknown;
+  content?: unknown;
+}
+
+// A record's time in ms since the epoch, if it has a valid one.
+const timeOf = (record: TranscriptRecord): number | undefined => {
+  const ms = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+};
+
+// A model as the agents part prints it, from an id or an alias: Haiku 4.5,
+// Sonnet. inherit names no model of its own.
+const agentModel = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() && value.trim() !== 'inherit' ? modelName(value.trim()) : undefined;
+
+// The subagent a call to the Agent tool starts.
+function startAgent(state: TranscriptState, block: ContentBlock, startedAt: number | undefined): void {
+  const input = isObject(block.input) ? block.input : {};
+  const model = agentModel(input.model);
+  const description = stringAt(input, 'description');
+  state.agents.push({
+    id: String(block.id),
+    type: stringAt(input, 'subagent_type') ?? 'general-purpose',
+    ...(description ? { description } : {}),
+    ...(model ? { model } : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    // Known from the call, so a prompt before the launch result does not stop it.
+    ...(input.run_in_background === true ? { background: true } : {}),
+  });
+}
+
+// A subagent's end: when it ended, and whether it failed or was stopped. An
+// end with no time counts as long ago, so the part drops it rather than
+// shows it as running.
+function endAgent(agent: AgentEntry, endedAt: number | undefined, failed: boolean): void {
+  agent.endedAt = endedAt ?? 0;
+  if (failed) agent.failed = true;
+  else delete agent.failed;
+}
+
+// The result of an Agent call: the end of a subagent in the foreground, or,
+// for one in the background, only its launch, which names the model.
+function agentResult(agent: AgentEntry, block: ContentBlock, record: TranscriptRecord, at: number | undefined): void {
+  const result = isObject(record.toolUseResult) ? record.toolUseResult : {};
+  const model = agentModel(result.resolvedModel);
+  if (model) agent.model = model;
+  if (result.isAsync === true || result.status === 'async_launched') {
+    agent.background = true;
+    return;
+  }
+  endAgent(agent, at, block.is_error === true || (typeof result.status === 'string' && result.status !== 'completed'));
+}
+
+// The text of a message: its content when that is text, else its text blocks.
+const textOf = (content: unknown): string =>
+  typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.map((b) => (isObject(b) && typeof b.text === 'string' ? b.text : '')).join('\n')
+      : '';
+
+// A task notification, which Claude Code adds when a task in the background
+// ends: the call that started the task, and its status. Not a prompt.
+function taskNotification(record: TranscriptRecord): { id?: string; status?: string } | undefined {
+  // Only the origin tells one apart: a prompt the user types can hold the same text.
+  if (!isObject(record.origin) || record.origin.kind !== 'task-notification') return undefined;
+  const text = textOf(record.message?.content);
+  return {
+    id: /<tool-use-id>([^<]*)<\/tool-use-id>/.exec(text)?.[1]?.trim(),
+    status: /<status>([^<]*)<\/status>/.exec(text)?.[1]?.trim(),
+  };
+}
+
+// A status the todo tools write, or undefined for any other value.
+const todoStatus = (value: unknown): TodoStatus | undefined =>
+  value === 'pending' || value === 'in_progress' || value === 'completed' ? value : undefined;
+
+// A field that holds text, not only white space.
+const textAt = (value: unknown, key: string): string | undefined => (stringAt(value, key)?.trim() ? stringAt(value, key) : undefined);
+
+// A field that holds an id, as a string or a number, as a string.
+const idAt = (value: unknown, key: string): string | undefined => {
+  const field = isObject(value) ? value[key] : undefined;
+  return typeof field === 'number' ? String(field) : stringAt(value, key);
+};
+
+// A todo from the fields a todo tool names, or undefined when it has no text.
+function todoOf(content: string | undefined, activeForm: string | undefined, status: TodoStatus, id?: string): TodoEntry | undefined {
+  if (!content) return undefined;
+  return { ...(id ? { id } : {}), content, ...(activeForm ? { activeForm } : {}), status };
+}
+
+// The todos a TodoWrite call writes. One with no text drops out, and one
+// with a status the part does not know counts as pending.
+function writtenTodos(input: JsonObject): TodoEntry[] {
+  const todos = Array.isArray(input.todos) ? input.todos : [];
+  return todos.flatMap((todo) => {
+    const status = (isObject(todo) && todoStatus(todo.status)) || 'pending';
+    return todoOf(textAt(todo, 'content'), textAt(todo, 'activeForm'), status) ?? [];
+  });
+}
+
+// The id of the task a TaskCreate result names: from its data, else from
+// its text, Task #7 created successfully.
+function createdTaskId(block: ContentBlock, record: TranscriptRecord): string | undefined {
+  const task = isObject(record.toolUseResult) ? record.toolUseResult.task : undefined;
+  return idAt(task, 'id') ?? /Task #(\S+) created/.exec(textOf(block.content))?.[1];
+}
+
+// A todo tool's call applied to the list, once its result says it worked:
+// TodoWrite replaces the list, TaskCreate adds a pending task, and
+// TaskUpdate changes one, or drops it when it is deleted.
+function applyTodoCall(state: TranscriptState, todoCall: TodoCall, block: ContentBlock, record: TranscriptRecord): void {
+  if (block.is_error === true || (isObject(record.toolUseResult) && record.toolUseResult.success === false)) return;
+  const input = isObject(todoCall.input) ? todoCall.input : {};
+  if (todoCall.name === 'TodoWrite') {
+    state.todos = writtenTodos(input);
+  } else if (todoCall.name === 'TaskCreate') {
+    const task = todoOf(textAt(input, 'subject'), textAt(input, 'activeForm'), 'pending', createdTaskId(block, record));
+    if (task) state.todos = [...state.todos, task];
+  } else if (todoCall.name === 'TaskUpdate') {
+    const id = idAt(input, 'taskId');
+    const task = id === undefined ? undefined : state.todos.find((t) => t.id === id);
+    if (!task) return;
+    if (input.status === 'deleted') {
+      state.todos = state.todos.filter((t) => t !== task);
+      return;
+    }
+    const status = todoStatus(input.status);
+    if (status) task.status = status;
+    const content = textAt(input, 'subject');
+    if (content) task.content = content;
+    const activeForm = textAt(input, 'activeForm');
+    if (activeForm) task.activeForm = activeForm;
+  }
+}
+
+// The ended subagents past the newest ENDED_KEPT drop out; running ones stay.
+function capAgents(state: TranscriptState): void {
+  let ended = 0;
+  state.agents = state.agents
+    .reverse()
+    .filter((a) => a.endedAt === undefined || ++ended <= ENDED_KEPT)
+    .reverse();
+}
+
+// A response's record applied to the state: the first block of a message
+// starts a response, timed from the prompt or tool result that asked for it,
+// and each block after it moves the response's end. A reply Claude Code
+// writes itself, such as an API error, is no response of the model's.
+function applyResponse(state: TranscriptState, record: TranscriptRecord, at: number | undefined): void {
+  const message = record.message;
+  if (at === undefined || typeof message?.id !== 'string' || message.model === '<synthetic>') return;
+  const tokens = finite(message.usage?.output_tokens) ?? 0;
+  if (state.response?.id === message.id) {
+    state.response.endedAt = Math.max(state.response.endedAt, at);
+    state.response.tokens = tokens;
+  } else {
+    state.response = { id: message.id, askedAt: state.askedAt ?? at, endedAt: at, tokens };
+  }
+}
+
+// The last response's output tokens per second, when it had tokens and took
+// time to write.
+function speedOf(response: ResponseEntry | undefined): number | undefined {
+  const seconds = response ? (response.endedAt - response.askedAt) / 1000 : 0;
+  return response && response.tokens > 0 && seconds > 0 ? response.tokens / seconds : undefined;
+}
+
+// One transcript record applied to the state. Subagent records are left out,
+// as they are for --latest. A prompt from the user ends the turn, so a call
+// still running then was interrupted: it no longer shows as running, and a
+// subagent in the foreground shows as stopped. One in the background runs on
+// until its task notification.
+function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
+  if (!record || typeof record !== 'object' || record.isSidechain) return;
+  const at = timeOf(record);
+  if (record.type === 'system' && record.subtype === 'compact_boundary') state.compactions++;
+  if (record.type === 'assistant') applyResponse(state, record, at);
+  if (record.type === 'user' && at !== undefined) state.askedAt = at;
+  const content = record.message?.content;
+  const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
+  // A task notification ends a task in the background, and is no prompt.
+  const notified = record.type === 'user' ? taskNotification(record) : undefined;
+  if (notified) {
+    const agent = state.agents.find((a) => a.id === notified.id);
+    if (agent) endAgent(agent, at, notified.status !== 'completed');
+    capAgents(state);
+    return;
+  }
+  if (record.type === 'user' && !record.isMeta && !blocks.some((b) => b.type === 'tool_result')) {
+    if (typeof content === 'string' || blocks.length) {
+      state.pending = state.pending.map((p) => ({ ...p, ended: true })).slice(-ENDED_KEPT);
+      for (const agent of state.agents) if (agent.endedAt === undefined && !agent.background) endAgent(agent, at, true);
+      capAgents(state);
+    }
+    return;
+  }
+  for (const block of blocks) {
+    if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+      const target = toolTarget(block.input);
+      state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}) }];
+      if (AGENT_TOOLS.includes(block.name)) startAgent(state, block, at);
+      if (TODO_TOOLS.includes(block.name)) state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
+    } else if (record.type === 'user' && block.type === 'tool_result') {
+      const agent = state.agents.find((a) => a.id === block.tool_use_id);
+      if (agent) agentResult(agent, block, record, at);
+      const todoCall = state.todoCalls.find((c) => c.id === block.tool_use_id);
+      if (todoCall) {
+        state.todoCalls = state.todoCalls.filter((c) => c !== todoCall);
+        applyTodoCall(state, todoCall, block, record);
+      }
+      const call = state.pending.find((p) => p.id === block.tool_use_id);
+      if (!call) continue;
+      state.pending = state.pending.filter((p) => p !== call);
+      state.completed[call.name] = (state.completed[call.name] ?? 0) + 1;
+    }
+  }
+  capAgents(state);
+}
+
+// Reads the transcript from offset to size, applying each whole line, and
+// returns the offset after the last one. A line still being written is left
+// for the next render.
+function readLines(io: TranscriptFs, file: string, offset: number, size: number, apply: (line: string) => void): number {
+  const fd = io.openSync(file, 'r');
+  try {
+    // The bytes read since the last newline, in the chunks they came in, so
+    // a long line is joined once rather than copied again for every chunk.
+    let rest: Buffer[] = [];
+    let restLength = 0;
+    let position = offset;
+    while (position < size) {
+      const chunk = Buffer.alloc(Math.min(1 << 16, size - position));
+      const n = io.readSync(fd, chunk, 0, chunk.length, position);
+      if (n <= 0) break;
+      position += n;
+      const read = chunk.subarray(0, n);
+      const end = read.lastIndexOf(0x0a);
+      if (end < 0) {
+        rest.push(read);
+        restLength += n;
+        continue;
+      }
+      const lines = Buffer.concat([...rest, read.subarray(0, end)]).toString('utf8');
+      for (const line of lines.split('\n')) apply(line);
+      rest = [read.subarray(end + 1)];
+      restLength = n - end - 1;
+    }
+    return position - restLength;
+  } finally {
+    io.closeSync(fd);
+  }
+}
+
+function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptState | undefined {
+  try {
+    const state = JSON.parse(String(io.readFileSync(stateFile, 'utf8'))) as TranscriptState;
+    const valid =
+      state?.version === TRANSCRIPT_STATE_VERSION &&
+      Number.isInteger(state.offset) &&
+      Array.isArray(state.pending) &&
+      Array.isArray(state.agents) &&
+      Array.isArray(state.todos) &&
+      Array.isArray(state.todoCalls) &&
+      Number.isInteger(state.compactions) &&
+      state.completed &&
+      typeof state.completed === 'object';
+    return valid ? state : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Best effort, as saveUsage is. Unlike usage.json, which one render writes
+// in place, the state is written whole to a file of its own and renamed over
+// the old one: the status line can render twice at once, and the other
+// render must never read half a state.
+function saveTranscriptState(io: TranscriptFs, stateFile: string, state: TranscriptState): void {
+  const temporary = `${stateFile}.${process.pid}.tmp`;
+  try {
+    io.mkdirSync(path.dirname(stateFile), { recursive: true });
+    io.writeFileSync(temporary, JSON.stringify(state));
+    io.renameSync(temporary, stateFile);
+  } catch {
+    // Read-only home or similar: the next render reads from the start.
+    try {
+      io.rmSync(temporary, { force: true });
+    } catch {
+      /* nothing to remove */
+    }
+  }
+}
+
+// What the transcript shows, reading only what it gained since the last
+// call. A transcript that does not exist shows nothing.
+function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(), fs: io = fs }: TranscriptReadOptions = {}): TranscriptActivity {
+  let stat: fs.Stats;
+  try {
+    stat = io.statSync(file);
+  } catch {
+    return emptyActivity();
+  }
+  const stateFile = path.join(stateDir, `${createHash('sha1').update(file).digest('hex')}.json`);
+  const saved = loadTranscriptState(io, stateFile);
+  const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
+  const state: TranscriptState = unchanged
+    ? saved
+    : {
+        version: TRANSCRIPT_STATE_VERSION,
+        file,
+        dev: stat.dev,
+        ino: stat.ino,
+        offset: 0,
+        pending: [],
+        completed: {},
+        agents: [],
+        todos: [],
+        todoCalls: [],
+        compactions: 0,
+      };
+
+  if (stat.size > state.offset || !unchanged) {
+    state.offset = readLines(io, file, state.offset, stat.size, (line) => {
+      // Only lines that can hold a tool call, a result, a prompt, a response
+      // or a compaction are parsed.
+      if (!['"tool_', '"user"', '"assistant"', '"compact_boundary"'].some((key) => line.includes(key))) return;
+      try {
+        applyRecord(state, JSON.parse(line));
+      } catch {
+        /* not a record: skip it */
+      }
+    });
+    saveTranscriptState(io, stateFile, state);
+  }
+  const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
+  const agents = state.agents.map(({ id, background, ...agent }) => agent);
+  const todos = state.todos.map(({ id, ...todo }) => todo);
+  const lastReplyAt = state.response?.endedAt;
+  const speed = speedOf(state.response);
+  return {
+    tools: { running, completed: { ...state.completed } },
+    agents,
+    todos,
+    compactions: state.compactions,
+    ...(lastReplyAt !== undefined ? { lastReplyAt } : {}),
+    ...(speed !== undefined ? { speed } : {}),
+  };
+}
+
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
 function modelName(id: string | undefined): string | undefined {
   if (!id) return undefined;
@@ -1011,13 +2088,24 @@ function windowSize(tokens: number, explicit: string | undefined): number {
 // A session transcript record, as far as the status line reads it.
 interface TranscriptRecord {
   type?: string;
+  // What a system record reports, such as compact_boundary for a compaction.
+  subtype?: string;
   cwd?: string;
   timestamp?: string;
   isSidechain?: boolean;
+  // Text Claude Code adds to the conversation, not typed by the user.
+  isMeta?: boolean;
+  // What Claude Code adds to a record: a tool's result as data, and where a
+  // message came from, such as a task notification.
+  toolUseResult?: unknown;
+  origin?: unknown;
   effort?: string | { level?: string };
   message?: {
+    id?: string;
     model?: string;
+    content?: unknown;
     usage?: {
+      output_tokens?: number;
       input_tokens?: number;
       cache_creation_input_tokens?: number;
       cache_read_input_tokens?: number;
@@ -1146,15 +2234,21 @@ export {
   DEFAULT_ROWS,
   SWITCHES,
   payloadFromTranscript,
+  recordCost,
+  withLock,
   modelName,
   repoFromRemote,
   worktreeFromGitDir,
   instruction,
   INSTRUCT_HOSTS,
+  readTranscriptActivity,
   readSetup,
+  readMemory,
+  runCommand,
+  COMMAND_TIMEOUT_MS,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord, Setup };
+export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, Setup, Memory };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
@@ -1178,7 +2272,7 @@ if (isMain) {
     const cwd = data.workspace?.current_dir;
     if (data.workspace && cwd) Object.assign(data.workspace, gitWorkspace(cwd));
     // Plain text: it is pasted into a reply, where colour codes show as junk.
-    process.stdout.write(stripColours(render(data, { config, nowMs })) + '\n');
+    process.stdout.write(stripColours(render(data, { config, nowMs, ledger: readLedger(ledgerFile()) })) + '\n');
   } else {
     const chunks: Buffer[] = [];
     process.stdin.on('data', (c: Buffer) => chunks.push(c));
@@ -1190,7 +2284,8 @@ if (isMain) {
         /* render what we can from an empty payload rather than print nothing */
       }
       saveUsage(data, nowMs);
-      process.stdout.write(render(data, { config, nowMs, columns: columnsOf(process.env.COLUMNS) }) + '\n');
+      const ledger = recordCost(data, { nowMs });
+      process.stdout.write(render(data, { config, nowMs, ledger, columns: columnsOf(process.env.COLUMNS) }) + '\n');
     });
   }
 }

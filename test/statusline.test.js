@@ -461,6 +461,160 @@ test('the setup is empty where there is nothing to read, and skips files that ar
   assert.deepEqual(readSetup(broken.project, broken.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
 });
 
+const GIB = 1024 ** 3;
+
+test('the memory reading on Linux counts what is not available as used, from /proc/meminfo', () => {
+  const { readMemory } = require('../dist/statusline.js');
+  const meminfo = 'MemTotal:       16384000 kB\nMemFree:         1024000 kB\nMemAvailable:    4096000 kB\nBuffers:          102400 kB\n';
+  const read = (text) => readMemory({ platform: 'linux', readFile: () => text, totalmem: () => 8 * GIB, freemem: () => 2 * GIB });
+  assert.deepEqual(read(meminfo), { used: (16384000 - 4096000) * 1024, total: 16384000 * 1024 });
+  // A kernel without MemAvailable, or no /proc, falls back to Node's figures.
+  assert.deepEqual(read('MemTotal: 16384000 kB\nMemFree: 1024000 kB\n'), { used: 6 * GIB, total: 8 * GIB });
+  const missing = readMemory({ platform: 'linux', readFile: () => { throw new Error('ENOENT'); }, totalmem: () => 8 * GIB, freemem: () => 2 * GIB });
+  assert.deepEqual(missing, { used: 6 * GIB, total: 8 * GIB });
+});
+
+test('the memory reading on macOS is app memory, wired and compressed, as Activity Monitor counts it', () => {
+  const { readMemory } = require('../dist/statusline.js');
+  const vmStat = [
+    'Mach Virtual Memory Statistics: (page size of 16384 bytes)',
+    'Pages free:                                     6733.',
+    'Pages active:                                 252088.',
+    'Pages inactive:                               250267.',
+    'Pages wired down:                             100000.',
+    'Pages purgeable:                                1000.',
+    'Anonymous pages:                              201000.',
+    'Pages occupied by compressor:                  50000.',
+  ].join('\n');
+  let ran;
+  const read = (text) =>
+    readMemory({ platform: 'darwin', totalmem: () => 24 * GIB, freemem: () => GIB, run: (cmd, args) => ((ran = [cmd, ...args]), text) });
+  assert.deepEqual(read(vmStat), { used: (200000 + 100000 + 50000) * 16384, total: 24 * GIB });
+  assert.deepEqual(ran, ['vm_stat']);
+  // Without vm_stat's figures, or without its app memory, it falls back to
+  // Node's.
+  assert.deepEqual(read(''), { used: 23 * GIB, total: 24 * GIB });
+  assert.deepEqual(read(vmStat.replace(/^Anonymous pages.*$/m, '')), { used: 23 * GIB, total: 24 * GIB });
+});
+
+test('the memory reading on Windows takes the available memory Node reports', () => {
+  const { readMemory } = require('../dist/statusline.js');
+  const memory = readMemory({ platform: 'win32', totalmem: () => 32 * GIB, freemem: () => 12 * GIB, run: () => assert.fail('no command on Windows') });
+  assert.deepEqual(memory, { used: 20 * GIB, total: 32 * GIB });
+  // Nothing to show when the total is unknown.
+  assert.equal(readMemory({ platform: 'win32', totalmem: () => 0, freemem: () => 0 }), undefined);
+});
+
+test('the memory reading works on the machine running the tests', () => {
+  const { readMemory } = require('../dist/statusline.js');
+  const memory = readMemory();
+  assert.ok(memory, process.platform);
+  assert.ok(memory.total > 0 && memory.used >= 0 && memory.used <= memory.total, JSON.stringify(memory));
+});
+
+// Renders with the given switches and a memory reading in place of the
+// machine's, colours stripped.
+const withMemory = (memory, args) => plain(render({}, { config: parseArgs(args), memoryOf: () => memory }));
+
+test('ram shows the memory in use as a percentage, a bar and the amount, coloured by use', () => {
+  const memory = { used: 10.5 * GIB, total: 16 * GIB };
+  assert.equal(withMemory(memory, ['--show', 'ram']), 'ram 66% ▓▓▓░░ 10.5G');
+  assert.equal(withMemory(memory, ['--show', 'ram', '--segments', '10', '--no-labels']), '66% ▓▓▓▓▓▓▓░░░ 10.5G');
+  assert.equal(withMemory(memory, ['--show', 'ram', '--no-bars']), 'ram 66% 10.5G');
+  assert.equal(withMemory({ used: 120 * GIB, total: 128 * GIB }, ['--show', 'ram']), 'ram 94% ▓▓▓▓▓ 120G');
+  assert.equal(withMemory({ used: 0.4 * GIB, total: 1 * GIB }, ['--show', 'ram']), 'ram 40% ▓▓░░░ 0.4G');
+  const red = render({}, { config: parseArgs(['--show', 'ram']), memoryOf: () => ({ used: 95, total: 100 }) });
+  assert.ok(red.startsWith('\x1b[38;5;124m'));
+  // Nothing to show without a reading.
+  assert.equal(withMemory(undefined, ['--show', 'ram', '--show', 'model']), '');
+});
+
+test('ram reads the memory only when a row shows it', () => {
+  let reads = 0;
+  const memoryOf = () => ((reads += 1), { used: GIB, total: 2 * GIB });
+  render({ model: { display_name: 'Opus' } }, { config: parseArgs(['--show', 'model']), memoryOf });
+  assert.equal(reads, 0);
+  render({}, { config: parseArgs(['--show', 'ram', '--show', 'ram']), memoryOf });
+  assert.equal(reads, 1);
+});
+
+test('text shows the fixed text --text gives it', () => {
+  assert.equal(run({}, ['--show', 'text', '--text', 'work laptop']), 'work laptop');
+  assert.equal(run({ model: { display_name: 'Opus' } }, ['--show', 'text,model', '--text=prod: eu-west']), 'prod: eu-west │ Opus');
+  // The last --text wins, and without one the part has nothing to show.
+  assert.equal(run({}, ['--show', 'text', '--text', 'one', '--text', 'two']), 'two');
+  assert.equal(run({}, ['--show', 'text', '--show', 'model']), '');
+  assert.equal(run({}, ['--show', 'text', '--text', '']), '');
+});
+
+// Renders with the given switches and a command runner in place of the
+// shell, colours stripped, and the commands it was asked to run.
+const withCommand = (args, output = 'out') => {
+  const ran = [];
+  const commandOutputOf = (command, cwd) => (ran.push([command, cwd]), output);
+  const data = { model: { display_name: 'Opus' }, workspace: { current_dir: '/home/me/project' } };
+  return { shown: plain(render(data, { config: parseArgs(args), commandOutputOf })), ran };
+};
+
+test('command shows the output of the command --command names, run in the folder Claude Code runs in', () => {
+  const { shown, ran } = withCommand(['--show', 'command,model', '--command', 'kubectl config current-context'], 'prod-eu');
+  assert.equal(shown, 'prod-eu │ Opus');
+  assert.deepEqual(ran, [['kubectl config current-context', '/home/me/project']]);
+  // Shown twice, it runs once.
+  assert.deepEqual(withCommand(['--show', 'command', '--show', 'command', '--command', 'date']).ran.length, 1);
+  // Empty output leaves the part with nothing to show.
+  assert.equal(withCommand(['--show', 'command,model', '--command', 'true'], '').shown, 'Opus');
+});
+
+test('command runs nothing unless --command names a command and a row shows the part', () => {
+  assert.deepEqual(withCommand(['--show', 'command,model']), { shown: 'Opus', ran: [] });
+  assert.deepEqual(withCommand(['--show', 'command,model', '--command', '']), { shown: 'Opus', ran: [] });
+  assert.deepEqual(withCommand(['--show', 'model', '--command', 'date']), { shown: 'Opus', ran: [] });
+  assert.deepEqual(withCommand(['--command', 'date']).ran, []);
+});
+
+// A shell command that runs this Node with a script. Double quotes work in
+// sh and in cmd.exe alike.
+const nodeCommand = (script) => `${JSON.stringify(process.execPath)} -e "${script}"`;
+
+test('the command runner keeps the first line of output, and nothing when the command fails', () => {
+  const { runCommand } = require('../dist/statusline.js');
+  const cwd = require('node:os').tmpdir();
+  assert.equal(runCommand(nodeCommand("process.stdout.write('first line\\nsecond line\\n')"), cwd), 'first line');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('\\n  padded  \\r\\nnext')"), cwd), 'padded');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('\\x1b[2J\\nvisible')"), cwd), 'visible');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('x'.repeat(64 * 1024 + 1))"), cwd), '');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('partial'); process.exit(3)"), cwd), '');
+  assert.equal(runCommand(nodeCommand("process.stderr.write('only an error')"), cwd), '');
+  assert.equal(runCommand('claude-gauge-no-such-command-anywhere', cwd), '');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('x')"), require('node:path').join(cwd, 'claude-gauge-no-such-folder')), '');
+});
+
+test('the command runner stops a slow command within its timeout and shows nothing', () => {
+  const { runCommand, COMMAND_TIMEOUT_MS } = require('../dist/statusline.js');
+  assert.ok(COMMAND_TIMEOUT_MS <= 1000, String(COMMAND_TIMEOUT_MS));
+  const started = Date.now();
+  const output = runCommand(nodeCommand("process.stdout.write('early'); setTimeout(() => {}, 10000)"), require('node:os').tmpdir());
+  const took = Date.now() - started;
+  assert.equal(output, '');
+  assert.ok(took >= COMMAND_TIMEOUT_MS && took < COMMAND_TIMEOUT_MS + 1500, `${took}ms`);
+});
+
+test('the command runner stops a command and its background jobs, which leave nothing running', { skip: process.platform === 'win32' && 'sh only' }, async () => {
+  const { runCommand, COMMAND_TIMEOUT_MS } = require('../dist/statusline.js');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'claude-gauge-command-'));
+  // A job that keeps the output open past the timeout, and one that finishes
+  // after a command that exits at once.
+  const started = Date.now();
+  assert.equal(runCommand('(sleep 1; echo late > slow) & echo early; sleep 5', dir), '');
+  assert.ok(Date.now() - started < COMMAND_TIMEOUT_MS + 1500);
+  assert.equal(runCommand('(sleep 1; echo late > fast) > /dev/null 2>&1 & echo early', dir), 'early');
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
+
 test('version shows the Claude Code version', () => {
   assert.equal(run({ version: '2.1.90' }, ['--show', 'version']), 'v2.1.90');
 });
@@ -491,10 +645,10 @@ const CONTROL = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069
 // 256-colour levels. HOSTILE's colours are none of these.
 const OWN_COLOURS = /\x1b\[(?:0|0;3\d|0;90|38;5;\d{1,3})m/g;
 
-// Renders the parts with the given payload, branch and setup, and checks
-// that the only control codes left are claude-gauge's own colours.
-const renderClean = (data, show, branch = 'main', setup = NOTHING_LOADED) => {
-  const raw = render(data, { nowMs: NOW, branchOf: () => branch, setupOf: () => setup, config: parseArgs(['--show', show]) });
+// Renders the parts with the given payload, branch, setup and switches, and
+// checks that the only control codes left are claude-gauge's own colours.
+const renderClean = (data, show, branch = 'main', setup = NOTHING_LOADED, args = [], options = {}) => {
+  const raw = render(data, { nowMs: NOW, branchOf: () => branch, setupOf: () => setup, config: parseArgs(['--show', show, ...args]), ...options });
   assert.doesNotMatch(raw.replace(OWN_COLOURS, ''), CONTROL, JSON.stringify(raw));
   return plain(raw);
 };
@@ -532,6 +686,23 @@ test('a hostile plan or user from the config prints without its control codes', 
   assert.equal(renderClean({ workspace: { current_dir: '/home/me/project' } }, 'plan', 'main', setup), 'Claude Max 20x (me@example.com)');
 });
 
+test('hostile custom text from --text prints without its control codes', () => {
+  assert.equal(renderClean({}, 'text', 'main', NOTHING_LOADED, ['--text', `work ${HOSTILE}laptop`]), 'work laptop');
+  assert.equal(renderClean({}, 'text', 'main', NOTHING_LOADED, [`--text=label\x1b]0;pwned`]), 'label');
+  // Text that is nothing but control codes leaves the part with nothing to show.
+  assert.equal(renderClean({}, 'text', 'main', NOTHING_LOADED, ['--text', HOSTILE]), '');
+});
+
+test("hostile output from --command's command prints without its control codes", () => {
+  const commandOutputOf = () => `prod-${HOSTILE}eu`;
+  assert.equal(renderClean({}, 'command', 'main', NOTHING_LOADED, ['--command', 'ctx'], { commandOutputOf }), 'prod-eu');
+  // And from a real command, whose escape codes reach the runner as they are.
+  const { runCommand: real } = require('../dist/statusline.js');
+  const hostile = real(nodeCommand("process.stdout.write('pro\\u001b]0;pwned\\u0007d\\u001b[2J\\u202eeu')"), require('node:os').tmpdir());
+  assert.match(hostile, /\x1b/);
+  assert.equal(renderClean({}, 'command', 'main', NOTHING_LOADED, ['--command', 'ctx'], { commandOutputOf: () => hostile }), 'prodeu');
+});
+
 test('every part prints hostile payload text without its control codes', () => {
   const { PARTS } = require('../dist/statusline.js');
   const h = (text) => `${text.slice(0, 1)}${HOSTILE}${text.slice(1)}`;
@@ -557,9 +728,21 @@ test('every part prints hostile payload text without its control codes', () => {
       // A key reaches the row as it is, so one with control codes stays out.
       [`seven_day_${h('sonnet')}`]: { used_percentage: 100 },
     },
+    transcript_path: '/home/me/session.jsonl',
+  };
+  const activity = {
+    tools: { running: [{ name: h('Edit'), target: h('src/a.ts') }], completed: { [h('Read')]: 2 } },
+    agents: [{ type: h('Explore'), model: h('Haiku'), description: h('Map it') }],
+    todos: [{ content: h('Write it'), activeForm: h('Writing it'), status: 'in_progress' }],
+    compactions: 1,
+    lastReplyAt: NOW - 60_000,
+    speed: 80,
   };
   const setup = { claudeMd: 1, rules: 0, mcp: 0, hooks: 0, plan: h('Claude Max 20x'), user: h('me@example.com') };
-  for (const part of PARTS) assert.ok(renderClean(data, part, h('main'), setup), part);
+  // The parts that print text from a switch, and the memory reading.
+  const args = ['--text', h('label'), '--command', 'ctx'];
+  const options = { memoryOf: () => ({ used: GIB, total: 2 * GIB }), commandOutputOf: () => h('output'), transcript: () => activity };
+  for (const part of PARTS) assert.ok(renderClean(data, part, h('main'), setup, args, options), part);
   assert.equal(
     renderClean(data, 'model,effort,style,agent,version,lines,ctx'),
     'Opus │ effort high │ style explanatory │ agent reviewer │ v2.1.90 │ +15 −23 │ ctx 43% ▓▓░░░ 86.0k',

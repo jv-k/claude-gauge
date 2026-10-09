@@ -8,3 +8,6 @@ eff high│sty explanatory│agt reviewer│cch 91% warm│spd 63%
 
 --compact --no-labels --show ctx,5h,7d,effort
 43% ▓▓░░░ 86.0k│9% ░░░┃░ → 14:00│41% ▓▓░┃░ → 3d│high
+
+--compact --show cost,today,week
+$1.23│tdy $1.23│wk $1.23
