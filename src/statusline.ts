@@ -111,6 +111,7 @@ const partRegistry = {
   tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, cwd }) => toolsPart(activity(), cwd) },
   agents: { description: 'running subagents, and those finished in the last minute', build: ({ activity, nowMs }) => agentsPart(activity(), nowMs) },
   todos: { description: 'the todo in progress, and how many todos are done', build: ({ activity, config }) => todosPart(activity(), config) },
+  skills: { description: 'skills used, and MCP servers called, marking those whose last call failed', build: ({ activity, config }) => skillsPart(activity(), config) },
   compactions: { description: 'how many times the conversation was compacted', build: ({ activity, config }) => compactionsPart(activity(), config) },
   reply: { description: 'time since the last reply', build: ({ activity, config, nowMs }) => replyPart(activity(), config, nowMs) },
   speed: { description: 'output tokens per second of the last response', build: ({ activity }) => speedPart(activity()) },
@@ -917,6 +918,30 @@ function todosPart(activity: TranscriptActivity, config: Config): string {
   return done === todos.length ? `${GREEN}✓${RESET} ${text}` : text;
 }
 
+// The skills part shows this many skills and this many MCP servers, and
+// every server whose latest call failed. A name is cut to DESCRIPTION_CHARS.
+const SKILLS_PART_SHOWN = 3;
+
+// The skills used, newest first, then the MCP servers called, those whose
+// latest call failed first: skills tdd code-review mcp ✗ linear github.
+function skillsPart(activity: TranscriptActivity, config: Config): string {
+  // The skills, then the servers, each with its label: none when it has nothing.
+  const sections: string[] = [];
+  const section = (label: string, items: string[]) => {
+    if (items.length) sections.push(`${GRAY}${labelOf(config, label)}${RESET}${items.join(' ')}`);
+  };
+  const skills = [...activity.skills].reverse().slice(0, SKILLS_PART_SHOWN);
+  section('skills', skills.map((s) => `${GRAY}${cut(s, DESCRIPTION_CHARS)}${RESET}`));
+  const newest = [...activity.mcp].reverse();
+  const failing = newest.filter((s) => s.failed);
+  const working = newest.filter((s) => !s.failed).slice(0, Math.max(0, SKILLS_PART_SHOWN - failing.length));
+  section('mcp', [
+    ...failing.map((s) => `${RED}✗ ${cut(s.name, DESCRIPTION_CHARS)}${RESET}`),
+    ...working.map((s) => `${GRAY}${cut(s.name, DESCRIPTION_CHARS)}${RESET}`),
+  ]);
+  return sections.join(' ');
+}
+
 // How many times the conversation was compacted: compactions 2. Nothing
 // before the first.
 function compactionsPart(activity: TranscriptActivity, config: Config): string {
@@ -1570,27 +1595,37 @@ interface Todo {
 
 type TodoStatus = 'pending' | 'in_progress' | 'completed';
 
+// An MCP server the session called, by the name its tools carry, and whether
+// its latest call failed.
+interface McpServer {
+  name: string;
+  failed?: boolean;
+}
+
 // What a transcript shows: the tool calls still running, oldest first, how
 // many calls of each tool have completed, the subagents, in the order they
-// started, the todo list, in its order, and the session counters: how many
-// times the conversation was compacted, when Claude last replied, in ms since
-// the epoch, and the last response's output tokens per second.
+// started, the todo list, in its order, the skills used and MCP servers
+// called, in the order last used, and the session counters: how many times
+// the conversation was compacted, when Claude last replied, in ms since the
+// epoch, and the last response's output tokens per second.
 interface TranscriptActivity {
   tools: { running: ToolCall[]; completed: Record<string, number> };
   agents: AgentRun[];
   todos: Todo[];
+  skills: string[];
+  mcp: McpServer[];
   compactions: number;
   lastReplyAt?: number;
   speed?: number;
 }
 
-const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [], compactions: 0 });
+const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [], skills: [], mcp: [], compactions: 0 });
 
 // Activity with every name and target sanitised. Two tool names that differ
 // only in control codes count as one.
-// A reader handed in from JavaScript may leave the agents, the todos and the
-// counters out, or give counters that are not numbers.
-function sanitiseActivity({ tools, agents = [], todos = [], compactions, lastReplyAt, speed }: TranscriptActivity): TranscriptActivity {
+// A reader handed in from JavaScript may leave out all but the tools, or give
+// counters that are not numbers.
+function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [], compactions, lastReplyAt, speed }: TranscriptActivity): TranscriptActivity {
   const running = tools.running.map(({ name, target }) => ({ name: sanitise(name), ...(target ? { target: sanitise(target) } : {}) }));
   const completed: Record<string, number> = {};
   for (const [name, count] of Object.entries(tools.completed)) completed[sanitise(name)] = (completed[sanitise(name)] ?? 0) + count;
@@ -1605,12 +1640,16 @@ function sanitiseActivity({ tools, agents = [], todos = [], compactions, lastRep
     ...(activeForm ? { activeForm: sanitise(activeForm) } : {}),
     status,
   }));
+  const cleanSkills = skills.map(sanitise);
+  const cleanMcp = mcp.map(({ name, failed }) => ({ name: sanitise(name), ...(failed ? { failed } : {}) }));
   const replyAt = finite(lastReplyAt);
   const tokensPerSecond = finite(speed);
   return {
     tools: { running, completed },
     agents: cleanAgents,
     todos: cleanTodos,
+    skills: cleanSkills,
+    mcp: cleanMcp,
     compactions: finite(compactions) ?? 0,
     ...(replyAt !== undefined ? { lastReplyAt: replyAt } : {}),
     ...(tokensPerSecond !== undefined ? { speed: tokensPerSecond } : {}),
@@ -1619,7 +1658,7 @@ function sanitiseActivity({ tools, agents = [], todos = [], compactions, lastRep
 
 // What the reader keeps between renders. version changes when the shape
 // does, so a state from an older claude-gauge is rebuilt, not misread.
-const TRANSCRIPT_STATE_VERSION = 4;
+const TRANSCRIPT_STATE_VERSION = 5;
 
 interface TranscriptState {
   version: number;
@@ -1632,7 +1671,7 @@ interface TranscriptState {
   // The tool calls with no result yet, by call id, oldest first. A call
   // that was running when the user sent a prompt has ended, but its result
   // may still come, and then counts.
-  pending: (ToolCall & { id: string; ended?: boolean })[];
+  pending: (ToolCall & { id: string; ended?: boolean; skill?: string })[];
   completed: Record<string, number>;
   // The subagents, by the id of the call that started them, in the order
   // they started. One in the background keeps running past its call's
@@ -1642,6 +1681,12 @@ interface TranscriptState {
   // result yet: a call changes the list once its result says it worked.
   todos: TodoEntry[];
   todoCalls: TodoCall[];
+  // The skills used and the MCP servers called, in the order last used,
+  // and the skill the user's last command names, until the skill's text
+  // shows it was a skill and not a built-in command.
+  skills: string[];
+  mcp: McpServer[];
+  command?: string;
   // How many times the conversation was compacted.
   compactions: number;
   // When the last prompt or tool result came, which asks for the next
@@ -1687,6 +1732,12 @@ const AGENT_TOOLS = ['Agent', 'Task'];
 // The tools that write the todo list: TodoWrite replaces it whole, and the
 // task tools that replaced it in Claude Code 2.1 add a task and change one.
 const TODO_TOOLS = ['TodoWrite', 'TaskCreate', 'TaskUpdate'];
+
+// The skills and the MCP servers kept at most, each the most recently used.
+const RECENT_KEPT = 20;
+
+// The text Claude Code adds as a meta message when a skill runs.
+const SKILL_TEXT = 'Base directory for this skill:';
 
 // The fs calls the reader makes, so a test can count the bytes it reads.
 type TranscriptFs = Pick<typeof fs, 'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync'>;
@@ -1830,7 +1881,7 @@ function createdTaskId(block: ContentBlock, record: TranscriptRecord): string | 
 // TodoWrite replaces the list, TaskCreate adds a pending task, and
 // TaskUpdate changes one, or drops it when it is deleted.
 function applyTodoCall(state: TranscriptState, todoCall: TodoCall, block: ContentBlock, record: TranscriptRecord): void {
-  if (block.is_error === true || (isObject(record.toolUseResult) && record.toolUseResult.success === false)) return;
+  if (resultFailed(block, record)) return;
   const input = isObject(todoCall.input) ? todoCall.input : {};
   if (todoCall.name === 'TodoWrite') {
     state.todos = writtenTodos(input);
@@ -1853,6 +1904,36 @@ function applyTodoCall(state: TranscriptState, todoCall: TodoCall, block: Conten
     if (activeForm) task.activeForm = activeForm;
   }
 }
+
+// The MCP server a tool belongs to, from the name Claude Code gives an MCP
+// server's tools: mcp__github__search_issues is github's.
+const mcpServerOf = (tool: string): string | undefined => /^mcp__(.+?)__./.exec(tool)?.[1];
+
+// A skill's name as the Skill tool or a command names it, with no slash.
+const skillName = (value: string | undefined): string | undefined => value?.trim().replace(/^\//, '') || undefined;
+
+// The skill a prompt's command names, from the text Claude Code records for
+// a slash command: <command-name>/tdd</command-name>.
+const commandOf = (content: unknown): string | undefined => skillName(/<command-name>([^<]*)<\/command-name>/.exec(textOf(content))?.[1]);
+
+// A list in the order last used, with item moved to the end, and the
+// oldest past RECENT_KEPT dropped.
+const usedNow = <T>(list: T[], item: T): T[] => [...list.filter((i) => i !== item), item].slice(-RECENT_KEPT);
+
+// An MCP server as called now, keeping whether its latest call failed.
+function useServer(state: TranscriptState, name: string): void {
+  state.mcp = usedNow(state.mcp, state.mcp.find((s) => s.name === name) ?? { name });
+}
+
+// A result that says its call did not work: an error, or data that says so.
+const resultFailed = (block: ContentBlock, record: TranscriptRecord) =>
+  block.is_error === true || (isObject(record.toolUseResult) && record.toolUseResult.success === false);
+
+// The error results Claude Code writes when the user rejects or interrupts a
+// call, or a permission rule denies it: the tool never ran, so they say
+// nothing about whether it works.
+const STOPPED_RESULTS = [/^The user doesn't want to proceed/, /^\[Request interrupted by user/, /^Permission to use /];
+const resultStopped = (block: ContentBlock) => STOPPED_RESULTS.some((stopped) => stopped.test(textOf(block.content).trim()));
 
 // The ended subagents past the newest ENDED_KEPT drop out; running ones stay.
 function capAgents(state: TranscriptState): void {
@@ -1890,7 +1971,8 @@ function speedOf(response: ResponseEntry | undefined): number | undefined {
 // as they are for --latest. A prompt from the user ends the turn, so a call
 // still running then was interrupted: it no longer shows as running, and a
 // subagent in the foreground shows as stopped. One in the background runs on
-// until its task notification.
+// until its task notification. A prompt that runs a command names a skill
+// when the next record is the skill's text.
 function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   if (!record || typeof record !== 'object' || record.isSidechain) return;
   const at = timeOf(record);
@@ -1899,6 +1981,13 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   if (record.type === 'user' && at !== undefined) state.askedAt = at;
   const content = record.message?.content;
   const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
+  const results = blocks.some((b) => b.type === 'tool_result');
+  const { command } = state;
+  delete state.command;
+  if (record.type === 'user' && record.isMeta && !results) {
+    if (command && textOf(content).startsWith(SKILL_TEXT)) state.skills = usedNow(state.skills, command);
+    return;
+  }
   // A task notification ends a task in the background, and is no prompt.
   const notified = record.type === 'user' ? taskNotification(record) : undefined;
   if (notified) {
@@ -1907,8 +1996,10 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
     capAgents(state);
     return;
   }
-  if (record.type === 'user' && !record.isMeta && !blocks.some((b) => b.type === 'tool_result')) {
+  if (record.type === 'user' && !results) {
     if (typeof content === 'string' || blocks.length) {
+      const named = commandOf(content);
+      if (named) state.command = named;
       state.pending = state.pending.map((p) => ({ ...p, ended: true })).slice(-ENDED_KEPT);
       for (const agent of state.agents) if (agent.endedAt === undefined && !agent.background) endAgent(agent, at, true);
       capAgents(state);
@@ -1918,7 +2009,10 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   for (const block of blocks) {
     if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
       const target = toolTarget(block.input);
-      state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}) }];
+      const skill = block.name === 'Skill' ? skillName(stringAt(block.input, 'skill')) : undefined;
+      state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}), ...(skill ? { skill } : {}) }];
+      const server = mcpServerOf(block.name);
+      if (server) useServer(state, server);
       if (AGENT_TOOLS.includes(block.name)) startAgent(state, block, at);
       if (TODO_TOOLS.includes(block.name)) state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
     } else if (record.type === 'user' && block.type === 'tool_result') {
@@ -1933,6 +2027,12 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
       if (!call) continue;
       state.pending = state.pending.filter((p) => p !== call);
       state.completed[call.name] = (state.completed[call.name] ?? 0) + 1;
+      if (call.skill && !resultFailed(block, record)) state.skills = usedNow(state.skills, call.skill);
+      const server = state.mcp.find((s) => s.name === mcpServerOf(call.name));
+      if (server && !resultStopped(block)) {
+        if (resultFailed(block, record)) server.failed = true;
+        else delete server.failed;
+      }
     }
   }
   capAgents(state);
@@ -1982,6 +2082,8 @@ function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptSta
       Array.isArray(state.agents) &&
       Array.isArray(state.todos) &&
       Array.isArray(state.todoCalls) &&
+      Array.isArray(state.skills) &&
+      Array.isArray(state.mcp) &&
       Number.isInteger(state.compactions) &&
       state.completed &&
       typeof state.completed === 'object';
@@ -2036,6 +2138,8 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
         agents: [],
         todos: [],
         todoCalls: [],
+        skills: [],
+        mcp: [],
         compactions: 0,
       };
 
@@ -2055,12 +2159,15 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
   const agents = state.agents.map(({ id, background, ...agent }) => agent);
   const todos = state.todos.map(({ id, ...todo }) => todo);
+  const mcp = state.mcp.map((server) => ({ ...server }));
   const lastReplyAt = state.response?.endedAt;
   const speed = speedOf(state.response);
   return {
     tools: { running, completed: { ...state.completed } },
     agents,
     todos,
+    skills: [...state.skills],
+    mcp,
     compactions: state.compactions,
     ...(lastReplyAt !== undefined ? { lastReplyAt } : {}),
     ...(speed !== undefined ? { speed } : {}),
@@ -2248,7 +2355,7 @@ export {
   COMMAND_TIMEOUT_MS,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, Setup, Memory };
+export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, McpServer, Setup, Memory };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
