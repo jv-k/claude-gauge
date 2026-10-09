@@ -15,7 +15,7 @@ const { PARTS, DEFAULT_ROWS, SWITCHES, THEMES } = require('../dist/statusline.js
 const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
 
 // The body rows of the first table under a heading, each as its list of
-// cells. With `header`, the first table whose first header cell is that word,
+// cells. With `header`, the first table whose first header cell is that text,
 // for a section with more than one table. A `\|` stays inside its cell.
 function tableRows(text, heading, header) {
   const lines = text.split('\n');
@@ -63,18 +63,20 @@ function drift(text, { parts, defaultRows, switches, themes, usage }) {
     return problems;
   };
   // The claude-gauge column of the claude-hud table names parts and switches
-  // in code spans, such as `ctx` and `--right <parts>`. Its other spans, such
-  // as `┃` and `!2 +1 ✘1 ?3`, show what a bar prints and name nothing.
+  // in code spans, such as `ctx` and `--right <parts>`. A span of one word is
+  // a part. Its other spans, such as `┃` and `!2 +1 ✘1 ?3`, show what a bar
+  // prints and name nothing.
   const migration = () => {
-    const column = 'the claude-gauge column under "## Coming from claude-hud"';
-    const rows = tableRows(text, '## Coming from claude-hud', 'claude-hud option');
-    if (!rows) return ['README has no claude-hud option table under "## Coming from claude-hud"'];
+    const heading = '## Coming from claude-hud';
+    const column = `the claude-gauge column under "${heading}"`;
+    const rows = tableRows(text, heading, 'claude-hud option');
+    if (!rows) return [`README has no claude-hud option table under "${heading}"`];
     const problems = [];
     for (const row of rows) {
       for (const [, span] of (row[1] ?? '').matchAll(/`([^`]+)`/g)) {
         const flag = /^--[a-z0-9][a-z0-9-]*/.exec(span)?.[0];
         if (flag && !switches.includes(flag)) problems.push(`${column} names the switch ${flag}, which the registry lacks`);
-        if (!flag && /^[a-z0-9]+$/.test(span) && !parts.includes(span)) problems.push(`${column} names the part ${span}, which the registry lacks`);
+        if (!flag && /^[\w-]+$/.test(span) && !parts.includes(span)) problems.push(`${column} names the part ${span}, which the registry lacks`);
       }
     }
     return problems;
@@ -95,11 +97,12 @@ function drift(text, { parts, defaultRows, switches, themes, usage }) {
 }
 
 // The switches in the CLI's USAGE text, which `claude-gauge --help` prints:
-// each line of it that starts with a switch, such as `  --replace   ...`.
+// each line of it that starts with a switch, such as `  --replace   ...`, or
+// with a short name and then the switch, such as `  -y, --yes   ...`.
 function usageSwitches(source) {
   const usage = /const USAGE = `([^`]*)`/.exec(source);
   if (!usage) throw new Error('src/cli.ts has no USAGE text');
-  return [...usage[1].matchAll(/^ +(--[a-z0-9][a-z0-9-]*)/gm)].map((m) => m[1]);
+  return [...usage[1].matchAll(/^ +(?:-[a-z0-9], +)?(--[a-z0-9][a-z0-9-]*)/gm)].map((m) => m[1]);
 }
 
 const cli = fs.readFileSync(path.join(__dirname, '..', 'src', 'cli.ts'), 'utf8');
@@ -112,7 +115,7 @@ const registry = {
   usage: usageSwitches(cli),
 };
 
-test('the README documents every status line part, switch and theme in the registry, and no others', () => {
+test('the README documents every status line part, switch and theme in the registry, and every switch in the USAGE text, and no others', () => {
   assert.deepEqual(drift(readme, registry), []);
 });
 
@@ -180,4 +183,28 @@ test('an unknown switch in the claude-gauge column of the migration table fails 
   assert.deepEqual(drift(stale, registry), [
     'the claude-gauge column under "## Coming from claude-hud" names the switch --hour-12, which the registry lacks',
   ]);
+});
+
+test('a switch line taken out of the USAGE text in the CLI source fails the sync', () => {
+  const line = '  --replace                  replace a status line that is not claude-gauge\'s\n';
+  assert.ok(cli.includes(line));
+  const usage = usageSwitches(cli.replace(line, ''));
+  assert.deepEqual(drift(readme, { ...registry, usage }), [
+    'the switch table under "### From npm" documents --replace, which the CLI\'s USAGE text lacks',
+  ]);
+});
+
+test('a switch line added to the USAGE text in the CLI source fails the sync, with or without a short name first', () => {
+  const after = '  --replace                  replace a status line that is not claude-gauge\'s\n';
+  const usage = usageSwitches(cli.replace(after, after + '  -n, --dry-run              show the settings, and write nothing\n'));
+  assert.deepEqual(drift(readme, { ...registry, usage }), ['--dry-run has no row in the switch table under "### From npm"']);
+});
+
+test('a part name with a hyphen, a capital or an underscore in the migration column fails the sync', () => {
+  for (const name of ['memory-usage', 'memUsage', 'ram_usage']) {
+    const stale = readme.replace('| `display.showMemoryUsage` | `ram` |', `| \`display.showMemoryUsage\` | \`${name}\` |`);
+    assert.deepEqual(drift(stale, registry), [
+      `the claude-gauge column under "## Coming from claude-hud" names the part ${name}, which the registry lacks`,
+    ]);
+  }
 });
