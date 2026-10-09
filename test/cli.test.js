@@ -295,3 +295,15 @@ test('a failed uninstall keeps the saved status line for the next try', (t) => {
   ok(run(dir, ['uninstall']));
   assert.deepEqual(settingsOf(dir), { statusLine: cmd('~/bin/my-status.sh') });
 });
+
+test('uninstall stops at a saved status line it cannot read, and keeps the settings and the file', () => {
+  const dir = configFolder({ statusLine: cmd('~/bin/my-status.sh') });
+  ok(run(dir, ['setup', '--yes', '--replace']));
+  const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
+  fs.writeFileSync(savedStatusLine(dir), '{ "statusLine": ');
+  const r = run(dir, ['uninstall']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /previous-statusline\.json .*Fix or delete it by hand/);
+  assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
+  assert.equal(fs.readFileSync(savedStatusLine(dir), 'utf8'), '{ "statusLine": ');
+});

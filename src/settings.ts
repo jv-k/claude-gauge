@@ -65,8 +65,10 @@ interface Plan {
 
 // A command that runs one of claude-gauge's scripts, wherever the copy lives:
 // ~/.claude/claude-gauge/dist/, its runtime/ copy, the scripts from before
-// they moved into dist/, or a Windows path to any of them.
-const SCRIPT = /claude-gauge[\\/](?:[^\s'"]*[\\/])?(statusline|tokenline)\.js\b/;
+// they moved into dist/, or a Windows path to any of them. The folder name
+// must be a whole path component and the script name must end the word, so
+// not-claude-gauge/ or statusline.js.old is someone else's.
+const SCRIPT = /(?<![^\s'"\\/])claude-gauge[\\/](?:[^\s'"]*[\\/])?(statusline|tokenline)\.js(?![^\s'"])/;
 
 const scriptOf = (command: unknown) => (typeof command === 'string' ? SCRIPT.exec(command)?.[1] : undefined);
 const isInstruct = (command: unknown) => typeof command === 'string' && /(?:^|\s)--instruct\b/.test(command);
@@ -93,7 +95,8 @@ function readHooks(settings: Json): Record<string, HookEntry[]> | undefined {
   if (hooks === undefined) return undefined;
   if (!isObject(hooks)) throw new Error('settings.json: hooks is not an object, so claude-gauge leaves it alone. Fix it by hand.');
   for (const [event, entries] of Object.entries(hooks)) {
-    if (!Array.isArray(entries) || !entries.every((e) => isObject(e) && (e.hooks === undefined || Array.isArray(e.hooks)))) {
+    const readable = (e: unknown) => isObject(e) && (e.hooks === undefined || (Array.isArray(e.hooks) && e.hooks.every(isObject)));
+    if (!Array.isArray(entries) || !entries.every(readable)) {
       throw new Error(`settings.json: hooks.${event} is not a list of hook entries, so claude-gauge leaves it alone. Fix it by hand.`);
     }
   }

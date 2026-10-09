@@ -125,6 +125,18 @@ test('Windows paths are recognised as claude-gauge too', () => {
   assert.equal(plan(current, { statusLine: SL }).found, 'claude-gauge');
 });
 
+test('a path that only looks like claude-gauge is someone else', () => {
+  for (const command of [
+    'node /tmp/not-claude-gauge/runtime/statusline.js',
+    'node /tmp/claude-gauge/runtime/statusline.js.old',
+    'node ~/.claude/claude-gauge-fork/dist/statusline.js',
+  ]) {
+    assert.equal(plan({ statusLine: cmd(command) }, { statusLine: SL }).found, 'other', command);
+  }
+  assert.equal(plan({ statusLine: cmd('node "C:/Users/u/.claude/claude-gauge/dist/statusline.js" --show ctx') }, { statusLine: SL }).found, 'claude-gauge');
+  assert.equal(plan({ statusLine: cmd("node '/home/u/.claude/claude-gauge/statusline.js'") }, { statusLine: SL }).found, 'claude-gauge');
+});
+
 test('removing one bar: null takes out only that bar', () => {
   const installed = plan({ hooks: { Stop: [entry('afplay done.aiff')] } }, { statusLine: SL, tokenLine: TL }).settings;
   assert.deepEqual(plan(installed, { tokenLine: null }).settings, {
@@ -180,6 +192,8 @@ test('leaves its input alone', () => {
 test('refuses hooks it cannot read rather than overwrite them', () => {
   assert.throws(() => plan({ hooks: { Stop: { hooks: [] } } }, { tokenLine: TL }), /hooks\.Stop/);
   assert.throws(() => plan({ hooks: [] }, { tokenLine: TL }), /hooks/);
+  assert.throws(() => plan({ hooks: { Stop: [{ hooks: [null] }] } }, { tokenLine: TL }), /hooks\.Stop .*Fix it by hand/);
+  assert.throws(() => require('../dist/settings.js').installed({ hooks: { Stop: [{ hooks: ['x'] }] } }), /hooks\.Stop .*Fix it by hand/);
   assert.throws(() => plan({ statusLine: 'node x.js' }, { statusLine: SL }), /statusLine/);
 });
 

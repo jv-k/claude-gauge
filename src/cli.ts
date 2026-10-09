@@ -147,13 +147,29 @@ function copyRuntime(dir: string): void {
 }
 
 // The status line claude-gauge replaced: undefined when none is saved, null
-// when there was none to replace.
+// when there was none to replace. Only a missing file means none is saved: a
+// file it cannot read or parse stops the command, because going on would
+// drop the only record of the status line to put back.
 function savedStatusLine(): StatusLineSetting | null | undefined {
+  const file = savedStatusLineFile();
+  let text: string;
   try {
-    return (JSON.parse(fs.readFileSync(savedStatusLineFile(), 'utf8')) as { statusLine: StatusLineSetting | null }).statusLine;
-  } catch {
-    return undefined;
+    text = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new Error(`Cannot read ${file}: ${(err as Error).message}. Fix or delete it by hand.`);
   }
+  let saved: unknown;
+  try {
+    saved = JSON.parse(text);
+  } catch {
+    saved = undefined;
+  }
+  const statusLine = (saved as { statusLine?: unknown } | undefined)?.statusLine;
+  if (typeof saved !== 'object' || saved === null || !(statusLine === null || (typeof statusLine === 'object' && !Array.isArray(statusLine)))) {
+    throw new Error(`${file} does not hold a saved status line, so claude-gauge cannot tell what to put back. Fix or delete it by hand.`);
+  }
+  return statusLine as StatusLineSetting | null;
 }
 
 const say = (...lines: string[]) => process.stdout.write(lines.join('\n') + '\n');
