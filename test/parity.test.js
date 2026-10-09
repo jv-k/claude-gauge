@@ -15,6 +15,12 @@ const root = path.join(__dirname, '..');
 const hasBun = spawnSync('bun', ['--version'], { encoding: 'utf8' }).status === 0;
 const withoutBun = !hasBun && 'bun is not installed';
 
+// The model part names the API provider from the environment, so the suite
+// runs without the caller's provider variables.
+for (const name of Object.keys(process.env)) {
+  if (/^CLAUDE_CODE_USE_|^ANTHROPIC_BASE_URL$/.test(name)) delete process.env[name];
+}
+
 // A config folder of its own, so a terminal render here never saves usage
 // into the real one.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));

@@ -6,6 +6,12 @@ const { render, parseArgs } = require('../dist/statusline.js');
 
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
+// The model part names the API provider from the environment, so the suite
+// runs without the caller's provider variables.
+for (const name of Object.keys(process.env)) {
+  if (/^CLAUDE_CODE_USE_|^ANTHROPIC_BASE_URL$/.test(name)) delete process.env[name];
+}
+
 // A fixed local noon, so every reset below is relative to a known "now".
 const NOW = new Date(2026, 9, 7, 12, 0, 0).getTime();
 const at = (ms) => Math.floor(ms / 1000);
@@ -221,6 +227,314 @@ test('spend shows dollars against the limit, or the percentage until dollars arr
   assert.equal(run({}, ['--show', 'spend', '--show', 'model']), '');
 });
 
+test('model names the provider when requests do not go to the first-party API', () => {
+  const data = { model: { display_name: 'Opus 5.5' } };
+  const model = (env) => plain(render(data, { config: parseArgs(['--show', 'model']), env }));
+  assert.equal(model({}), 'Opus 5.5');
+  assert.equal(model({ CLAUDE_CODE_USE_BEDROCK: '1' }), 'Opus 5.5 (Bedrock)');
+  assert.equal(model({ CLAUDE_CODE_USE_MANTLE: 'true' }), 'Opus 5.5 (Bedrock)');
+  assert.equal(model({ CLAUDE_CODE_USE_VERTEX: '1' }), 'Opus 5.5 (Vertex)');
+  assert.equal(model({ CLAUDE_CODE_USE_FOUNDRY: '1' }), 'Opus 5.5 (Foundry)');
+  assert.equal(model({ CLAUDE_CODE_USE_ANTHROPIC_AWS: '1' }), 'Opus 5.5 (AWS)');
+  assert.equal(model({ ANTHROPIC_BASE_URL: 'https://llm.example.com/anthropic' }), 'Opus 5.5 (Enterprise)');
+  // The first-party API under its own name, and switches set off, are no
+  // provider at all.
+  assert.equal(model({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com' }), 'Opus 5.5');
+  assert.equal(model({ CLAUDE_CODE_USE_BEDROCK: '0', CLAUDE_CODE_USE_VERTEX: '' }), 'Opus 5.5');
+  // Without a model there is nothing to label.
+  assert.equal(plain(render({}, { config: parseArgs(['--show', 'model']), env: { CLAUDE_CODE_USE_BEDROCK: '1' } })), '');
+});
+
+// Renders the given parts with a setup in place of the files on disk.
+const withSetup = (setup, show, args = []) =>
+  plain(render({ workspace: { current_dir: '/home/me/project' } }, { config: parseArgs(['--show', show, ...args]), setupOf: () => setup }));
+
+const NOTHING_LOADED = { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 };
+
+test('env counts the CLAUDE.md files, rules, MCP servers and hooks loaded', () => {
+  const setup = { claudeMd: 2, rules: 4, mcp: 3, hooks: 2 };
+  assert.equal(withSetup(setup, 'env'), 'env 2 md 4 rules 3 mcp 2 hooks');
+  assert.equal(withSetup(setup, 'env', ['--no-labels']), '2 md 4 rules 3 mcp 2 hooks');
+  // One of a kind reads as one; nothing of a kind stays out.
+  assert.equal(withSetup({ claudeMd: 1, rules: 1, mcp: 0, hooks: 1 }, 'env'), 'env 1 md 1 rule 1 hook');
+  assert.equal(withSetup(NOTHING_LOADED, 'env'), '');
+});
+
+test('env reads the setup of the folder Claude Code runs in', () => {
+  let seen;
+  render({ workspace: { current_dir: '/home/me/project' } }, {
+    config: parseArgs(['--show', 'env,plan']),
+    setupOf: (cwd) => ((seen = cwd), NOTHING_LOADED),
+  });
+  assert.equal(seen, '/home/me/project');
+});
+
+test('plan shows the subscription and the signed-in user', () => {
+  const plan = (fields) => withSetup({ ...NOTHING_LOADED, ...fields }, 'plan');
+  assert.equal(plan({ plan: 'Claude Max 20x', user: 'me@example.com' }), 'Claude Max 20x (me@example.com)');
+  assert.equal(plan({ plan: 'Claude Pro' }), 'Claude Pro');
+  assert.equal(plan({ user: 'me@example.com' }), 'me@example.com');
+  assert.equal(plan({}), '');
+});
+
+// A home folder, a managed settings folder and a project two levels under
+// the home, in a temporary folder, with the given files written into it.
+// files may be a function of the temporary folder's path.
+function setupTree(files) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'claude-gauge-setup-')));
+  for (const [name, content] of Object.entries(typeof files === 'function' ? files(root) : files)) {
+    const file = path.join(root, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
+  }
+  const dir = (name) => (fs.mkdirSync(path.join(root, name), { recursive: true }), path.join(root, name));
+  const home = dir('home');
+  const managedDir = dir('managed');
+  // What readSetup takes to read this tree and nothing else.
+  const options = { env: {}, home, managedDir };
+  return { root, project: dir('home/work/project'), options };
+}
+
+const hooks = (...groups) => Object.fromEntries(groups.map(([event, n]) => [event, [{ hooks: Array.from({ length: n }, () => ({ type: 'command', command: 'true' })) }]]));
+
+test('the setup counts what Claude Code loads, from the files on disk', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const project = 'home/work/project';
+  const tree = setupTree((root) => ({
+    // CLAUDE.md: managed, user, an ancestor of the project, and the project's
+    // three. One in a subfolder loads only on demand, so it does not count.
+    'managed/CLAUDE.md': '',
+    'home/.claude/CLAUDE.md': '',
+    'home/work/CLAUDE.md': '',
+    [`${project}/CLAUDE.md`]: '',
+    [`${project}/.claude/CLAUDE.md`]: '',
+    [`${project}/CLAUDE.local.md`]: '',
+    [`${project}/src/CLAUDE.md`]: '',
+    // Rules: every .md under the user's rules and the rules of the project
+    // and the folders above it, at any depth.
+    'home/.claude/rules/style.md': '',
+    'home/work/.claude/rules/shared.md': '',
+    'home/.claude/rules/lang/ts.md': '',
+    'home/.claude/rules/notes.txt': '',
+    [`${project}/.claude/rules/testing.md`]: '',
+    // MCP servers: user and local scope, the project's .mcp.json, and the
+    // managed file, each named once, less a project server turned off.
+    'home/.claude.json': {
+      mcpServers: { github: {}, linear: {} },
+      projects: { [require('node:path').join(root, project)]: { mcpServers: { neon: {} } } },
+      oauthAccount: { emailAddress: 'me@example.com' },
+    },
+    [`${project}/.mcp.json`]: { mcpServers: { github: {}, sentry: {}, figma: {} } },
+    'managed/managed-mcp.json': { mcpServers: { intranet: {} } },
+    // Hooks: one per handler, across user, project, local and managed settings.
+    'home/.claude/settings.json': { hooks: hooks(['Stop', 2], ['SessionStart', 1]) },
+    [`${project}/.claude/settings.json`]: { hooks: hooks(['PreToolUse', 1]) },
+    [`${project}/.claude/settings.local.json`]: { disabledMcpjsonServers: ['figma'] },
+    'managed/managed-settings.json': { hooks: hooks(['Stop', 1]) },
+    // The plan, from the subscription fields beside the login.
+    'home/.claude/.credentials.json': { claudeAiOauth: { accessToken: 'secret', subscriptionType: 'max', rateLimitTier: 'default_claude_max_20x' } },
+  }));
+  const setup = readSetup(tree.project, tree.options);
+  assert.deepEqual(setup, { claudeMd: 6, rules: 4, mcp: 5, hooks: 5, plan: 'Claude Max 20x', user: 'me@example.com' });
+  assert.doesNotMatch(JSON.stringify(setup), /secret/);
+});
+
+test('the setup follows CLAUDE_CONFIG_DIR, and names each plan', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const plan = (claudeAiOauth) => {
+    const tree = setupTree({ 'config/.credentials.json': { claudeAiOauth }, 'config/.claude.json': { oauthAccount: { emailAddress: 'work@example.com' } } });
+    const env = { CLAUDE_CONFIG_DIR: require('node:path').join(tree.root, 'config') };
+    const { plan, user } = readSetup(tree.project, { ...tree.options, env });
+    return [plan, user];
+  };
+  assert.deepEqual(plan({ subscriptionType: 'max', rateLimitTier: 'default_claude_max_5x' }), ['Claude Max 5x', 'work@example.com']);
+  assert.deepEqual(plan({ subscriptionType: 'pro' }), ['Claude Pro', 'work@example.com']);
+  assert.deepEqual(plan({ subscriptionType: 'team', rateLimitTier: 'default_claude_team' }), ['Claude Team', 'work@example.com']);
+  assert.deepEqual(plan({}), [undefined, 'work@example.com']);
+});
+
+test('the plan falls back to the account in .claude.json where no credentials file exists', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const plan = (oauthAccount) => {
+    const tree = setupTree({ 'home/.claude.json': { oauthAccount: { emailAddress: 'me@example.com', ...oauthAccount } } });
+    return readSetup(tree.project, tree.options).plan;
+  };
+  assert.equal(plan({ organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x' }), 'Claude Max 20x');
+  assert.equal(plan({ organizationType: 'claude_pro' }), 'Claude Pro');
+  assert.equal(plan({ organizationType: 'api' }), undefined);
+  assert.equal(plan({}), undefined);
+});
+
+test('the setup is empty where there is nothing to read, and skips files that are not JSON', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const empty = setupTree({});
+  assert.deepEqual(readSetup(empty.project, empty.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
+  const broken = setupTree({
+    'home/.claude.json': '{ not json',
+    'home/.claude/settings.json': '[1, 2',
+    'home/.claude/.credentials.json': 'null',
+    'home/work/project/.mcp.json': { mcpServers: ['not', 'an', 'object'] },
+    'home/work/project/.claude/settings.json': { hooks: { Stop: 'not a list' } },
+  });
+  assert.deepEqual(readSetup(broken.project, broken.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
+});
+
+const GIB = 1024 ** 3;
+
+test('the memory reading on Linux counts what is not available as used, from /proc/meminfo', () => {
+  const { readMemory } = require('../dist/statusline.js');
+  const meminfo = 'MemTotal:       16384000 kB\nMemFree:         1024000 kB\nMemAvailable:    4096000 kB\nBuffers:          102400 kB\n';
+  const read = (text) => readMemory({ platform: 'linux', readFile: () => text, totalmem: () => 8 * GIB, freemem: () => 2 * GIB });
+  assert.deepEqual(read(meminfo), { used: (16384000 - 4096000) * 1024, total: 16384000 * 1024 });
+  // A kernel without MemAvailable, or no /proc, falls back to Node's figures.
+  assert.deepEqual(read('MemTotal: 16384000 kB\nMemFree: 1024000 kB\n'), { used: 6 * GIB, total: 8 * GIB });
+  const missing = readMemory({ platform: 'linux', readFile: () => { throw new Error('ENOENT'); }, totalmem: () => 8 * GIB, freemem: () => 2 * GIB });
+  assert.deepEqual(missing, { used: 6 * GIB, total: 8 * GIB });
+});
+
+test('the memory reading on macOS is app memory, wired and compressed, as Activity Monitor counts it', () => {
+  const { readMemory } = require('../dist/statusline.js');
+  const vmStat = [
+    'Mach Virtual Memory Statistics: (page size of 16384 bytes)',
+    'Pages free:                                     6733.',
+    'Pages active:                                 252088.',
+    'Pages inactive:                               250267.',
+    'Pages wired down:                             100000.',
+    'Pages purgeable:                                1000.',
+    'Anonymous pages:                              201000.',
+    'Pages occupied by compressor:                  50000.',
+  ].join('\n');
+  let ran;
+  const read = (text) =>
+    readMemory({ platform: 'darwin', totalmem: () => 24 * GIB, freemem: () => GIB, run: (cmd, args) => ((ran = [cmd, ...args]), text) });
+  assert.deepEqual(read(vmStat), { used: (200000 + 100000 + 50000) * 16384, total: 24 * GIB });
+  assert.deepEqual(ran, ['vm_stat']);
+  // Without vm_stat's figures, or without its app memory, it falls back to
+  // Node's.
+  assert.deepEqual(read(''), { used: 23 * GIB, total: 24 * GIB });
+  assert.deepEqual(read(vmStat.replace(/^Anonymous pages.*$/m, '')), { used: 23 * GIB, total: 24 * GIB });
+});
+
+test('the memory reading on Windows takes the available memory Node reports', () => {
+  const { readMemory } = require('../dist/statusline.js');
+  const memory = readMemory({ platform: 'win32', totalmem: () => 32 * GIB, freemem: () => 12 * GIB, run: () => assert.fail('no command on Windows') });
+  assert.deepEqual(memory, { used: 20 * GIB, total: 32 * GIB });
+  // Nothing to show when the total is unknown.
+  assert.equal(readMemory({ platform: 'win32', totalmem: () => 0, freemem: () => 0 }), undefined);
+});
+
+test('the memory reading works on the machine running the tests', () => {
+  const { readMemory } = require('../dist/statusline.js');
+  const memory = readMemory();
+  assert.ok(memory, process.platform);
+  assert.ok(memory.total > 0 && memory.used >= 0 && memory.used <= memory.total, JSON.stringify(memory));
+});
+
+// Renders with the given switches and a memory reading in place of the
+// machine's, colours stripped.
+const withMemory = (memory, args) => plain(render({}, { config: parseArgs(args), memoryOf: () => memory }));
+
+test('ram shows the memory in use as a percentage, a bar and the amount, coloured by use', () => {
+  const memory = { used: 10.5 * GIB, total: 16 * GIB };
+  assert.equal(withMemory(memory, ['--show', 'ram']), 'ram 66% ▓▓▓░░ 10.5G');
+  assert.equal(withMemory(memory, ['--show', 'ram', '--segments', '10', '--no-labels']), '66% ▓▓▓▓▓▓▓░░░ 10.5G');
+  assert.equal(withMemory(memory, ['--show', 'ram', '--no-bars']), 'ram 66% 10.5G');
+  assert.equal(withMemory({ used: 120 * GIB, total: 128 * GIB }, ['--show', 'ram']), 'ram 94% ▓▓▓▓▓ 120G');
+  assert.equal(withMemory({ used: 0.4 * GIB, total: 1 * GIB }, ['--show', 'ram']), 'ram 40% ▓▓░░░ 0.4G');
+  const red = render({}, { config: parseArgs(['--show', 'ram']), memoryOf: () => ({ used: 95, total: 100 }) });
+  assert.ok(red.startsWith('\x1b[38;5;124m'));
+  // Nothing to show without a reading.
+  assert.equal(withMemory(undefined, ['--show', 'ram', '--show', 'model']), '');
+});
+
+test('ram reads the memory only when a row shows it', () => {
+  let reads = 0;
+  const memoryOf = () => ((reads += 1), { used: GIB, total: 2 * GIB });
+  render({ model: { display_name: 'Opus' } }, { config: parseArgs(['--show', 'model']), memoryOf });
+  assert.equal(reads, 0);
+  render({}, { config: parseArgs(['--show', 'ram', '--show', 'ram']), memoryOf });
+  assert.equal(reads, 1);
+});
+
+test('text shows the fixed text --text gives it', () => {
+  assert.equal(run({}, ['--show', 'text', '--text', 'work laptop']), 'work laptop');
+  assert.equal(run({ model: { display_name: 'Opus' } }, ['--show', 'text,model', '--text=prod: eu-west']), 'prod: eu-west │ Opus');
+  // The last --text wins, and without one the part has nothing to show.
+  assert.equal(run({}, ['--show', 'text', '--text', 'one', '--text', 'two']), 'two');
+  assert.equal(run({}, ['--show', 'text', '--show', 'model']), '');
+  assert.equal(run({}, ['--show', 'text', '--text', '']), '');
+});
+
+// Renders with the given switches and a command runner in place of the
+// shell, colours stripped, and the commands it was asked to run.
+const withCommand = (args, output = 'out') => {
+  const ran = [];
+  const commandOutputOf = (command, cwd) => (ran.push([command, cwd]), output);
+  const data = { model: { display_name: 'Opus' }, workspace: { current_dir: '/home/me/project' } };
+  return { shown: plain(render(data, { config: parseArgs(args), commandOutputOf })), ran };
+};
+
+test('command shows the output of the command --command names, run in the folder Claude Code runs in', () => {
+  const { shown, ran } = withCommand(['--show', 'command,model', '--command', 'kubectl config current-context'], 'prod-eu');
+  assert.equal(shown, 'prod-eu │ Opus');
+  assert.deepEqual(ran, [['kubectl config current-context', '/home/me/project']]);
+  // Shown twice, it runs once.
+  assert.deepEqual(withCommand(['--show', 'command', '--show', 'command', '--command', 'date']).ran.length, 1);
+  // Empty output leaves the part with nothing to show.
+  assert.equal(withCommand(['--show', 'command,model', '--command', 'true'], '').shown, 'Opus');
+});
+
+test('command runs nothing unless --command names a command and a row shows the part', () => {
+  assert.deepEqual(withCommand(['--show', 'command,model']), { shown: 'Opus', ran: [] });
+  assert.deepEqual(withCommand(['--show', 'command,model', '--command', '']), { shown: 'Opus', ran: [] });
+  assert.deepEqual(withCommand(['--show', 'model', '--command', 'date']), { shown: 'Opus', ran: [] });
+  assert.deepEqual(withCommand(['--command', 'date']).ran, []);
+});
+
+// A shell command that runs this Node with a script. Double quotes work in
+// sh and in cmd.exe alike.
+const nodeCommand = (script) => `${JSON.stringify(process.execPath)} -e "${script}"`;
+
+test('the command runner keeps the first line of output, and nothing when the command fails', () => {
+  const { runCommand } = require('../dist/statusline.js');
+  const cwd = require('node:os').tmpdir();
+  assert.equal(runCommand(nodeCommand("process.stdout.write('first line\\nsecond line\\n')"), cwd), 'first line');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('\\n  padded  \\r\\nnext')"), cwd), 'padded');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('\\x1b[2J\\nvisible')"), cwd), 'visible');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('x'.repeat(64 * 1024 + 1))"), cwd), '');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('partial'); process.exit(3)"), cwd), '');
+  assert.equal(runCommand(nodeCommand("process.stderr.write('only an error')"), cwd), '');
+  assert.equal(runCommand('claude-gauge-no-such-command-anywhere', cwd), '');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('x')"), require('node:path').join(cwd, 'claude-gauge-no-such-folder')), '');
+});
+
+test('the command runner stops a slow command within its timeout and shows nothing', () => {
+  const { runCommand, COMMAND_TIMEOUT_MS } = require('../dist/statusline.js');
+  assert.ok(COMMAND_TIMEOUT_MS <= 1000, String(COMMAND_TIMEOUT_MS));
+  const started = Date.now();
+  const output = runCommand(nodeCommand("process.stdout.write('early'); setTimeout(() => {}, 10000)"), require('node:os').tmpdir());
+  const took = Date.now() - started;
+  assert.equal(output, '');
+  assert.ok(took >= COMMAND_TIMEOUT_MS && took < COMMAND_TIMEOUT_MS + 1500, `${took}ms`);
+});
+
+test('the command runner stops a command and its background jobs, which leave nothing running', { skip: process.platform === 'win32' && 'sh only' }, async () => {
+  const { runCommand, COMMAND_TIMEOUT_MS } = require('../dist/statusline.js');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'claude-gauge-command-'));
+  // A job that keeps the output open past the timeout, and one that finishes
+  // after a command that exits at once.
+  const started = Date.now();
+  assert.equal(runCommand('(sleep 1; echo late > slow) & echo early; sleep 5', dir), '');
+  assert.ok(Date.now() - started < COMMAND_TIMEOUT_MS + 1500);
+  assert.equal(runCommand('(sleep 1; echo late > fast) > /dev/null 2>&1 & echo early', dir), 'early');
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
+
 test('version shows the Claude Code version', () => {
   assert.equal(run({ version: '2.1.90' }, ['--show', 'version']), 'v2.1.90');
 });
@@ -251,10 +565,10 @@ const CONTROL = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069
 // 256-colour levels. HOSTILE's colours are none of these.
 const OWN_COLOURS = /\x1b\[(?:0|0;3\d|0;90|38;5;\d{1,3})m/g;
 
-// Renders the parts with the given payload and branch, and checks that the
-// only control codes left are claude-gauge's own colours.
-const renderClean = (data, show, branch = 'main', transcript = undefined) => {
-  const raw = render(data, { nowMs: NOW, branchOf: () => branch, config: parseArgs(['--show', show]), transcript });
+// Renders the parts with the given payload, branch, setup and switches, and
+// checks that the only control codes left are claude-gauge's own colours.
+const renderClean = (data, show, branch = 'main', setup = NOTHING_LOADED, args = [], options = {}) => {
+  const raw = render(data, { nowMs: NOW, branchOf: () => branch, setupOf: () => setup, config: parseArgs(['--show', show, ...args]), ...options });
   assert.doesNotMatch(raw.replace(OWN_COLOURS, ''), CONTROL, JSON.stringify(raw));
   return plain(raw);
 };
@@ -287,6 +601,28 @@ test('a hostile pull request prints without its control codes', () => {
   assert.equal(renderClean({ pr: { number: `12${HOSTILE}34` } }, 'pr'), '#1234');
 });
 
+test('a hostile plan or user from the config prints without its control codes', () => {
+  const setup = { ...NOTHING_LOADED, plan: `Claude ${HOSTILE}Max 20x`, user: `me@${HOSTILE}example.com` };
+  assert.equal(renderClean({ workspace: { current_dir: '/home/me/project' } }, 'plan', 'main', setup), 'Claude Max 20x (me@example.com)');
+});
+
+test('hostile custom text from --text prints without its control codes', () => {
+  assert.equal(renderClean({}, 'text', 'main', NOTHING_LOADED, ['--text', `work ${HOSTILE}laptop`]), 'work laptop');
+  assert.equal(renderClean({}, 'text', 'main', NOTHING_LOADED, [`--text=label\x1b]0;pwned`]), 'label');
+  // Text that is nothing but control codes leaves the part with nothing to show.
+  assert.equal(renderClean({}, 'text', 'main', NOTHING_LOADED, ['--text', HOSTILE]), '');
+});
+
+test("hostile output from --command's command prints without its control codes", () => {
+  const commandOutputOf = () => `prod-${HOSTILE}eu`;
+  assert.equal(renderClean({}, 'command', 'main', NOTHING_LOADED, ['--command', 'ctx'], { commandOutputOf }), 'prod-eu');
+  // And from a real command, whose escape codes reach the runner as they are.
+  const { runCommand: real } = require('../dist/statusline.js');
+  const hostile = real(nodeCommand("process.stdout.write('pro\\u001b]0;pwned\\u0007d\\u001b[2J\\u202eeu')"), require('node:os').tmpdir());
+  assert.match(hostile, /\x1b/);
+  assert.equal(renderClean({}, 'command', 'main', NOTHING_LOADED, ['--command', 'ctx'], { commandOutputOf: () => hostile }), 'prodeu');
+});
+
 test('every part prints hostile payload text without its control codes', () => {
   const { PARTS } = require('../dist/statusline.js');
   const h = (text) => `${text.slice(0, 1)}${HOSTILE}${text.slice(1)}`;
@@ -308,7 +644,11 @@ test('every part prints hostile payload text without its control codes', () => {
     transcript_path: '/home/me/session.jsonl',
   };
   const activity = { tools: { running: [{ name: h('Edit'), target: h('src/a.ts') }], completed: { [h('Read')]: 2 } } };
-  for (const part of PARTS) assert.ok(renderClean(data, part, h('main'), () => activity), part);
+  const setup = { claudeMd: 1, rules: 0, mcp: 0, hooks: 0, plan: h('Claude Max 20x'), user: h('me@example.com') };
+  // The parts that print text from a switch, and the memory reading.
+  const args = ['--text', h('label'), '--command', 'ctx'];
+  const options = { memoryOf: () => ({ used: GIB, total: 2 * GIB }), commandOutputOf: () => h('output'), transcript: () => activity };
+  for (const part of PARTS) assert.ok(renderClean(data, part, h('main'), setup, args, options), part);
   assert.equal(
     renderClean(data, 'model,effort,style,agent,version,lines,ctx'),
     'Opus │ effort high │ style explanatory │ agent reviewer │ v2.1.90 │ +15 −23 │ ctx 43% ▓▓░░░ 86.0k',
