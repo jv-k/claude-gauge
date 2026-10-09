@@ -2,8 +2,8 @@
 
 // Golden snapshots: the default two rows in every --theme preset, colour
 // codes and all, so a change to a theme's colours shows in review as a
-// changed file. Each file in test/snapshots/ is one theme, with ESC written
-// as \e so that the codes read as text.
+// changed file. Each file in test/snapshots/themes/ is one theme, with ESC
+// written as \e so that the codes read as text.
 //
 // After a deliberate change, rewrite the files and review the diff:
 //
@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { render, parseArgs, THEMES } = require('../dist/statusline.js');
 
-const dir = path.join(__dirname, 'snapshots');
+const dir = path.join(__dirname, 'snapshots', 'themes');
 // Never in CI, where a rewrite would pass whatever the build prints.
 const update = Boolean(process.env.UPDATE_SNAPSHOTS) && !process.env.CI;
 
@@ -37,7 +37,7 @@ const payload = {
 };
 
 const snapshot = (theme) =>
-  render(payload, { nowMs: NOW, branchOf: () => 'main', config: parseArgs(['--theme', theme]) }).replaceAll('\x1b', '\\e') + '\n';
+  render(payload, { nowMs: NOW, statusOf: () => '# branch.head main\n', config: parseArgs(['--theme', theme]) }).replaceAll('\x1b', '\\e') + '\n';
 
 const file = (theme) => path.join(dir, `${theme}.txt`);
 

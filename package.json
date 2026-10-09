@@ -9,6 +9,7 @@
     "url": "git+https://github.com/jv-k/claude-gauge.git"
   },
   "bin": {
+    "claude-gauge": "dist/cli.js",
     "claude-gauge-statusline": "dist/statusline.js",
     "claude-gauge-tokenline": "dist/tokenline.js"
   },
