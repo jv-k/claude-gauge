@@ -1,13 +1,13 @@
 'use strict';
 
-// The README's status line tables name every part and switch in the
-// registry, and nothing else, so a part or switch cannot ship undocumented.
+// The README's status line tables name every part, switch and theme in the
+// registry, and nothing else, so none can ship undocumented.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { PARTS, DEFAULT_ROWS, SWITCHES } = require('../dist/statusline.js');
+const { PARTS, DEFAULT_ROWS, SWITCHES, THEMES } = require('../dist/statusline.js');
 
 const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
 
@@ -35,7 +35,7 @@ function tableNames(text, heading) {
 
 // Every difference between the README's tables and a registry, as one line
 // each. Empty when they agree.
-function drift(text, { parts, defaultRows, switches }) {
+function drift(text, { parts, defaultRows, switches, themes }) {
   // One table's differences. The README says the default parts table is in
   // row order, so for that table a reorder alone is a difference too.
   const compare = (heading, expected, { ordered = false } = {}) => {
@@ -56,12 +56,13 @@ function drift(text, { parts, defaultRows, switches }) {
     ...compare('### Status line', defaults, { ordered: true }),
     ...compare('### More status line parts', parts.filter((p) => !defaults.includes(p))),
     ...compare('### Status line options', switches),
+    ...compare('#### Themes', themes),
   ];
 }
 
-const registry = { parts: [...PARTS], defaultRows: DEFAULT_ROWS, switches: SWITCHES.map((s) => s.name) };
+const registry = { parts: [...PARTS], defaultRows: DEFAULT_ROWS, switches: SWITCHES.map((s) => s.name), themes: THEMES };
 
-test('the README documents every status line part and switch in the registry, and no others', () => {
+test('the README documents every status line part, switch and theme in the registry, and no others', () => {
   assert.deepEqual(drift(readme, registry), []);
 });
 
@@ -82,6 +83,11 @@ test('a part added to a default row without a README row fails the sync', () => 
 test('a switch added to the registry without a README row fails the sync', () => {
   const withFlag = { ...registry, switches: [...registry.switches, '--weather'] };
   assert.deepEqual(drift(readme, withFlag), ['--weather has no row under "### Status line options"']);
+});
+
+test('a theme added to the registry without a README row fails the sync', () => {
+  const withNeon = { ...registry, themes: [...registry.themes, 'neon'] };
+  assert.deepEqual(drift(readme, withNeon), ['neon has no row under "#### Themes"']);
 });
 
 test('a README row for a part the registry lacks fails the sync', () => {

@@ -43,7 +43,7 @@ The default rows hold these parts, in this order. The name in the first column i
 
 **Context.** The percentage counts input only: fresh input, cache writes and cache reads. It does not count output. A high figure means that Claude Code will soon compact the conversation.
 
-**Usage colours.** Each usage bar has 10 colour steps, from dark green at 0–10% to deep red above 90%.
+**Usage colours.** Each usage bar has 10 colour steps, from dark green at 0–10% to deep red above 90%. These colours, and the others on this page, are the `default` theme's. `--theme` picks another (see [Themes](#themes)).
 
 **Pace marker.** The `┃` sits at the share of the window that has passed. If it is ahead of the filled cells, you are using less than an even pace. Its colour comes from the usage projected for the end of the window, calculated as used % × window length ÷ time elapsed:
 
@@ -289,11 +289,34 @@ Both scripts take switches on the command line, so you set them in the `command`
 | `--right <parts>` | The parts to right-align, separated by commas. In each row that shows any of them, they move to the end of the row, in the row's order, and spaces fill the gap so the row ends at the terminal's right edge. Claude Code gives the terminal width in `COLUMNS`. When the width is unknown, as with `--latest`, the row is too long to leave a gap, or the row holds characters whose width varies by terminal, such as CJK text and emoji, the row is left as it is. Repeat `--right` to name more parts. |
 | `--text <text>` | The text that the `text` part shows. Quote text that holds spaces: `--text 'work laptop'`. If you give `--text` more than once, the last one counts. |
 | `--command <command>` | The shell command that the `command` part runs. Quote the command as one value: `--command 'kubectl config current-context'`. It runs only when a `--show` row names `command`. See [Memory, text and command](#memory-text-and-command) for its rules. |
+| `--theme <name>` | The colour preset: `default`, `mono`, `high-contrast` or `pastel`. An unknown name gives `default`. See [Themes](#themes). |
+| `--color <part>=<colour>` | One part's colour, over the theme's: a name such as `red` or `bright-red`, a 256-colour number from `0` to `255`, or a hex colour such as `#ff8800` or `#f80`. Separate more parts with commas, or repeat the switch. See [Colours and bar characters](#colours-and-bar-characters). |
+| `--bar-filled <char>` | The character of a filled bar cell. Default: `▓`. |
+| `--bar-empty <char>` | The character of an empty bar cell. Default: `░`. |
 | `--latest` | Prints the rows for the calling session from its transcript, as plain text, instead of reading Claude Code's input. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 | `--window <size>` | With `--latest`: the context window size, for example `200k` or `1m`, as for the token line. |
 | `--instruct` | As a SessionStart hook: in the VS Code extension and the desktop app, prints an instruction that has Claude end each reply with the `--latest` rows; in the terminal CLI, prints nothing. The other switches pass through to the command it names. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 
 A row with nothing to show is left out, and a `--show` that names no known part adds no row.
+
+#### Themes
+
+`--theme` restyles every part at once. The name in the first column is what `--theme` takes.
+
+| Theme | Colours |
+| --- | --- |
+| `default` | Usage from dark green to deep red, context in cyan, yellow and red, details in grey. |
+| `mono` | No colour: every part in the terminal's own text colour. |
+| `high-contrast` | The terminal's bright colours, with details in white rather than grey, for dim screens and low vision. |
+| `pastel` | Soft 256-colour tones, on the same green-to-red usage scale. |
+
+The pace marker keeps its six steps in every theme but `mono`, where only its position shows the pace.
+
+#### Colours and bar characters
+
+`--color` sets one part to one colour, on top of the theme. The whole part takes that colour, except the pace marker, whose colour is what it reports. The `│` separators keep the theme's colour. The colour names are `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan` and `white`, each also as `bright-red` and so on, and `gray` or `grey`. A hex colour needs a terminal with 24-bit colour. An unknown part or colour is ignored.
+
+`--bar-filled` and `--bar-empty` each take one character, and every bar uses it, the `ctx` bar and the usage bars alike. More than one character, or a control character, is ignored. A wide character, such as an emoji, makes the bar wider.
 
 #### Examples
 
@@ -339,6 +362,14 @@ The model and effort at the right edge of a 72-column terminal, with `--right`:
 
 ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
 jv-k/claude-gauge │ ⎇ main                        Opus 5.5 │ effort high
+```
+
+Usage and context in the pastel theme, with bars of your own characters:
+
+```text
+--show ctx,5h,7d --theme pastel --bar-filled █ --bar-empty ·
+
+ctx 43% ██··· 86.0k │ 5h 9% ··┃·· → 14:10 │ 7d 41% ██·┃· → 3d
 ```
 
 Three rows for pull-request work:

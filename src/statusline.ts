@@ -20,9 +20,11 @@
 // the environment. The today and week parts add the cost ledger, which each
 // render keeps in the state folder.
 //
-// The parts it can show are in PART_REGISTRY and the switches it takes in
-// SWITCHES, both below. README.md documents each in a table, and a test fails
-// when the tables and the registry disagree.
+// The parts it can show are in PART_REGISTRY, the switches it takes in
+// SWITCHES and the --theme presets in THEME_REGISTRY, all below. README.md
+// documents each in a table, and a test fails when the tables and the
+// registry disagree. test/snapshots/themes/ holds the default rows in every
+// theme.
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -43,6 +45,9 @@ import { createHash } from 'node:crypto';
 interface PartContext {
   data: StatusData;
   config: Config;
+  // The colours to draw with: the --theme preset, or one --color for the
+  // whole part.
+  theme: Theme;
   nowMs: number;
   ledger: Ledger;
   // The folder's path as it is, for git to run in, and its name to print.
@@ -94,46 +99,46 @@ interface PartSpec {
 // first, in the order their rows show them; the order of the rest is the
 // README's.
 const partRegistry = {
-  ctx: { description: 'context window in use: percentage, bar and token count', row: 0, build: ({ data, config }) => contextPart(data, config) },
-  '5h': { description: '5-hour usage, with pace marker and reset time', row: 0, build: ({ data, config, nowMs }) => windowPart('5h', data, config, nowMs) },
-  '7d': { description: 'weekly usage, with pace marker and days to reset', row: 0, build: ({ data, config, nowMs }) => windowPart('7d', data, config, nowMs) },
-  time: { description: 'current local time', row: 1, build: ({ config, nowMs }) => timePart(config, nowMs) },
-  duration: { description: 'how long the session has run', row: 1, build: ({ data }) => durationPart(data) },
-  repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, folder }) => repoPart(data, folder) },
-  branch: { description: 'current git branch, dirty marker, ahead and behind, and the linked worktree', row: 1, build: ({ data, config, git }) => branchPart(data, config, git()) },
-  model: { description: 'model name, and the API provider when not first-party', row: 1, build: ({ data, processEnv }) => modelPart(data, processEnv) },
-  effort: { description: 'reasoning effort', row: 1, build: ({ data, config }) => effortPart(data, config) },
-  dir: { description: 'folder Claude Code runs in', build: ({ folder }) => `${BLUE}${folder}${RESET}` },
-  cost: { description: 'estimated session cost', build: ({ data }) => costPart(data) },
-  lines: { description: 'lines added and removed this session', build: ({ data }) => linesPart(data) },
-  name: { description: 'session name or title', build: ({ data }) => namePart(data) },
-  thinking: { description: 'extended thinking, when on', build: ({ data }) => thinkingPart(data) },
-  fast: { description: 'fast mode, when on', build: ({ data }) => fastPart(data) },
-  style: { description: 'output style, when not the default', build: ({ data, config }) => stylePart(data, config) },
-  git: { description: 'modified, staged, deleted and untracked file counts, when any', build: ({ git }) => gitCountsPart(git()) },
-  files: { description: 'the most recently changed files', build: ({ git, mtimeOf }) => filesPart(git(), mtimeOf) },
-  worktree: { description: 'linked git worktree', build: ({ data, config }) => worktreePart(data, config) },
-  pr: { description: "the branch's open pull request and its review state", build: ({ data }) => prPart(data) },
-  agent: { description: 'agent name, with --agent', build: ({ data, config }) => agentPart(data, config) },
-  cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config }) => cachePart(data, config) },
-  spend: { description: 'spend against a gateway spend limit', build: ({ data, config }) => spendPart(data, config) },
-  version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
+  ctx: { description: 'context window in use: percentage, bar and token count', row: 0, build: ({ data, config, theme }) => contextPart(data, config, theme) },
+  '5h': { description: '5-hour usage, with pace marker and reset time', row: 0, build: ({ data, config, theme, nowMs }) => windowPart('5h', data, config, theme, nowMs) },
+  '7d': { description: 'weekly usage, with pace marker and days to reset', row: 0, build: ({ data, config, theme, nowMs }) => windowPart('7d', data, config, theme, nowMs) },
+  time: { description: 'current local time', row: 1, build: ({ config, theme, nowMs }) => timePart(config, theme, nowMs) },
+  duration: { description: 'how long the session has run', row: 1, build: ({ data, theme }) => durationPart(data, theme) },
+  repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, theme, folder }) => repoPart(data, theme, folder) },
+  branch: { description: 'current git branch, dirty marker, ahead and behind, and the linked worktree', row: 1, build: ({ data, config, theme, git }) => branchPart(data, config, theme, git()) },
+  model: { description: 'model name, and the API provider when not first-party', row: 1, build: ({ data, theme, processEnv }) => modelPart(data, theme, processEnv) },
+  effort: { description: 'reasoning effort', row: 1, build: ({ data, config, theme }) => effortPart(data, config, theme) },
+  dir: { description: 'folder Claude Code runs in', build: ({ theme, folder }) => `${theme.info}${folder}${RESET}` },
+  cost: { description: 'estimated session cost', build: ({ data, theme }) => costPart(data, theme) },
+  lines: { description: 'lines added and removed this session', build: ({ data, theme }) => linesPart(data, theme) },
+  name: { description: 'session name or title', build: ({ data, theme }) => namePart(data, theme) },
+  thinking: { description: 'extended thinking, when on', build: ({ data, theme }) => thinkingPart(data, theme) },
+  fast: { description: 'fast mode, when on', build: ({ data, theme }) => fastPart(data, theme) },
+  style: { description: 'output style, when not the default', build: ({ data, config, theme }) => stylePart(data, config, theme) },
+  git: { description: 'modified, staged, deleted and untracked file counts, when any', build: ({ theme, git }) => gitCountsPart(git(), theme) },
+  files: { description: 'the most recently changed files', build: ({ theme, git, mtimeOf }) => filesPart(git(), theme, mtimeOf) },
+  worktree: { description: 'linked git worktree', build: ({ data, config, theme }) => worktreePart(data, config, theme) },
+  pr: { description: "the branch's open pull request and its review state", build: ({ data, theme }) => prPart(data, theme) },
+  agent: { description: 'agent name, with --agent', build: ({ data, config, theme }) => agentPart(data, config, theme) },
+  cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config, theme }) => cachePart(data, config, theme) },
+  spend: { description: 'spend against a gateway spend limit', build: ({ data, config, theme }) => spendPart(data, config, theme) },
+  version: { description: 'Claude Code version', build: ({ data, theme }) => versionPart(data, theme) },
   today: { description: "today's spend across sessions, from the cost ledger", build: (ctx) => spentPart('today', ctx) },
   week: { description: "this week's spend across sessions, from the cost ledger", build: (ctx) => spentPart('week', ctx) },
-  tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, cwd }) => toolsPart(activity(), cwd) },
-  agents: { description: 'running subagents, and those finished in the last minute', build: ({ activity, nowMs }) => agentsPart(activity(), nowMs) },
-  todos: { description: 'the todo in progress, and how many todos are done', build: ({ activity, config }) => todosPart(activity(), config) },
-  skills: { description: 'skills used, and MCP servers called, marking those whose last call failed', build: ({ activity, config }) => skillsPart(activity(), config) },
-  compactions: { description: 'how many times the conversation was compacted', build: ({ activity, config }) => compactionsPart(activity(), config) },
-  reply: { description: 'time since the last reply', build: ({ activity, config, nowMs }) => replyPart(activity(), config, nowMs) },
-  speed: { description: 'output tokens per second of the last response', build: ({ activity }) => speedPart(activity()) },
-  env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
-  plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
-  models: { description: 'per-model weekly usage, as 7d shows the week', build: ({ data, config, nowMs }) => modelsPart(data, config, nowMs) },
-  limit: { description: 'a notice naming each exhausted window and its reset', build: ({ data, config, nowMs }) => limitPart(data, config, nowMs) },
-  ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, memory }) => ramPart(memory(), config) },
-  text: { description: 'fixed text, with --text', build: ({ config }) => outsideText(config.text) },
-  command: { description: 'first line of output of a shell command, with --command', build: ({ commandOutput }) => outsideText(commandOutput()) },
+  tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, theme, cwd }) => toolsPart(activity(), theme, cwd) },
+  agents: { description: 'running subagents, and those finished in the last minute', build: ({ activity, theme, nowMs }) => agentsPart(activity(), theme, nowMs) },
+  todos: { description: 'the todo in progress, and how many todos are done', build: ({ activity, config, theme }) => todosPart(activity(), config, theme) },
+  skills: { description: 'skills used, and MCP servers called, marking those whose last call failed', build: ({ activity, config, theme }) => skillsPart(activity(), config, theme) },
+  compactions: { description: 'how many times the conversation was compacted', build: ({ activity, config, theme }) => compactionsPart(activity(), config, theme) },
+  reply: { description: 'time since the last reply', build: ({ activity, config, theme, nowMs }) => replyPart(activity(), config, theme, nowMs) },
+  speed: { description: 'output tokens per second of the last response', build: ({ activity, theme }) => speedPart(activity(), theme) },
+  env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, theme, setup }) => envPart(setup(), config, theme) },
+  plan: { description: 'subscription plan and signed-in user', build: ({ theme, setup }) => planPart(setup(), theme) },
+  models: { description: 'per-model weekly usage, as 7d shows the week', build: ({ data, config, theme, nowMs }) => modelsPart(data, config, theme, nowMs) },
+  limit: { description: 'a notice naming each exhausted window and its reset', build: ({ data, config, theme, nowMs }) => limitPart(data, config, theme, nowMs) },
+  ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, theme, memory }) => ramPart(memory(), config, theme) },
+  text: { description: 'fixed text, with --text', build: ({ config, theme }) => outsideText(config.text, theme) },
+  command: { description: 'first line of output of a shell command, with --command', build: ({ theme, commandOutput }) => outsideText(commandOutput(), theme) },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -170,6 +175,14 @@ interface Config {
   // The shell command the command part runs, as --command gives it; none
   // when empty.
   command: string;
+  // The --theme preset's name, as given: render takes an unknown one as the
+  // default.
+  theme: string;
+  // The --color overrides: a colour code for each part named.
+  colors: Partial<Record<Part, string>>;
+  // The characters of a bar's filled and empty cells.
+  barFilled: string;
+  barEmpty: string;
 }
 
 // What parseArgs returns and render takes: any subset of the config, with
@@ -188,6 +201,10 @@ const DEFAULTS: Config = {
   right: [],
   text: '',
   command: '',
+  theme: 'default',
+  colors: {},
+  barFilled: '▓',
+  barEmpty: '░',
 };
 
 interface Switch {
@@ -233,10 +250,29 @@ const SWITCHES: readonly Switch[] = [
     description: 'the shell command the command part runs, with a short timeout',
     apply: (config, value) => { config.command = value; },
   },
+  { name: '--theme', value: '<name>', description: 'the colour preset: default, mono, high-contrast or pastel', apply: (config, value) => { config.theme = value.trim(); } },
+  {
+    name: '--color',
+    value: '<part>=<colour>',
+    description: "one part's colour: a name, a 256-colour number or a hex colour; comma-separate or repeat it for more parts",
+    apply: (config, value) => {
+      for (const pair of value.split(',')) {
+        const [part, color] = pair.split(/=(.*)/s).map((p) => p.trim());
+        const code = colorCode(color ?? '');
+        if (isPart(part) && code) config.colors = { ...config.colors, [part]: code };
+      }
+    },
+  },
+  { name: '--bar-filled', value: '<char>', description: 'the character of a filled bar cell (default ▓)', apply: (config, value) => { if (isBarChar(value)) config.barFilled = value; } },
+  { name: '--bar-empty', value: '<char>', description: 'the character of an empty bar cell (default ░)', apply: (config, value) => { if (isBarChar(value)) config.barEmpty = value; } },
   { name: '--latest', description: "print the calling session's rows from its transcript, as plain text" },
   { name: '--window', value: '<size>', description: 'with --latest: the context window size, such as 200k or 1m' },
   { name: '--instruct', description: 'as a SessionStart hook: have Claude end each reply with the --latest rows' },
 ];
+
+// A bar cell is one character, and never a control character: the switch is
+// printed as it is, in every cell.
+const isBarChar = (value: string) => Array.from(value).length === 1 && sanitise(value) === value;
 
 // Turns the switches into a config. Unknown switches and part names are
 // ignored, and a --show with no known part adds no row: a status line should
@@ -260,6 +296,123 @@ const YELLOW = '\x1b[0;33m';
 const CYAN = '\x1b[0;36m';
 const RED = '\x1b[0;31m';
 const ansi256 = (n: number) => `\x1b[38;5;${n}m`;
+// The 16-colour palette's bright half, and its bold form.
+const bright = (n: number) => `\x1b[0;${n}m`;
+const bold = (n: number) => `\x1b[1;${n}m`;
+
+// The colours a status line draws with. Each part takes its colours from
+// these roles, never a code of its own, so a theme restyles every part.
+interface Theme {
+  description: string;
+  // Usage, in ten steps: 0-10% up to above 90%.
+  levels: readonly string[];
+  // The pace marker, by the usage projected for the end of the window:
+  // below 50%, 75%, 90%, 100%, 120%, and above.
+  pace: readonly string[];
+  // ctx: up to 50%, up to 75%, and above.
+  context: readonly string[];
+  // Session details and the separator: time, duration, repo, name and the like.
+  muted: string;
+  // Model state, work in progress, and a usage window not reported yet.
+  accent: string;
+  // The branch, lines added, an approved pull request, work done.
+  good: string;
+  // Lines removed, a pull request with changes requested, a failure.
+  bad: string;
+  // The folder.
+  info: string;
+}
+
+// The --theme presets, by name. default is the first, and what an unknown
+// name gives.
+const THEME_REGISTRY = {
+  default: {
+    description: 'green-to-red usage, cyan context, grey details',
+    levels: [22, 28, 34, 100, 142, 178, 172, 166, 160, 124].map(ansi256),
+    pace: [34, 37, 178, 208, 160, 135].map(ansi256),
+    context: [CYAN, YELLOW, ansi256(160)],
+    muted: GRAY,
+    accent: YELLOW,
+    good: GREEN,
+    bad: RED,
+    info: BLUE,
+  },
+  mono: {
+    description: "no colour: the terminal's own text colour throughout",
+    levels: Array(10).fill(''),
+    pace: Array(6).fill(''),
+    context: ['', '', ''],
+    muted: '',
+    accent: '',
+    good: '',
+    bad: '',
+    info: '',
+  },
+  'high-contrast': {
+    description: "the terminal's bright colours, and white details, for dim screens and low vision",
+    levels: [92, 92, 92, 92, 93, 93, 93, 91, 91].map(bright).concat(bold(91)),
+    pace: [bright(92), bright(96), bright(93), bold(93), bright(91), bright(95)],
+    context: [bright(96), bright(93), bright(91)],
+    muted: bright(97),
+    accent: bright(93),
+    good: bright(92),
+    bad: bright(91),
+    info: bright(94),
+  },
+  pastel: {
+    description: 'soft 256-colour tones on the same green-to-red scale',
+    levels: [157, 151, 150, 187, 229, 223, 216, 217, 210, 211].map(ansi256),
+    pace: [151, 152, 229, 216, 210, 183].map(ansi256),
+    context: [152, 229, 210].map(ansi256),
+    muted: ansi256(248),
+    accent: ansi256(229),
+    good: ansi256(151),
+    bad: ansi256(210),
+    info: ansi256(153),
+  },
+} satisfies Record<string, Theme>;
+
+const THEMES = Object.keys(THEME_REGISTRY);
+
+// A --color value as a colour code: a name such as red or bright-red, a
+// 256-colour number, or a hex colour as #f80 or #ff8800. Anything else is
+// none, so a switch can never print a code of its own.
+const NAMED_COLORS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+
+function colorCode(text: string): string | undefined {
+  const name = text.toLowerCase();
+  if (name === 'gray' || name === 'grey') return GRAY;
+  const named = NAMED_COLORS.indexOf(name.replace(/^bright-/, ''));
+  if (named >= 0) return `\x1b[0;${(name.startsWith('bright-') ? 90 : 30) + named}m`;
+  if (/^\d{1,3}$/.test(name) && Number(name) <= 255) return ansi256(Number(name));
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/.exec(name)?.[1];
+  if (!hex) return undefined;
+  const full = hex.length === 3 ? [...hex].map((d) => d + d).join('') : hex;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16));
+  return `\x1b[38;2;${r};${g};${b}m`;
+}
+
+// A theme that draws everything in one colour, for a part --color names. The
+// pace marker keeps the theme's colours, because its colour is what it says.
+const solid = (theme: Theme, color: string): Theme => ({
+  description: theme.description,
+  levels: theme.levels.map(() => color),
+  pace: theme.pace,
+  context: theme.context.map(() => color),
+  muted: color,
+  accent: color,
+  good: color,
+  bad: color,
+  info: color,
+});
+
+// A record's own value for a key, never one it inherits, such as
+// constructor: names from switches and the payload reach these lookups.
+const ownValue = <T>(record: Readonly<Record<string, T>>, key: string): T | undefined =>
+  Object.hasOwn(record, key) ? record[key] : undefined;
+
+// The preset a --theme names, else the default.
+const themeOf = (name: string): Theme => ownValue<Theme>(THEME_REGISTRY, name) ?? THEME_REGISTRY.default;
 
 // Terminal escape sequences, whole: CSI (colours, cursor moves, erases), OSC
 // (window titles, hyperlinks, the clipboard), the DCS, SOS, PM and APC
@@ -314,21 +467,19 @@ const labelOf = (config: Config, name: string) =>
   config.labels ? `${config.compact ? (COMPACT_LABELS[name] ?? name) : name} ` : '';
 
 // The separator between a row's segments.
-const separatorOf = (config: Config) => `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
+const separatorOf = (config: Config, theme: Theme) => `${theme.muted}${config.compact ? '│' : ' │ '}${RESET}`;
 
-// Ten usage levels: dark green at 0-10%, deep red above 90%.
-const LEVELS = [22, 28, 34, 100, 142, 178, 172, 166, 160, 124].map(ansi256);
-const levelColor = (pct: number) => LEVELS[Math.min(9, Math.max(0, Math.ceil(pct / 10) - 1))];
+// The usage level's colour, in ten steps: in the default theme, dark green
+// at 0-10% and deep red above 90%.
+const levelColor = (theme: Theme, pct: number) => theme.levels[Math.min(9, Math.max(0, Math.ceil(pct / 10) - 1))];
 
-// Pace marker colours, by the usage the current rate projects for the end of
-// the window.
-const paceColor = (projected: number) =>
-  projected < 50 ? ansi256(34) // comfortable
-  : projected < 75 ? ansi256(37) // on track
-  : projected < 90 ? ansi256(178) // warming
-  : projected < 100 ? ansi256(208) // pressing
-  : projected < 120 ? ansi256(160) // critical
-  : ansi256(135); // runaway
+// The pace marker's colour, by the usage the current rate projects for the
+// end of the window.
+const PACE_LIMITS = [50, 75, 90, 100, 120]; // comfortable, on track, warming, pressing, critical; then runaway
+const paceColor = (theme: Theme, projected: number) => {
+  const step = PACE_LIMITS.findIndex((limit) => projected < limit);
+  return theme.pace[step < 0 ? PACE_LIMITS.length : step];
+};
 
 // A reset as a window shows it: a time of day, or days away.
 type ResetText = (epochSeconds: number, config: Config, nowMs: number) => string;
@@ -417,10 +568,10 @@ const capitalised = (word: string) => word[0].toUpperCase() + word.slice(1);
 // Bars come in 5 or 10 cells; anything else falls back to 5.
 const segmentsOf = (value: number | string | undefined) => (Number(value) === 10 ? 10 : 5);
 
-// The cells of a bar, filled in proportion to pct.
-const cellsFor = (pct: number, segments: number) => {
+// The cells of a bar, filled in proportion to pct, one character each.
+const cellsFor = (pct: number, { segments, barFilled, barEmpty }: Config) => {
   const filled = Math.min(segments, Math.max(0, Math.round((pct * segments) / 100)));
-  return '▓'.repeat(filled) + '░'.repeat(segments - filled);
+  return [...Array<string>(filled).fill(barFilled), ...Array<string>(segments - filled).fill(barEmpty)];
 };
 
 // How every git call runs: for at most a second, with its output as text
@@ -614,35 +765,37 @@ function usageBar(
   window: UsageWindow,
   resetsAt: number | undefined,
   config: Config,
+  theme: Theme,
   nowMs: number,
 ): string {
-  const cells = cellsFor(pct, config.segments);
+  const cells = cellsFor(pct, config);
   const remaining = resetsAt ? resetsAt - nowMs / 1000 : 0;
-  if (!config.pace || remaining <= 0 || remaining >= window.seconds) return ` ${cells}`;
+  if (!config.pace || remaining <= 0 || remaining >= window.seconds) return ` ${cells.join('')}`;
 
   const elapsed = window.seconds - remaining;
   const pos = Math.min(config.segments - 1, Math.max(0, Math.round((elapsed * config.segments) / window.seconds)));
-  // Early in a window the projection is noise, so keep the usage colour.
-  const marker = elapsed >= window.minElapsed ? paceColor((pct * window.seconds) / elapsed) : color;
-  return ` ${cells.slice(0, pos)}${marker}┃${RESET}${color}${cells.slice(pos + 1)}`;
+  // Early in a window the projection is noise, so keep the usage colour. A
+  // pace colour of '' (mono) resets, so the marker never takes a --color.
+  const marker = elapsed >= window.minElapsed ? paceColor(theme, (pct * window.seconds) / elapsed) || (color && RESET) : color;
+  return ` ${cells.slice(0, pos).join('')}${marker}┃${RESET}${color}${cells.slice(pos + 1).join('')}`;
 }
 
 // The 5h or 7d part. rate_limits is present only for claude.ai Pro and Max
 // subscribers, after the first response of a session; "~" marks a window
 // Claude Code has not reported yet.
-function windowPart(name: '5h' | '7d', data: StatusData, config: Config, nowMs: number): string {
+function windowPart(name: '5h' | '7d', data: StatusData, config: Config, theme: Theme, nowMs: number): string {
   const window = WINDOWS[name];
   const label = labelOf(config, name);
   const limit = data.rate_limits?.[window.key];
-  if (limit?.used_percentage == null) return `${YELLOW}${label}~${RESET}`;
-  return usageSegment(label, { ...limit, used_percentage: limit.used_percentage }, window, config, nowMs);
+  if (limit?.used_percentage == null) return `${theme.accent}${label}~${RESET}`;
+  return usageSegment(label, { ...limit, used_percentage: limit.used_percentage }, window, config, theme, nowMs);
 }
 
 // A reported window's percentage, bar and reset, behind its label.
-function usageSegment(label: string, limit: ReportedLimit, window: UsageWindow, config: Config, nowMs: number): string {
+function usageSegment(label: string, limit: ReportedLimit, window: UsageWindow, config: Config, theme: Theme, nowMs: number): string {
   const pct = Math.round(limit.used_percentage);
-  const color = levelColor(pct);
-  const bar = config.bars ? usageBar(pct, color, window, limit.resets_at, config, nowMs) : '';
+  const color = levelColor(theme, pct);
+  const bar = config.bars ? usageBar(pct, color, window, limit.resets_at, config, theme, nowMs) : '';
   const reset = config.reset && limit.resets_at ? ` → ${window.resetText(limit.resets_at, config, nowMs)}` : '';
   return `${color}${label}${pct}%${bar}${reset}${RESET}`;
 }
@@ -667,18 +820,18 @@ function modelWindows(data: StatusData): { name: string; limit: ReportedLimit }[
 // The models part: each per-model weekly window as 7d shows the week, with
 // the model's name after the 7d label. The name stays with --no-labels,
 // since without it two windows read alike.
-function modelsPart(data: StatusData, config: Config, nowMs: number): string {
+function modelsPart(data: StatusData, config: Config, theme: Theme, nowMs: number): string {
   return modelWindows(data)
     .map(({ name, limit }) =>
-      usageSegment(`${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], config, nowMs),
+      usageSegment(`${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], config, theme, nowMs),
     )
-    .join(separatorOf(config));
+    .join(separatorOf(config, theme));
 }
 
 // The context in the token line's shape: ctx 43% ▓▓░░░ 86.0k. Both figures
 // count input only (fresh input plus cache writes and reads), as Claude
 // Code's used_percentage does.
-function contextPart(data: StatusData, config: Config): string {
+function contextPart(data: StatusData, config: Config, theme: Theme): string {
   const ctx = data.context_window;
   if (!ctx) return '';
   const u = ctx.current_usage;
@@ -690,17 +843,17 @@ function contextPart(data: StatusData, config: Config): string {
   if (pct == null) return '';
   if (tokens == null && size) tokens = Math.round((pct * size) / 100);
 
-  const color = pct <= 50 ? CYAN : pct <= 75 ? YELLOW : LEVELS[8];
+  const color = theme.context[pct <= 50 ? 0 : pct <= 75 ? 1 : 2];
   const label = labelOf(config, 'ctx');
-  const bar = config.bars ? ` ${cellsFor(pct, config.segments)}` : '';
+  const bar = config.bars ? ` ${cellsFor(pct, config).join('')}` : '';
   const count = tokens != null ? ` ${fmt(tokens)}` : '';
   return `${color}${label}${Math.round(pct)}%${bar}${count}${RESET}`;
 }
 
 // The current local time, on the same clock as the reset times.
-function timePart(config: Config, nowMs: number): string {
+function timePart(config: Config, theme: Theme, nowMs: number): string {
   const time = new Date(nowMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: config.hour12 });
-  return `${GRAY}${time}${RESET}`;
+  return `${theme.muted}${time}${RESET}`;
 }
 
 // A session's running time: 45s, 12m, 1h12m, 2d3h. A zero lower unit is
@@ -716,26 +869,26 @@ function formatDuration(ms: number): string {
   return h % 24 ? `${d}d${h % 24}h` : `${d}d`;
 }
 
-function durationPart(data: StatusData): string {
+function durationPart(data: StatusData, theme: Theme): string {
   const ms = data.cost?.total_duration_ms;
-  return ms != null ? `${GRAY}${formatDuration(ms)}${RESET}` : '';
+  return ms != null ? `${theme.muted}${formatDuration(ms)}${RESET}` : '';
 }
 
 // The session's estimated cost. Behind a spend limit it takes the usage
 // colour of the limit's percentage; otherwise it is plain metadata.
-function costPart(data: StatusData): string {
+function costPart(data: StatusData, theme: Theme): string {
   const usd = data.cost?.total_cost_usd;
   if (usd == null) return '';
   const spent = data.rate_limits?.spend_limit?.used_percentage;
-  const color = spent != null ? levelColor(Math.round(spent)) : GRAY;
+  const color = spent != null ? levelColor(theme, Math.round(spent)) : theme.muted;
   return `${color}$${usd.toFixed(2)}${RESET}`;
 }
 
-function linesPart(data: StatusData): string {
+function linesPart(data: StatusData, theme: Theme): string {
   const added = data.cost?.total_lines_added;
   const removed = data.cost?.total_lines_removed;
   if (added == null && removed == null) return '';
-  return `${GREEN}+${added ?? 0}${RESET} ${RED}−${removed ?? 0}${RESET}`;
+  return `${theme.good}+${added ?? 0}${RESET} ${theme.bad}−${removed ?? 0}${RESET}`;
 }
 
 // Text cut to at most chars characters, ending in … when it was cut. It counts
@@ -746,38 +899,39 @@ const cut = (text: string, chars: number) => {
 };
 
 // The session's custom name or AI-generated title, cut to 30 characters.
-function namePart(data: StatusData): string {
+function namePart(data: StatusData, theme: Theme): string {
   const name = data.session_name;
   if (!name) return '';
   const shown = cut(name, 30);
-  return `${GRAY}${shown}${RESET}`;
+  return `${theme.muted}${shown}${RESET}`;
 }
 
-// Model state, in the model's yellow. effort is labelled because "high" on
-// its own could mean anything; thinking and fast are their own label and
-// show only when on; style shows only when it is not the default.
-function effortPart(data: StatusData, config: Config): string {
+// Model state, in the model's colour, yellow by default. effort is labelled
+// because "high" on its own could mean anything; thinking and fast are their
+// own label and show only when on; style shows only when it is not the
+// default.
+function effortPart(data: StatusData, config: Config, theme: Theme): string {
   const level = data.effort?.level;
-  return level ? `${YELLOW}${labelOf(config, 'effort')}${level}${RESET}` : '';
+  return level ? `${theme.accent}${labelOf(config, 'effort')}${level}${RESET}` : '';
 }
 
-const thinkingPart = (data: StatusData) => (data.thinking?.enabled ? `${YELLOW}think${RESET}` : '');
+const thinkingPart = (data: StatusData, theme: Theme) => (data.thinking?.enabled ? `${theme.accent}think${RESET}` : '');
 
-const fastPart = (data: StatusData) => (data.fast_mode ? `${YELLOW}fast${RESET}` : '');
+const fastPart = (data: StatusData, theme: Theme) => (data.fast_mode ? `${theme.accent}fast${RESET}` : '');
 
-function stylePart(data: StatusData, config: Config): string {
+function stylePart(data: StatusData, config: Config, theme: Theme): string {
   const name = data.output_style?.name;
   if (!name || name === 'default') return '';
-  return `${GRAY}${labelOf(config, 'style')}${name}${RESET}`;
+  return `${theme.muted}${labelOf(config, 'style')}${name}${RESET}`;
 }
 
 // The repository as owner/name from the origin remote. Without one (outside
 // git, or no origin) it falls back to the folder name, so a row that leads
 // with repo never loses its location.
-function repoPart(data: StatusData, folder: string): string {
+function repoPart(data: StatusData, theme: Theme, folder: string): string {
   const repo = data.workspace?.repo;
   const shown = repo?.owner && repo?.name ? `${repo.owner}/${repo.name}` : folder;
-  return `${GRAY}${shown}${RESET}`;
+  return `${theme.muted}${shown}${RESET}`;
 }
 
 // The linked git worktree the session is in, if any. workspace.git_worktree
@@ -788,24 +942,24 @@ const worktreeName = (data: StatusData) => data.workspace?.git_worktree || data.
 // The branch, * when the work tree has changes, ↑n and ↓n for the commits
 // it is ahead of and behind its upstream, and the worktree name inside a
 // linked worktree.
-function branchPart(data: StatusData, config: Config, git: GitState): string {
+function branchPart(data: StatusData, config: Config, theme: Theme, git: GitState): string {
   if (!git.branch) return '';
-  const dirty = git.changed.length ? `${YELLOW}*${GREEN}` : '';
+  const dirty = git.changed.length ? `${theme.accent}*${theme.good}` : '';
   const ahead = git.ahead ? ` ↑${git.ahead}` : '';
   const behind = git.behind ? ` ↓${git.behind}` : '';
   const wt = worktreeName(data);
   const inWorktree = wt ? ` (${labelOf(config, 'wt')}${wt})` : '';
-  return `${GREEN}⎇ ${git.branch}${dirty}${ahead}${behind}${inWorktree}${RESET}`;
+  return `${theme.good}⎇ ${git.branch}${dirty}${ahead}${behind}${inWorktree}${RESET}`;
 }
 
 // The work tree's changes, as counts: !modified +staged ✘deleted ?untracked.
 // Only counts above 0 show, and nothing shows when the tree is clean.
-function gitCountsPart(git: GitState): string {
+function gitCountsPart(git: GitState, theme: Theme): string {
   const counts: [number, string, string][] = [
-    [git.modified, '!', YELLOW],
-    [git.staged, '+', GREEN],
-    [git.deleted, '✘', RED],
-    [git.untracked, '?', GRAY],
+    [git.modified, '!', theme.accent],
+    [git.staged, '+', theme.good],
+    [git.deleted, '✘', theme.bad],
+    [git.untracked, '?', theme.muted],
   ];
   return counts
     .filter(([n]) => n > 0)
@@ -823,57 +977,60 @@ const TIMED_FILES = 1000;
 // The most recently changed files, newest first, of the first TIMED_FILES
 // that git lists. A deleted file has no time, so it follows the files that
 // have one; files with the same time keep git's order.
-function filesPart(git: GitState, mtimeOf: (file: string) => number | undefined): string {
+function filesPart(git: GitState, theme: Theme, mtimeOf: (file: string) => number | undefined): string {
   return git.changed
     .slice(0, TIMED_FILES)
     .map((file) => ({ ...file, time: mtimeOf(file.path) ?? -Infinity }))
     .sort((a, b) => b.time - a.time || 0)
     .slice(0, RECENT_FILES)
-    .map((file) => `${GRAY}${file.name}${RESET}`)
+    .map((file) => `${theme.muted}${file.name}${RESET}`)
     .join(' ');
 }
 
-function worktreePart(data: StatusData, config: Config): string {
+function worktreePart(data: StatusData, config: Config, theme: Theme): string {
   const wt = worktreeName(data);
-  return wt ? `${GRAY}${labelOf(config, 'wt')}${wt}${RESET}` : '';
+  return wt ? `${theme.muted}${labelOf(config, 'wt')}${wt}${RESET}` : '';
 }
 
 // The branch's open pull request, coloured by its review state. A GitLab
 // merge request takes GitLab's ! prefix instead of #.
-const PR_COLORS: Record<string, string> = { approved: GREEN, pending: YELLOW, changes_requested: RED, draft: GRAY };
+// The theme's roles that hold one colour.
+type Role = { [K in keyof Theme]: Theme[K] extends string ? K : never }[Exclude<keyof Theme, 'description'>];
 
-function prPart(data: StatusData): string {
+const PR_ROLES: Record<string, Role> = { approved: 'good', pending: 'accent', changes_requested: 'bad', draft: 'muted' };
+
+function prPart(data: StatusData, theme: Theme): string {
   const pr = data.pr;
   if (pr?.number == null) return '';
   const number = `${pr.kind === 'mr' ? '!' : '#'}${pr.number}`;
   const state = pr.review_state ? ` ${pr.review_state}` : '';
-  return `${PR_COLORS[pr.review_state ?? ''] ?? GRAY}${number}${state}${RESET}`;
+  return `${theme[ownValue(PR_ROLES, pr.review_state ?? '') ?? 'muted']}${number}${state}${RESET}`;
 }
 
-function agentPart(data: StatusData, config: Config): string {
+function agentPart(data: StatusData, config: Config, theme: Theme): string {
   const name = data.agent?.name;
-  return name ? `${GRAY}${labelOf(config, 'agent')}${name}${RESET}` : '';
+  return name ? `${theme.muted}${labelOf(config, 'agent')}${name}${RESET}` : '';
 }
 
 // The prompt cache's hit ratio and whether it is still warm. A high hit
 // ratio is good, so the colour follows the miss rate on the usage scale.
-function cachePart(data: StatusData, config: Config): string {
+function cachePart(data: StatusData, config: Config, theme: Theme): string {
   const cache = data.prompt_cache;
   if (!cache) return '';
   const label = labelOf(config, 'cache');
   const state = cache.warm ? 'warm' : 'cold';
-  if (cache.hit_ratio == null) return `${GRAY}${label}${state}${RESET}`;
+  if (cache.hit_ratio == null) return `${theme.muted}${label}${state}${RESET}`;
   const hit = Math.round(cache.hit_ratio * 100);
-  return `${levelColor(100 - hit)}${label}${hit}% ${state}${RESET}`;
+  return `${levelColor(theme, 100 - hit)}${label}${hit}% ${state}${RESET}`;
 }
 
 // The spend limit behind a Claude apps gateway: dollars when Claude Code has
 // them, which arrive a little after the percentage, and the percentage until
 // then.
-function spendPart(data: StatusData, config: Config): string {
+function spendPart(data: StatusData, config: Config, theme: Theme): string {
   const limit = data.rate_limits?.spend_limit;
   if (limit?.used_percentage == null) return '';
-  const color = levelColor(Math.round(limit.used_percentage));
+  const color = levelColor(theme, Math.round(limit.used_percentage));
   if (limit.used_usd != null && limit.limit_usd != null) {
     return `${color}$${Math.round(limit.used_usd)}/$${Math.round(limit.limit_usd)}${RESET}`;
   }
@@ -903,11 +1060,11 @@ function providerOf(env: Env): string {
 }
 
 // The model, with the provider after it: Opus 5.5 (Bedrock).
-function modelPart(data: StatusData, env: Env): string {
+function modelPart(data: StatusData, theme: Theme, env: Env): string {
   const name = data.model?.display_name;
   if (!name) return '';
   const provider = providerOf(env);
-  return `${YELLOW}${name}${provider ? ` (${provider})` : ''}${RESET}`;
+  return `${theme.accent}${name}${provider ? ` (${provider})` : ''}${RESET}`;
 }
 
 // A count and what it counts, one or many: 1 rule, 4 rules.
@@ -922,15 +1079,15 @@ const ENV_KINDS: ['claudeMd' | 'rules' | 'mcp' | 'hooks', string, string][] = [
 ];
 
 // What the session loads, kind by kind, leaving out a kind with none.
-function envPart(setup: Setup, config: Config): string {
+function envPart(setup: Setup, config: Config, theme: Theme): string {
   const counts = ENV_KINDS.filter(([kind]) => setup[kind]).map(([kind, one, many]) => counted(setup[kind], one, many));
-  return counts.length ? `${GRAY}${labelOf(config, 'env')}${counts.join(' ')}${RESET}` : '';
+  return counts.length ? `${theme.muted}${labelOf(config, 'env')}${counts.join(' ')}${RESET}` : '';
 }
 
 // The plan, with the signed-in user after it: Claude Max 20x (me@example.com).
-function planPart({ plan, user }: Setup): string {
+function planPart({ plan, user }: Setup, theme: Theme): string {
   const shown = plan && user ? `${plan} (${user})` : plan || user;
-  return shown ? `${GRAY}${shown}${RESET}` : '';
+  return shown ? `${theme.muted}${shown}${RESET}` : '';
 }
 
 // The limit part: every window at 100% or more, by its full name (5h, 7d,
@@ -938,7 +1095,7 @@ function planPart({ plan, user }: Setup): string {
 // window says nothing. A reset shows as its window's part shows it. The
 // spend part shows none, so a spend reset, when Claude Code sends one, shows
 // as days or a time of day, as the weekly resets do.
-function limitPart(data: StatusData, config: Config, nowMs: number): string {
+function limitPart(data: StatusData, config: Config, theme: Theme, nowMs: number): string {
   const limits = data.rate_limits ?? {};
   const windows: [string, RateLimit | null | undefined, ResetText][] = [
     ['5h', limits.five_hour, WINDOWS['5h'].resetText],
@@ -951,7 +1108,7 @@ function limitPart(data: StatusData, config: Config, nowMs: number): string {
     .map(([name, limit, resetText]) =>
       config.reset && limit?.resets_at ? `${name} → ${resetText(limit.resets_at, config, nowMs)}` : name,
     );
-  return reached.length ? `${LEVELS[9]}limit reached: ${reached.join(', ')}${RESET}` : '';
+  return reached.length ? `${theme.levels[9]}limit reached: ${reached.join(', ')}${RESET}` : '';
 }
 
 // Bytes in gibibytes, as the OS monitors count them: 0.4G, 10.5G, 120G.
@@ -962,22 +1119,22 @@ const gib = (bytes: number) => {
 
 // The memory in use in the ctx part's shape: ram 66% ▓▓▓░░ 10.5G, on the
 // usage colours.
-function ramPart(memory: Memory | undefined, config: Config): string {
+function ramPart(memory: Memory | undefined, config: Config, theme: Theme): string {
   if (!memory) return '';
   const pct = (memory.used * 100) / memory.total;
-  const bar = config.bars ? ` ${cellsFor(pct, config.segments)}` : '';
-  return `${levelColor(Math.round(pct))}${labelOf(config, 'ram')}${Math.round(pct)}%${bar} ${gib(memory.used)}${RESET}`;
+  const bar = config.bars ? ` ${cellsFor(pct, config).join('')}` : '';
+  return `${levelColor(theme, Math.round(pct))}${labelOf(config, 'ram')}${Math.round(pct)}%${bar} ${gib(memory.used)}${RESET}`;
 }
 
 // The text and command parts: text from --text or from the command's
 // output. Neither comes through render's sanitised payload, so the part
 // sanitises it here.
-function outsideText(raw: string): string {
+function outsideText(raw: string, theme: Theme): string {
   const text = sanitise(raw);
-  return text ? `${GRAY}${text}${RESET}` : '';
+  return text ? `${theme.muted}${text}${RESET}` : '';
 }
 
-const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
+const versionPart = (data: StatusData, theme: Theme) => (data.version ? `${theme.muted}v${data.version}${RESET}` : '');
 
 // The cost ledger: what every session has spent, by local day, kept in the
 // state folder so that the today and week parts can add up spend across
@@ -1035,12 +1192,12 @@ function periodDays(period: Period, nowMs: number): string[] {
 // Spend across sessions for today or this week: what the ledger holds for
 // those days, and what this session has spent since it was last recorded.
 // Nothing shows when neither has anything to add.
-function spentPart(period: Period, { data, config, nowMs, ledger }: PartContext): string {
+function spentPart(period: Period, { data, config, theme, nowMs, ledger }: PartContext): string {
   const byDay = periodDays(period, nowMs).map((day) => finite(ledger.days[day]));
   const known = byDay.some((usd) => usd !== undefined) || finite(data.cost?.total_cost_usd) !== undefined;
   if (!known) return '';
   const usd = byDay.reduce<number>((sum, day) => sum + (day ?? 0), 0) + unrecorded(ledger, data);
-  return `${GRAY}${labelOf(config, period)}$${usd.toFixed(2)}${RESET}`;
+  return `${theme.muted}${labelOf(config, period)}$${usd.toFixed(2)}${RESET}`;
 }
 
 // The tools part shows the completed tools used most, up to this many, and
@@ -1062,15 +1219,15 @@ function shortTarget(name: string, target: string, cwd: string): string {
 
 // The tool running now, with its target, then the completed tools used most,
 // with counts: ◐ Edit src/a.ts ✓ Read ×12 ✓ Bash ×3.
-function toolsPart(activity: TranscriptActivity, cwd: string): string {
+function toolsPart(activity: TranscriptActivity, theme: Theme, cwd: string): string {
   const { running, completed } = activity.tools;
   const items: string[] = [];
   const now = running.at(-1);
-  if (now) items.push(`${YELLOW}◐ ${now.name}${now.target ? ` ${shortTarget(now.name, now.target, cwd)}` : ''}${RESET}`);
+  if (now) items.push(`${theme.accent}◐ ${now.name}${now.target ? ` ${shortTarget(now.name, now.target, cwd)}` : ''}${RESET}`);
   const done = Object.entries(completed)
     .sort((a, b) => b[1] - a[1])
     .slice(0, TOOLS_SHOWN);
-  for (const [name, count] of done) items.push(`${GREEN}✓${RESET} ${GRAY}${name} ×${count}${RESET}`);
+  for (const [name, count] of done) items.push(`${theme.good}✓${RESET} ${theme.muted}${name} ×${count}${RESET}`);
   return items.join(' ');
 }
 
@@ -1082,18 +1239,18 @@ const DESCRIPTION_CHARS = 30;
 
 // One subagent: ◐ Explore (Haiku 4.5) Find the config loader 1m while it
 // runs, ✓ when it finished, ✗ when it failed or was stopped.
-function agentItem(agent: AgentRun, nowMs: number): string {
+function agentItem(agent: AgentRun, theme: Theme, nowMs: number): string {
   const model = agent.model ? ` (${agent.model})` : '';
   const description = agent.description ? ` ${cut(agent.description, DESCRIPTION_CHARS)}` : '';
   const elapsed = agent.startedAt !== undefined ? ` ${formatDuration(Math.max(0, (agent.endedAt ?? nowMs) - agent.startedAt))}` : '';
   const text = `${agent.type}${model}${description}${elapsed}`;
-  if (agent.endedAt === undefined) return `${YELLOW}◐ ${text}${RESET}`;
-  return `${agent.failed ? `${RED}✗` : `${GREEN}✓`}${RESET} ${GRAY}${text}${RESET}`;
+  if (agent.endedAt === undefined) return `${theme.accent}◐ ${text}${RESET}`;
+  return `${agent.failed ? `${theme.bad}✗` : `${theme.good}✓`}${RESET} ${theme.muted}${text}${RESET}`;
 }
 
 // The subagents running now, oldest first, then those finished in the last
 // AGENT_LINGER_MS, newest first, up to AGENTS_SHOWN in all.
-function agentsPart(activity: TranscriptActivity, nowMs: number): string {
+function agentsPart(activity: TranscriptActivity, theme: Theme, nowMs: number): string {
   const { agents } = activity;
   const running = agents.filter((a) => a.endedAt === undefined);
   const finished = agents
@@ -1101,22 +1258,22 @@ function agentsPart(activity: TranscriptActivity, nowMs: number): string {
     .sort((a, b) => b.endedAt - a.endedAt);
   return [...running, ...finished]
     .slice(0, AGENTS_SHOWN)
-    .map((a) => agentItem(a, nowMs))
+    .map((a) => agentItem(a, theme, nowMs))
     .join(' ');
 }
 
 // The todo in progress, by the form Claude Code shows while it runs, then
 // how many todos are done: ◐ Writing the tests 1/3. With none in progress,
 // todos 1/3, and ✓ todos 3/3 once all are done.
-function todosPart(activity: TranscriptActivity, config: Config): string {
+function todosPart(activity: TranscriptActivity, config: Config, theme: Theme): string {
   const { todos } = activity;
   if (!todos.length) return '';
   const done = todos.filter((t) => t.status === 'completed').length;
   const count = `${done}/${todos.length}`;
   const now = todos.find((t) => t.status === 'in_progress');
-  if (now) return `${YELLOW}◐ ${cut(now.activeForm || now.content, DESCRIPTION_CHARS)}${RESET} ${GRAY}${count}${RESET}`;
-  const text = `${GRAY}${labelOf(config, 'todos')}${count}${RESET}`;
-  return done === todos.length ? `${GREEN}✓${RESET} ${text}` : text;
+  if (now) return `${theme.accent}◐ ${cut(now.activeForm || now.content, DESCRIPTION_CHARS)}${RESET} ${theme.muted}${count}${RESET}`;
+  const text = `${theme.muted}${labelOf(config, 'todos')}${count}${RESET}`;
+  return done === todos.length ? `${theme.good}✓${RESET} ${text}` : text;
 }
 
 // The skills part shows this many skills and this many MCP servers, and
@@ -1125,44 +1282,44 @@ const SKILLS_PART_SHOWN = 3;
 
 // The skills used, newest first, then the MCP servers called, those whose
 // latest call failed first: skills tdd code-review mcp ✗ linear github.
-function skillsPart(activity: TranscriptActivity, config: Config): string {
+function skillsPart(activity: TranscriptActivity, config: Config, theme: Theme): string {
   // The skills, then the servers, each with its label: none when it has nothing.
   const sections: string[] = [];
   const section = (label: string, items: string[]) => {
-    if (items.length) sections.push(`${GRAY}${labelOf(config, label)}${RESET}${items.join(' ')}`);
+    if (items.length) sections.push(`${theme.muted}${labelOf(config, label)}${RESET}${items.join(' ')}`);
   };
   const skills = [...activity.skills].reverse().slice(0, SKILLS_PART_SHOWN);
-  section('skills', skills.map((s) => `${GRAY}${cut(s, DESCRIPTION_CHARS)}${RESET}`));
+  section('skills', skills.map((s) => `${theme.muted}${cut(s, DESCRIPTION_CHARS)}${RESET}`));
   const newest = [...activity.mcp].reverse();
   const failing = newest.filter((s) => s.failed);
   const working = newest.filter((s) => !s.failed).slice(0, Math.max(0, SKILLS_PART_SHOWN - failing.length));
   section('mcp', [
-    ...failing.map((s) => `${RED}✗ ${cut(s.name, DESCRIPTION_CHARS)}${RESET}`),
-    ...working.map((s) => `${GRAY}${cut(s.name, DESCRIPTION_CHARS)}${RESET}`),
+    ...failing.map((s) => `${theme.bad}✗ ${cut(s.name, DESCRIPTION_CHARS)}${RESET}`),
+    ...working.map((s) => `${theme.muted}${cut(s.name, DESCRIPTION_CHARS)}${RESET}`),
   ]);
   return sections.join(' ');
 }
 
 // How many times the conversation was compacted: compactions 2. Nothing
 // before the first.
-function compactionsPart(activity: TranscriptActivity, config: Config): string {
+function compactionsPart(activity: TranscriptActivity, config: Config, theme: Theme): string {
   const { compactions } = activity;
-  return compactions > 0 ? `${GRAY}${labelOf(config, 'compactions')}${compactions}${RESET}` : '';
+  return compactions > 0 ? `${theme.muted}${labelOf(config, 'compactions')}${compactions}${RESET}` : '';
 }
 
 // The time since Claude last replied: reply 3m ago. A reply stamped ahead of
 // this machine's clock counts as just now.
-function replyPart(activity: TranscriptActivity, config: Config, nowMs: number): string {
+function replyPart(activity: TranscriptActivity, config: Config, theme: Theme, nowMs: number): string {
   const { lastReplyAt } = activity;
   if (lastReplyAt === undefined) return '';
-  return `${GRAY}${labelOf(config, 'reply')}${formatDuration(Math.max(0, nowMs - lastReplyAt))} ago${RESET}`;
+  return `${theme.muted}${labelOf(config, 'reply')}${formatDuration(Math.max(0, nowMs - lastReplyAt))} ago${RESET}`;
 }
 
 // The output speed of the last response: 84 tok/s, or 6.3 tok/s below ten.
-function speedPart(activity: TranscriptActivity): string {
+function speedPart(activity: TranscriptActivity, theme: Theme): string {
   const { speed } = activity;
   if (speed === undefined) return '';
-  return `${GRAY}${speed < 10 ? speed.toFixed(1) : Math.round(speed)} tok/s${RESET}`;
+  return `${theme.muted}${speed < 10 ? speed.toFixed(1) : Math.round(speed)} tok/s${RESET}`;
 }
 
 // env and plan: what Claude Code loads into a session, and the account, read
@@ -1527,6 +1684,7 @@ function render(
   const merged = { ...DEFAULTS, ...overrides };
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
+  const theme = themeOf(config.theme);
 
   let gitState: GitState | undefined;
   // The transcript is read at most once, and only when a part asks. A
@@ -1548,6 +1706,7 @@ function render(
   const input: PartContext = {
     data: sanitiseAll(data),
     config,
+    theme,
     nowMs,
     ledger: ledgerFrom(ledger),
     cwd,
@@ -1569,7 +1728,7 @@ function render(
     commandOutput: () => (commandOutput ??= config.command ? commandOutputOf(config.command, cwd) : ''),
   };
 
-  const separator = separatorOf(config);
+  const separator = separatorOf(config, theme);
   const width = columnsOf(columns);
 
   // One output line per row. A part with nothing to show drops out of its
@@ -1580,7 +1739,11 @@ function render(
         row
           // Rows handed in from JavaScript may name parts the registry lacks;
           // those render as nothing, like every other part with nothing to show.
-          .map((part) => ({ part, text: isPart(part) ? PART_REGISTRY[part].build(input) : '' }))
+          .map((part) => {
+            if (!isPart(part)) return { part, text: '' };
+            const color = ownValue(config.colors, part);
+            return { part, text: PART_REGISTRY[part].build(color ? { ...input, theme: solid(theme, color) } : input) };
+          })
           .filter((p) => p.text),
         separator,
         config.right,
@@ -2548,6 +2711,7 @@ export {
   render,
   parseArgs,
   PARTS,
+  THEMES,
   DEFAULT_ROWS,
   SWITCHES,
   payloadFromTranscript,
@@ -2565,7 +2729,7 @@ export {
   COMMAND_TIMEOUT_MS,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, McpServer, Setup, Memory };
+export type { StatusData, Config, Overrides, Part, Theme, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, McpServer, Setup, Memory };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
