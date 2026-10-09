@@ -1185,7 +1185,8 @@ test('each terminal render saves its payload to the state folder, overwriting th
   const config = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
   const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
   const saved = path.join(config, 'claude-gauge', '.state', 'last-payload.json');
-  const statusLine = (data) => execFileSync(process.execPath, [script, '--show', 'model'], { env, input: JSON.stringify(data), encoding: 'utf8' });
+  const statusLine = (data) =>
+    execFileSync(process.execPath, [script, '--show', 'model'], { env, input: typeof data === 'string' ? data : JSON.stringify(data), encoding: 'utf8' });
 
   statusLine({ model: { display_name: 'Opus' }, session_id: 'one' });
   assert.deepEqual(JSON.parse(fs.readFileSync(saved, 'utf8')), { model: { display_name: 'Opus' }, session_id: 'one' });
@@ -1193,6 +1194,11 @@ test('each terminal render saves its payload to the state folder, overwriting th
   assert.deepEqual(JSON.parse(fs.readFileSync(saved, 'utf8')), { model: { display_name: 'Sonnet' } });
   assert.ok(!fs.readFileSync(saved, 'utf8').includes('\n'), 'one compact line');
   assert.deepEqual(fs.readdirSync(path.dirname(saved)).filter((f) => f.includes('last-payload')), ['last-payload.json'], 'one file, overwritten');
+
+  // A payload that does not parse, or holds nothing, keeps the last one.
+  statusLine('{"model":');
+  statusLine({});
+  assert.deepEqual(JSON.parse(fs.readFileSync(saved, 'utf8')), { model: { display_name: 'Sonnet' } });
 
   // A payload too big to be a status payload is not kept, so the file stays small.
   statusLine({ model: { display_name: 'Haiku' }, junk: 'x'.repeat(200 * 1024) });

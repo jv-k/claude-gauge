@@ -1870,25 +1870,11 @@ const payloadFile = () => stateFile('last-payload.json');
 // file stays small.
 const MAX_SAVED_PAYLOAD = 64 * 1024;
 
-// Best effort, like saveUsage. The payload is written beside the file and
-// renamed over it, so the wizard never reads half of one.
+// Best effort, like saveUsage. Replaced whole, so the wizard never reads
+// half of one.
 function savePayload(data: StatusData): void {
   const text = JSON.stringify(data);
-  if (text.length > MAX_SAVED_PAYLOAD) return;
-  const file = payloadFile();
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(tmp, text);
-    fs.renameSync(tmp, file);
-  } catch {
-    /* read-only home or similar: skip */
-    try {
-      fs.rmSync(tmp, { force: true });
-    } catch {
-      /* nothing to tidy */
-    }
-  }
+  if (text.length <= MAX_SAVED_PAYLOAD) replaceQuietly(fs, payloadFile(), text);
 }
 
 // The saved windows, without any that have reset since they were saved.
@@ -2586,20 +2572,27 @@ function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptSta
 // in place, the state is written whole to a file of its own and renamed over
 // the old one: the status line can render twice at once, and the other
 // render must never read half a state.
-function saveTranscriptState(io: TranscriptFs, stateFile: string, state: TranscriptState): void {
-  const temporary = `${stateFile}.${process.pid}.tmp`;
+// Writes `text` beside `file` and renames it over the file, so a reader sees
+// the old file or the new one. Best effort: in a read-only home or similar
+// it writes nothing and leaves no temporary file.
+function replaceQuietly(io: TranscriptFs, file: string, text: string): void {
+  const temporary = `${file}.${process.pid}.tmp`;
   try {
-    io.mkdirSync(path.dirname(stateFile), { recursive: true });
-    io.writeFileSync(temporary, JSON.stringify(state));
-    io.renameSync(temporary, stateFile);
+    io.mkdirSync(path.dirname(file), { recursive: true });
+    io.writeFileSync(temporary, text);
+    io.renameSync(temporary, file);
   } catch {
-    // Read-only home or similar: the next render reads from the start.
     try {
       io.rmSync(temporary, { force: true });
     } catch {
       /* nothing to remove */
     }
   }
+}
+
+// A state that is not saved makes the next render read from the start.
+function saveTranscriptState(io: TranscriptFs, stateFile: string, state: TranscriptState): void {
+  replaceQuietly(io, stateFile, JSON.stringify(state));
 }
 
 // What the transcript shows, reading only what it gained since the last
@@ -2839,6 +2832,7 @@ export {
   instruction,
   INSTRUCT_HOSTS,
   readTranscriptActivity,
+  payloadFile,
   readSetup,
   readMemory,
   runCommand,
@@ -2876,13 +2870,17 @@ if (isMain) {
     process.stdin.on('data', (c: Buffer) => chunks.push(c));
     process.stdin.on('end', () => {
       let data: StatusData = {};
+      let parsed = false;
       try {
         data = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+        parsed = true;
       } catch {
         /* render what we can from an empty payload rather than print nothing */
       }
       saveUsage(data, nowMs);
-      savePayload(data);
+      // Only a payload that holds something replaces the one the wizard
+      // previews with.
+      if (parsed && isObject(data) && Object.keys(data).length) savePayload(data);
       const ledger = recordCost(data, { nowMs });
       process.stdout.write(render(data, { config, nowMs, ledger, columns: columnsOf(process.env.COLUMNS) }) + '\n');
     });

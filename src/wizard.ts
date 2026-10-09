@@ -38,11 +38,12 @@ class EndOfAnswers extends Error {
 }
 
 const MAX_ROWS = 3;
+const SEGMENTS = [5, 10] as const;
 
 // The status line choices, as the wizard builds them up.
 interface StatusChoices {
   rows: Part[][];
-  segments: 5 | 10;
+  segments: (typeof SEGMENTS)[number];
   theme: string;
   labels: boolean;
 }
@@ -63,8 +64,8 @@ function switchesFor({ rows, segments, theme, labels }: StatusChoices): string {
   return words.join(' ');
 }
 
-// Asks until `read` takes the answer: it returns the value, or a string that
-// says why it cannot. Enter gives `fallback` when there is one.
+// Asks until `read` takes the answer: it returns the value, or a retry that
+// says why it cannot. Each `read` says what an empty answer, Enter, gives.
 async function askFor<T>(io: WizardIo, question: string, read: (answer: string) => T | { retry: string }): Promise<T> {
   for (;;) {
     const answer = await io.ask(question);
@@ -115,7 +116,7 @@ async function runWizard(io: WizardIo, { preview }: WizardOptions): Promise<Wiza
   io.write(`\nThe parts: ${PARTS.join(', ')}.\nREADME.md says what each shows. Press Enter to keep the value in brackets.\n`);
   const count = await askFor(io, `How many status line rows, 1 to ${MAX_ROWS}? [${DEFAULT_ROWS.length}] `, (answer) => {
     const n = answer ? Number(answer) : DEFAULT_ROWS.length;
-    return Number.isInteger(n) && n >= 1 && n <= MAX_ROWS ? n : { retry: `Answer 1, 2 or 3.` };
+    return Number.isInteger(n) && n >= 1 && n <= MAX_ROWS ? n : { retry: `Answer a number from 1 to ${MAX_ROWS}.` };
   });
   status = { ...status, rows: Array.from({ length: count }, (_, i) => DEFAULT_ROWS[i] ?? []) };
   show();
@@ -128,10 +129,10 @@ async function runWizard(io: WizardIo, { preview }: WizardOptions): Promise<Wiza
     show();
   }
 
-  const segments = await askFor(io, 'Cells per bar, 5 or 10? [5] ', (answer) =>
-    !answer || answer === '5' ? 5 : answer === '10' ? 10 : { retry: 'Answer 5 or 10.' },
+  const segments = await askFor(io, `Cells per bar, ${SEGMENTS.join(' or ')}? [${SEGMENTS[0]}] `, (answer) =>
+    SEGMENTS.find((n) => String(n) === (answer || String(SEGMENTS[0]))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` },
   );
-  status = { ...status, segments: segments as 5 | 10 };
+  status = { ...status, segments };
   show();
 
   const theme = await askFor(io, `Theme: ${THEMES.join(', ')}? [default] `, (answer) => {
@@ -194,11 +195,11 @@ function samplePayload(nowMs: number): StatusData {
 }
 
 // The payload the status line saved, or the sample when there is none, or
-// none that reads as a payload.
+// none that reads as a payload: a JSON object that holds something.
 function loadPayload(file: string, nowMs = Date.now()): StatusData {
   try {
     const saved: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (typeof saved === 'object' && saved !== null && !Array.isArray(saved)) return saved as StatusData;
+    if (typeof saved === 'object' && saved !== null && !Array.isArray(saved) && Object.keys(saved).length) return saved as StatusData;
   } catch {
     /* no payload saved yet, or half of one */
   }

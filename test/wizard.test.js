@@ -95,7 +95,7 @@ test('an answer the wizard cannot use is asked again, with the reason', async ()
   const { preview } = fakePreview();
   assert.deepEqual(await runWizard(io, { preview }), { statusLine: '--show ctx --segments 10 --theme mono', tokenLine: '' });
   assert.match(io.output, /Answer y or n/);
-  assert.match(io.output, /1, 2 or 3/);
+  assert.match(io.output, /a number from 1 to 3/);
   assert.match(io.output, /Unknown part: bogus/);
   assert.match(io.output, /Name at least one part/);
   assert.match(io.output, /5 or 10/);
@@ -143,6 +143,8 @@ test('the preview uses the payload the status line saved, else a sample', () => 
     assert.deepEqual(loadPayload(file, now), samplePayload(now), 'half a file');
     fs.writeFileSync(file, '[1]');
     assert.deepEqual(loadPayload(file, now), samplePayload(now), 'not an object');
+    fs.writeFileSync(file, '{}');
+    assert.deepEqual(loadPayload(file, now), samplePayload(now), 'an empty object');
     const saved = { model: { display_name: 'Saved Model' }, context_window: { used_percentage: 12 } };
     fs.writeFileSync(file, JSON.stringify(saved));
     assert.deepEqual(loadPayload(file, now), saved);

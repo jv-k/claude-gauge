@@ -25,10 +25,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { spawnSync } from 'node:child_process';
-import { plan, commandFor, installed, ownerOf } from './settings';
+import { plan, commandFor, installed, ownerOf, isForeign } from './settings';
 import type { Choices, StatusLineSetting } from './settings';
 import { readSettings, writeSettings, writeAtomic } from './settings-file';
 import { runWizard, offerStar, confirm, loadPayload, previewer } from './wizard';
+import { payloadFile } from './statusline';
 import type { WizardIo } from './wizard';
 
 const USAGE = `Usage: claude-gauge <setup | configure | uninstall | update> [switches]
@@ -115,7 +116,6 @@ const configDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(),
 const settingsFile = () => path.join(configDir(), 'settings.json');
 const stateDir = () => path.join(configDir(), 'claude-gauge');
 const savedStatusLineFile = () => path.join(stateDir(), '.state', 'previous-statusline.json');
-const savedPayloadFile = () => path.join(stateDir(), '.state', 'last-payload.json');
 
 // The package this command runs from: dist/.. of this file.
 const packageRoot = path.resolve(__dirname, '..');
@@ -267,7 +267,7 @@ async function interactive(command: 'setup' | 'configure', replace: boolean): Pr
     const file = settingsFile();
     const current = readSettings(file).settings.statusLine as StatusLineSetting | undefined;
     const owner = ownerOf(current);
-    if (!replace && (owner === 'other' || owner === 'claude-hud')) {
+    if (!replace && isForeign(owner)) {
       io.write(`${file} already runs ${owner === 'claude-hud' ? "claude-hud's status line" : 'another status line'}:\n  ${current?.command ?? JSON.stringify(current)}\n`);
       if (!(await confirm(io, 'Replace it? claude-gauge saves it, and claude-gauge uninstall puts it back.', false))) {
         say('Nothing changed.');
@@ -275,7 +275,7 @@ async function interactive(command: 'setup' | 'configure', replace: boolean): Pr
       }
       replace = true;
     }
-    const preview = previewer(loadPayload(savedPayloadFile()));
+    const preview = previewer(loadPayload(payloadFile()));
     const choices = await runWizard(io, { preview });
     if (!choices) {
       say('Nothing changed.');
