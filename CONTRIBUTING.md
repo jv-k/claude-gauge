@@ -29,11 +29,12 @@ pnpm test
 | --- | --- |
 | `src/statusline.ts` | The status line. |
 | `src/tokenline.ts` | The token line. |
-| `src/cli.ts` | The `claude-gauge` command: `setup`, `configure`, `uninstall` and `update`. |
+| `src/cli.ts` | The `claude-gauge` command: `setup`, `configure`, `uninstall` and `update`. With no bar switches, `setup` and `configure` run the wizard. |
+| `src/wizard.ts` | The wizard's questions, with a preview of the status line after each answer, and the offer to star the repo. It returns the bars' switches and writes no file. |
 | `src/settings.ts` | `plan()`, which works out the next `settings.json` from the current one and the user's choices, without reading or writing a file. |
 | `src/settings-file.ts` | Reads `settings.json`, and writes it atomically, through a symlink, after a timestamped backup. |
 | `dist/` | The built files: the two scripts that users' settings run, and the `claude-gauge` command. `pnpm build` writes them. The `dist` workflow commits them to `main`. |
-| `test/` | The suites, one per line, one each for `plan()` and the `claude-gauge` command, and the git suite, which checks the git parts against injected and real git output; the parity suite, which checks the README examples against the build; the README sync suite, which checks the README's status line tables against the registry; the snapshot suite, which checks the status line against the golden snapshots in `test/snapshots/`; the themes suite, which checks the default rows in every theme against the golden snapshots in `test/snapshots/themes/`; and the release suites, which check the release notes script and what npm would publish. |
+| `test/` | The suites, one per line, one each for `plan()`, the `claude-gauge` command and its wizard, and the git suite, which checks the git parts against injected and real git output; the parity suite, which checks the README examples against the build; the README sync suite, which checks the README's status line tables against the registry; the snapshot suite, which checks the status line against the golden snapshots in `test/snapshots/`; the themes suite, which checks the default rows in every theme against the golden snapshots in `test/snapshots/themes/`; and the release suites, which check the release notes script and what npm would publish. |
 | `scripts/release-notes.js` | Prints a version's section of `CHANGELOG.md`, which the `release` workflow uses as the GitHub release notes. It is not part of the package. |
 | `README.md` | The user docs: every part and every switch. |
 | `INSTALL-WITH-CLAUDE.md` | The steps Claude follows when a user asks it to install claude-gauge. |

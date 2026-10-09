@@ -77,6 +77,10 @@ const isInstruct = (command: unknown) => typeof command === 'string' && /(?:^|\s
 const isTokenLine = (h: HookCommand) => scriptOf(h.command) === 'tokenline' && !isInstruct(h.command);
 const isOurs = (h: HookCommand) => scriptOf(h.command) !== undefined;
 
+// Whether writing claude-gauge's status line over this owner's replaces
+// someone else's, which needs the user's consent.
+const isForeign = (owner: Owner) => owner === 'other' || owner === 'claude-hud';
+
 function ownerOf(statusLine: unknown): Owner {
   if (statusLine === undefined || statusLine === null) return 'none';
   const command = (statusLine as StatusLineSetting).command;
@@ -164,7 +168,7 @@ function plan(current: Json, choices: Choices): Plan {
   const statusChoice = choices.uninstall ? null : choices.statusLine;
   const tokenChoice = choices.uninstall ? null : choices.tokenLine;
 
-  const takeOver = typeof statusChoice === 'string' && (found === 'other' || found === 'claude-hud');
+  const takeOver = typeof statusChoice === 'string' && isForeign(found);
   if (takeOver && !choices.replace) {
     return { settings, dropBackup: false, found, blocked: true, changed: false };
   }
@@ -229,6 +233,6 @@ function commandFor(script: string, switches = ''): string {
   return ['node', script.replace(/\\/g, '/'), ...words].map(shellWord).join(' ');
 }
 
-export { plan, commandFor, installed, ownerOf, scriptOf };
+export { plan, commandFor, installed, ownerOf, scriptOf, isForeign };
 
 export type { Choices, Plan, Owner, StatusLineSetting };
