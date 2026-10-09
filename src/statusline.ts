@@ -36,9 +36,10 @@ interface PartContext {
   branchOf: (cwd: string) => string;
   // The environment Claude Code runs the command in, which names the API
   // provider.
-  env: Env;
-  // What Claude Code loads for the folder, read from the files on disk.
-  setupOf: (cwd: string) => Setup;
+  processEnv: Env;
+  // What Claude Code loads for the folder, read from the files on disk the
+  // first time a part asks.
+  setup: () => Setup;
 }
 
 type Env = Record<string, string | undefined>;
@@ -74,7 +75,7 @@ const partRegistry = {
   duration: { description: 'how long the session has run', row: 1, build: ({ data }) => durationPart(data) },
   repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, folder }) => repoPart(data, folder) },
   branch: { description: 'current git branch, and the linked worktree', row: 1, build: ({ data, config, cwd, branchOf }) => branchPart(data, config, branchOf(cwd)) },
-  model: { description: 'model name, and the API provider when not first-party', row: 1, build: ({ data, env }) => modelPart(data, env) },
+  model: { description: 'model name, and the API provider when not first-party', row: 1, build: ({ data, processEnv }) => modelPart(data, processEnv) },
   effort: { description: 'reasoning effort', row: 1, build: ({ data, config }) => effortPart(data, config) },
   dir: { description: 'folder Claude Code runs in', build: ({ folder }) => `${BLUE}${folder}${RESET}` },
   cost: { description: 'estimated session cost', build: ({ data }) => costPart(data) },
@@ -89,8 +90,8 @@ const partRegistry = {
   cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config }) => cachePart(data, config) },
   spend: { description: 'spend against a gateway spend limit', build: ({ data, config }) => spendPart(data, config) },
   version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
-  env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, cwd, setupOf }) => envPart(setupOf(cwd), config) },
-  plan: { description: 'subscription plan and signed-in user', build: ({ cwd, setupOf }) => planPart(setupOf(cwd)) },
+  env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
+  plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -602,16 +603,19 @@ function modelPart(data: StatusData, env: Env): string {
 }
 
 // A count and what it counts, one or many: 1 rule, 4 rules.
-const counted = (n: number, one: string, many = one) => `${n} ${n === 1 ? one : many}`;
+const counted = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+// The kinds env counts, in order, and the words for one and for many.
+const ENV_KINDS: ['claudeMd' | 'rules' | 'mcp' | 'hooks', string, string][] = [
+  ['claudeMd', 'md', 'md'],
+  ['rules', 'rule', 'rules'],
+  ['mcp', 'mcp', 'mcp'],
+  ['hooks', 'hook', 'hooks'],
+];
 
 // What the session loads, kind by kind, leaving out a kind with none.
 function envPart(setup: Setup, config: Config): string {
-  const counts = [
-    setup.claudeMd ? counted(setup.claudeMd, 'md') : '',
-    setup.rules ? counted(setup.rules, 'rule', 'rules') : '',
-    setup.mcp ? counted(setup.mcp, 'mcp') : '',
-    setup.hooks ? counted(setup.hooks, 'hook', 'hooks') : '',
-  ].filter(Boolean);
+  const counts = ENV_KINDS.filter(([kind]) => setup[kind]).map(([kind, one, many]) => counted(setup[kind], one, many));
   return counts.length ? `${GRAY}${labelOf(config, 'env')}${counts.join(' ')}${RESET}` : '';
 }
 
@@ -623,113 +627,6 @@ function planPart({ plan, user }: Setup): string {
 
 const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
 
-interface RenderOptions {
-  config?: Overrides;
-  nowMs?: number;
-  branchOf?: (cwd: string) => string;
-  env?: Env;
-  setupOf?: (cwd: string) => Setup;
-  // The terminal's width in columns, when it is known.
-  columns?: number;
-}
-
-// A terminal width, from render's option or the text of COLUMNS, which
-// Claude Code sets for the status line command; unknown unless it is a whole
-// number above 0.
-const columnsOf = (value: number | string | undefined): number | undefined => {
-  const n = Number(value);
-  return Number.isInteger(n) && n > 0 ? n : undefined;
-};
-
-// Characters that take exactly one terminal column: printable Latin,
-// Greek and Cyrillic, and the punctuation, arrows, maths signs, box drawing
-// and blocks claude-gauge draws with. CJK and emoji take two in most
-// terminals and combining marks none, so they are left out.
-const ONE_COLUMN = /^[\x20-\x7e\u00a0-\u02ff\u0370-\u0482\u048a-\u052f\u2010-\u2027\u2030-\u205e\u2190-\u22ff\u2387\u2500-\u259f]*$/;
-
-// The columns a rendered text takes, or undefined when some character in it
-// may take more or less than one.
-const visibleWidth = (text: string): number | undefined => {
-  const shown = stripColours(text);
-  return ONE_COLUMN.test(shown) ? [...shown].length : undefined;
-};
-
-// A part a row shows: its name and what it printed.
-interface ShownPart {
-  part: string;
-  text: string;
-}
-
-// A row's shown parts joined by the separator. With a known width, the parts
-// named in right move to the end of the row, in row order, and spaces fill
-// the gap so the row ends at the terminal's edge. A row with none of those
-// parts, with text of uncertain width, or with too little room for a gap as
-// wide as the separator, is left as it is.
-function joinRow(shown: ShownPart[], separator: string, right: readonly string[], columns: number | undefined): string {
-  const join = (parts: ShownPart[]) => parts.map((p) => p.text).join(separator);
-  const atEnd = shown.filter((p) => right.includes(p.part));
-  if (columns === undefined || !atEnd.length) return join(shown);
-  const left = join(shown.filter((p) => !atEnd.includes(p)));
-  const end = join(atEnd);
-  const [leftWidth, endWidth, separatorWidth] = [left, end, separator].map(visibleWidth);
-  if (leftWidth === undefined || endWidth === undefined || separatorWidth === undefined) return join(shown);
-  const gap = columns - leftWidth - endWidth;
-  if (gap < (left ? separatorWidth : 0)) return join(shown);
-  return `${left}${' '.repeat(gap)}${end}`;
-}
-
-function render(
-  data: StatusData,
-  { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch, env = process.env, setupOf, columns }: RenderOptions = {},
-): string {
-  const merged = { ...DEFAULTS, ...overrides };
-  const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
-  const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
-
-  const setups = new Map<string, Setup>();
-  const input: PartContext = {
-    data: sanitiseAll(data),
-    config,
-    nowMs,
-    cwd,
-    folder: sanitise(path.basename(cwd)),
-    branchOf: (dir) => sanitise(branchOf(dir)),
-    env,
-    // Read once per render, however many parts ask, and only when one does.
-    setupOf: (dir) => {
-      if (!setups.has(dir)) setups.set(dir, (setupOf ?? ((d: string) => readSetup(d, { env })))(dir));
-      const setup = setups.get(dir) as Setup;
-      return { ...setup, plan: setup.plan && sanitise(setup.plan), user: setup.user && sanitise(setup.user) };
-    },
-  };
-
-  const separator = `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
-  const width = columnsOf(columns);
-
-  // One output line per row. A part with nothing to show drops out of its
-  // row, and a row left with no parts drops out of the status line.
-  return config.rows
-    .map((row) =>
-      joinRow(
-        row
-          // Rows handed in from JavaScript may name parts the registry lacks;
-          // those render as nothing, like every other part with nothing to show.
-          .map((part) => ({ part, text: isPart(part) ? PART_REGISTRY[part].build(input) : '' }))
-          .filter((p) => p.text),
-        separator,
-        config.right,
-        width,
-      ),
-    )
-    .filter(Boolean)
-    .join('\n');
-}
-
-// --latest: the status line where Claude Code runs none (the VS Code panel).
-// It rebuilds a payload from the session transcript, and takes the 5h and 7d
-// windows from the last terminal render, which saves them.
-
-const configDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 // env and plan: what Claude Code loads into a session, and the account, read
 // from the files it reads them from. Only local files, never the network or
 // the macOS Keychain, and a file that is missing or not JSON counts as empty.
@@ -746,6 +643,11 @@ const MANAGED_DIRS: Record<string, string> = {
   win32: 'C:\\Program Files\\ClaudeCode',
 };
 const managedDirOf = (platform: string) => MANAGED_DIRS[platform] ?? '/etc/claude-code';
+
+// Claude Code's config folder, and the .claude.json beside or inside it.
+const configDirOf = (env: Env, home: string) => env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+const claudeJsonOf = (env: Env, home: string) =>
+  env.CLAUDE_CONFIG_DIR ? path.join(env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(home, '.claude.json');
 
 // A JSON object from a file, or {} when the file is missing or holds anything
 // else.
@@ -823,7 +725,7 @@ function readSetup(
   cwd: string,
   { env = process.env, home = os.homedir(), managedDir = managedDirOf(process.platform) }: SetupOptions = {},
 ): Setup {
-  const config = env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+  const config = configDirOf(env, home);
   const project = path.resolve(cwd);
   const folders = foldersDownTo(project);
 
@@ -853,12 +755,12 @@ function readSetup(
   // MCP servers: user and local scope in .claude.json, the project's
   // .mcp.json and the managed file, each name once, less the project servers
   // turned off.
-  const global = readJson(env.CLAUDE_CONFIG_DIR ? path.join(env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(home, '.claude.json'));
-  const local = objectAt(objectAt(global, 'projects'), project);
-  const off = new Set([...settings, local].flatMap((s) => listAt(s, 'disabledMcpjsonServers')));
-  const projectServers = Object.keys(objectAt(readJson(path.join(project, '.mcp.json')), 'mcpServers')).filter((name) => !off.has(name));
+  const claudeJson = readJson(claudeJsonOf(env, home));
+  const local = objectAt(objectAt(claudeJson, 'projects'), project);
+  const turnedOff = new Set([...settings, local].flatMap((s) => listAt(s, 'disabledMcpjsonServers')));
+  const projectServers = Object.keys(objectAt(readJson(path.join(project, '.mcp.json')), 'mcpServers')).filter((name) => !turnedOff.has(name));
   const mcp = new Set([
-    ...Object.keys(objectAt(global, 'mcpServers')),
+    ...Object.keys(objectAt(claudeJson, 'mcpServers')),
     ...Object.keys(objectAt(local, 'mcpServers')),
     ...projectServers,
     ...Object.keys(objectAt(readJson(path.join(managedDir, 'managed-mcp.json')), 'mcpServers')),
@@ -869,7 +771,7 @@ function readSetup(
   // on macOS the login is in the Keychain, which this does not read. Only
   // those two fields are taken from the file.
   const plan = planName(objectAt(readJson(path.join(config, '.credentials.json')), 'claudeAiOauth'));
-  const user = stringAt(objectAt(global, 'oauthAccount'), 'emailAddress');
+  const user = stringAt(objectAt(claudeJson, 'oauthAccount'), 'emailAddress');
 
   return {
     claudeMd: claudeMd.size,
@@ -881,6 +783,115 @@ function readSetup(
   };
 }
 
+interface RenderOptions {
+  config?: Overrides;
+  nowMs?: number;
+  branchOf?: (cwd: string) => string;
+  env?: Env;
+  setupOf?: (cwd: string) => Setup;
+  // The terminal's width in columns, when it is known.
+  columns?: number;
+}
+
+// A terminal width, from render's option or the text of COLUMNS, which
+// Claude Code sets for the status line command; unknown unless it is a whole
+// number above 0.
+const columnsOf = (value: number | string | undefined): number | undefined => {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+};
+
+// Characters that take exactly one terminal column: printable Latin,
+// Greek and Cyrillic, and the punctuation, arrows, maths signs, box drawing
+// and blocks claude-gauge draws with. CJK and emoji take two in most
+// terminals and combining marks none, so they are left out.
+const ONE_COLUMN = /^[\x20-\x7e\u00a0-\u02ff\u0370-\u0482\u048a-\u052f\u2010-\u2027\u2030-\u205e\u2190-\u22ff\u2387\u2500-\u259f]*$/;
+
+// The columns a rendered text takes, or undefined when some character in it
+// may take more or less than one.
+const visibleWidth = (text: string): number | undefined => {
+  const shown = stripColours(text);
+  return ONE_COLUMN.test(shown) ? [...shown].length : undefined;
+};
+
+// A part a row shows: its name and what it printed.
+interface ShownPart {
+  part: string;
+  text: string;
+}
+
+// A row's shown parts joined by the separator. With a known width, the parts
+// named in right move to the end of the row, in row order, and spaces fill
+// the gap so the row ends at the terminal's edge. A row with none of those
+// parts, with text of uncertain width, or with too little room for a gap as
+// wide as the separator, is left as it is.
+function joinRow(shown: ShownPart[], separator: string, right: readonly string[], columns: number | undefined): string {
+  const join = (parts: ShownPart[]) => parts.map((p) => p.text).join(separator);
+  const atEnd = shown.filter((p) => right.includes(p.part));
+  if (columns === undefined || !atEnd.length) return join(shown);
+  const left = join(shown.filter((p) => !atEnd.includes(p)));
+  const end = join(atEnd);
+  const [leftWidth, endWidth, separatorWidth] = [left, end, separator].map(visibleWidth);
+  if (leftWidth === undefined || endWidth === undefined || separatorWidth === undefined) return join(shown);
+  const gap = columns - leftWidth - endWidth;
+  if (gap < (left ? separatorWidth : 0)) return join(shown);
+  return `${left}${' '.repeat(gap)}${end}`;
+}
+
+function render(
+  data: StatusData,
+  { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch, env = process.env, setupOf, columns }: RenderOptions = {},
+): string {
+  const merged = { ...DEFAULTS, ...overrides };
+  const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
+  const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
+
+  let setup: Setup | undefined;
+  const input: PartContext = {
+    data: sanitiseAll(data),
+    config,
+    nowMs,
+    cwd,
+    folder: sanitise(path.basename(cwd)),
+    branchOf: (dir) => sanitise(branchOf(dir)),
+    processEnv: env,
+    // Read once per render, however many parts ask, and only when one does.
+    setup: () => {
+      if (!setup) {
+        const read = setupOf ? setupOf(cwd) : readSetup(cwd, { env });
+        setup = { ...read, plan: read.plan && sanitise(read.plan), user: read.user && sanitise(read.user) };
+      }
+      return setup;
+    },
+  };
+
+  const separator = `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
+  const width = columnsOf(columns);
+
+  // One output line per row. A part with nothing to show drops out of its
+  // row, and a row left with no parts drops out of the status line.
+  return config.rows
+    .map((row) =>
+      joinRow(
+        row
+          // Rows handed in from JavaScript may name parts the registry lacks;
+          // those render as nothing, like every other part with nothing to show.
+          .map((part) => ({ part, text: isPart(part) ? PART_REGISTRY[part].build(input) : '' }))
+          .filter((p) => p.text),
+        separator,
+        config.right,
+        width,
+      ),
+    )
+    .filter(Boolean)
+    .join('\n');
+}
+
+// --latest: the status line where Claude Code runs none (the VS Code panel).
+// It rebuilds a payload from the session transcript, and takes the 5h and 7d
+// windows from the last terminal render, which saves them.
+
+const configDir = () => configDirOf(process.env, os.homedir());
 const usageFile = () => path.join(configDir(), 'claude-gauge', '.state', 'usage.json');
 
 // Best effort: a failed save never breaks the status line.

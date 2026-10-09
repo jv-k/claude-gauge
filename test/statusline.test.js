@@ -290,7 +290,11 @@ function setupTree(files) {
     fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
   }
   const dir = (name) => (fs.mkdirSync(path.join(root, name), { recursive: true }), path.join(root, name));
-  return { root, home: dir('home'), managedDir: dir('managed'), project: dir('home/work/project') };
+  const home = dir('home');
+  const managedDir = dir('managed');
+  // What readSetup takes to read this tree and nothing else.
+  const options = { env: {}, home, managedDir };
+  return { root, project: dir('home/work/project'), options };
 }
 
 const hooks = (...groups) => Object.fromEntries(groups.map(([event, n]) => [event, [{ hooks: Array.from({ length: n }, () => ({ type: 'command', command: 'true' })) }]]));
@@ -332,7 +336,7 @@ test('the setup counts what Claude Code loads, from the files on disk', () => {
     // The plan, from the subscription fields beside the login.
     'home/.claude/.credentials.json': { claudeAiOauth: { accessToken: 'secret', subscriptionType: 'max', rateLimitTier: 'default_claude_max_20x' } },
   }));
-  const setup = readSetup(tree.project, { env: {}, home: tree.home, managedDir: tree.managedDir });
+  const setup = readSetup(tree.project, tree.options);
   assert.deepEqual(setup, { claudeMd: 6, rules: 4, mcp: 5, hooks: 5, plan: 'Claude Max 20x', user: 'me@example.com' });
   assert.doesNotMatch(JSON.stringify(setup), /secret/);
 });
@@ -342,7 +346,7 @@ test('the setup follows CLAUDE_CONFIG_DIR, and names each plan', () => {
   const plan = (claudeAiOauth) => {
     const tree = setupTree({ 'config/.credentials.json': { claudeAiOauth }, 'config/.claude.json': { oauthAccount: { emailAddress: 'work@example.com' } } });
     const env = { CLAUDE_CONFIG_DIR: require('node:path').join(tree.root, 'config') };
-    const { plan, user } = readSetup(tree.project, { env, home: tree.home, managedDir: tree.managedDir });
+    const { plan, user } = readSetup(tree.project, { ...tree.options, env });
     return [plan, user];
   };
   assert.deepEqual(plan({ subscriptionType: 'max', rateLimitTier: 'default_claude_max_5x' }), ['Claude Max 5x', 'work@example.com']);
@@ -354,7 +358,7 @@ test('the setup follows CLAUDE_CONFIG_DIR, and names each plan', () => {
 test('the setup is empty where there is nothing to read, and skips files that are not JSON', () => {
   const { readSetup } = require('../dist/statusline.js');
   const empty = setupTree({});
-  assert.deepEqual(readSetup(empty.project, { env: {}, home: empty.home, managedDir: empty.managedDir }), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
+  assert.deepEqual(readSetup(empty.project, empty.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
   const broken = setupTree({
     'home/.claude.json': '{ not json',
     'home/.claude/settings.json': '[1, 2',
@@ -362,7 +366,7 @@ test('the setup is empty where there is nothing to read, and skips files that ar
     'home/work/project/.mcp.json': { mcpServers: ['not', 'an', 'object'] },
     'home/work/project/.claude/settings.json': { hooks: { Stop: 'not a list' } },
   });
-  assert.deepEqual(readSetup(broken.project, { env: {}, home: broken.home, managedDir: broken.managedDir }), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
+  assert.deepEqual(readSetup(broken.project, broken.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
 });
 
 test('version shows the Claude Code version', () => {
