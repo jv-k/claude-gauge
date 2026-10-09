@@ -516,8 +516,12 @@ function linesPart(data: StatusData): string {
   return `${GREEN}+${added ?? 0}${RESET} ${RED}−${removed ?? 0}${RESET}`;
 }
 
-// Text cut to at most chars characters, ending in … when it was cut.
-const cut = (text: string, chars: number) => (text.length <= chars ? text : `${text.slice(0, chars - 1)}…`);
+// Text cut to at most chars characters, ending in … when it was cut. It counts
+// code points, so a cut never splits an emoji in two.
+const cut = (text: string, chars: number) => {
+  const points = [...text];
+  return points.length <= chars ? text : `${points.slice(0, chars - 1).join('')}…`;
+};
 
 // The session's custom name or AI-generated title, cut to 30 characters.
 function namePart(data: StatusData): string {
@@ -1553,6 +1557,8 @@ function startAgent(state: TranscriptState, block: ContentBlock, startedAt: numb
     ...(description ? { description } : {}),
     ...(model ? { model } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
+    // Known from the call, so a prompt before the launch result does not stop it.
+    ...(input.run_in_background === true ? { background: true } : {}),
   });
 }
 
@@ -1589,9 +1595,9 @@ const textOf = (content: unknown): string =>
 // A task notification, which Claude Code adds when a task in the background
 // ends: the call that started the task, and its status. Not a prompt.
 function taskNotification(record: TranscriptRecord): { id?: string; status?: string } | undefined {
+  // Only the origin tells one apart: a prompt the user types can hold the same text.
+  if (!isObject(record.origin) || record.origin.kind !== 'task-notification') return undefined;
   const text = textOf(record.message?.content);
-  const origin = isObject(record.origin) ? record.origin.kind : undefined;
-  if (origin !== 'task-notification' && !text.trimStart().startsWith('<task-notification>')) return undefined;
   return {
     id: /<tool-use-id>([^<]*)<\/tool-use-id>/.exec(text)?.[1]?.trim(),
     status: /<status>([^<]*)<\/status>/.exec(text)?.[1]?.trim(),

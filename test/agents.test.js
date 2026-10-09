@@ -186,3 +186,20 @@ test('a transcript state from before the agents part is read again from the star
   fs.writeFileSync(path.join(stateDir, name), JSON.stringify({ ...saved, version: 1 }));
   assert.deepEqual(readTranscriptActivity(file, { stateDir }).agents, [{ type: 'Explore', description: 'Map it', startedAt: at(30) }]);
 });
+
+test('a long description is cut between characters, never inside an emoji', () => {
+  const agents = [{ type: 'Explore', description: `${'a'.repeat(28)}😀 and more`, startedAt: at(5) }];
+  assert.equal(renderAgents(agents), `◐ Explore ${'a'.repeat(28)}😀… 5s`);
+});
+
+test('a background subagent still runs when a prompt comes before its launch result', () => {
+  const call = agentCall('t1', { subagent_type: 'Plan', description: 'Plan it', run_in_background: true }, at(90));
+  const launched = agentResult('t1', at(40), { isAsync: true, status: 'async_launched', agentId: 'a1' });
+  assert.deepEqual(agentsIn([call, prompt('carry on', at(60)), launched]), [{ type: 'Plan', description: 'Plan it', startedAt: at(90) }]);
+});
+
+test('a prompt the user types that starts like a task notification is still a prompt', () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map it' }, at(90));
+  const typed = prompt('<task-notification>\n<tool-use-id>t1</tool-use-id>\n<status>completed</status>\n</task-notification>', at(50));
+  assert.deepEqual(agentsIn([call, typed]), [{ type: 'Explore', description: 'Map it', startedAt: at(90), endedAt: at(50), failed: true }]);
+});
