@@ -6,6 +6,12 @@ const { render, parseArgs } = require('../dist/statusline.js');
 
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
+// The model part names the API provider from the environment, so the suite
+// runs without the caller's provider variables.
+for (const name of Object.keys(process.env)) {
+  if (/^CLAUDE_CODE_USE_|^ANTHROPIC_BASE_URL$/.test(name)) delete process.env[name];
+}
+
 // A fixed local noon, so every reset below is relative to a known "now".
 const NOW = new Date(2026, 9, 7, 12, 0, 0).getTime();
 const at = (ms) => Math.floor(ms / 1000);
@@ -221,6 +227,144 @@ test('spend shows dollars against the limit, or the percentage until dollars arr
   assert.equal(run({}, ['--show', 'spend', '--show', 'model']), '');
 });
 
+test('model names the provider when requests do not go to the first-party API', () => {
+  const data = { model: { display_name: 'Opus 5.5' } };
+  const model = (env) => plain(render(data, { config: parseArgs(['--show', 'model']), env }));
+  assert.equal(model({}), 'Opus 5.5');
+  assert.equal(model({ CLAUDE_CODE_USE_BEDROCK: '1' }), 'Opus 5.5 (Bedrock)');
+  assert.equal(model({ CLAUDE_CODE_USE_MANTLE: 'true' }), 'Opus 5.5 (Bedrock)');
+  assert.equal(model({ CLAUDE_CODE_USE_VERTEX: '1' }), 'Opus 5.5 (Vertex)');
+  assert.equal(model({ CLAUDE_CODE_USE_FOUNDRY: '1' }), 'Opus 5.5 (Foundry)');
+  assert.equal(model({ CLAUDE_CODE_USE_ANTHROPIC_AWS: '1' }), 'Opus 5.5 (AWS)');
+  assert.equal(model({ ANTHROPIC_BASE_URL: 'https://llm.example.com/anthropic' }), 'Opus 5.5 (Enterprise)');
+  // The first-party API under its own name, and switches set off, are no
+  // provider at all.
+  assert.equal(model({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com' }), 'Opus 5.5');
+  assert.equal(model({ CLAUDE_CODE_USE_BEDROCK: '0', CLAUDE_CODE_USE_VERTEX: '' }), 'Opus 5.5');
+  // Without a model there is nothing to label.
+  assert.equal(plain(render({}, { config: parseArgs(['--show', 'model']), env: { CLAUDE_CODE_USE_BEDROCK: '1' } })), '');
+});
+
+// Renders the given parts with a setup in place of the files on disk.
+const withSetup = (setup, show, args = []) =>
+  plain(render({ workspace: { current_dir: '/home/me/project' } }, { config: parseArgs(['--show', show, ...args]), setupOf: () => setup }));
+
+const NOTHING_LOADED = { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 };
+
+test('env counts the CLAUDE.md files, rules, MCP servers and hooks loaded', () => {
+  const setup = { claudeMd: 2, rules: 4, mcp: 3, hooks: 2 };
+  assert.equal(withSetup(setup, 'env'), 'env 2 md 4 rules 3 mcp 2 hooks');
+  assert.equal(withSetup(setup, 'env', ['--no-labels']), '2 md 4 rules 3 mcp 2 hooks');
+  // One of a kind reads as one; nothing of a kind stays out.
+  assert.equal(withSetup({ claudeMd: 1, rules: 1, mcp: 0, hooks: 1 }, 'env'), 'env 1 md 1 rule 1 hook');
+  assert.equal(withSetup(NOTHING_LOADED, 'env'), '');
+});
+
+test('env reads the setup of the folder Claude Code runs in', () => {
+  let seen;
+  render({ workspace: { current_dir: '/home/me/project' } }, {
+    config: parseArgs(['--show', 'env,plan']),
+    setupOf: (cwd) => ((seen = cwd), NOTHING_LOADED),
+  });
+  assert.equal(seen, '/home/me/project');
+});
+
+test('plan shows the subscription and the signed-in user', () => {
+  const plan = (fields) => withSetup({ ...NOTHING_LOADED, ...fields }, 'plan');
+  assert.equal(plan({ plan: 'Claude Max 20x', user: 'me@example.com' }), 'Claude Max 20x (me@example.com)');
+  assert.equal(plan({ plan: 'Claude Pro' }), 'Claude Pro');
+  assert.equal(plan({ user: 'me@example.com' }), 'me@example.com');
+  assert.equal(plan({}), '');
+});
+
+// A home folder, a managed settings folder and a project two levels under
+// the home, in a temporary folder, with the given files written into it.
+// files may be a function of the temporary folder's path.
+function setupTree(files) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'claude-gauge-setup-')));
+  for (const [name, content] of Object.entries(typeof files === 'function' ? files(root) : files)) {
+    const file = path.join(root, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
+  }
+  const dir = (name) => (fs.mkdirSync(path.join(root, name), { recursive: true }), path.join(root, name));
+  return { root, home: dir('home'), managedDir: dir('managed'), project: dir('home/work/project') };
+}
+
+const hooks = (...groups) => Object.fromEntries(groups.map(([event, n]) => [event, [{ hooks: Array.from({ length: n }, () => ({ type: 'command', command: 'true' })) }]]));
+
+test('the setup counts what Claude Code loads, from the files on disk', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const project = 'home/work/project';
+  const tree = setupTree((root) => ({
+    // CLAUDE.md: managed, user, an ancestor of the project, and the project's
+    // three. One in a subfolder loads only on demand, so it does not count.
+    'managed/CLAUDE.md': '',
+    'home/.claude/CLAUDE.md': '',
+    'home/work/CLAUDE.md': '',
+    [`${project}/CLAUDE.md`]: '',
+    [`${project}/.claude/CLAUDE.md`]: '',
+    [`${project}/CLAUDE.local.md`]: '',
+    [`${project}/src/CLAUDE.md`]: '',
+    // Rules: every .md under the user's rules and the rules of the project
+    // and the folders above it, at any depth.
+    'home/.claude/rules/style.md': '',
+    'home/work/.claude/rules/shared.md': '',
+    'home/.claude/rules/lang/ts.md': '',
+    'home/.claude/rules/notes.txt': '',
+    [`${project}/.claude/rules/testing.md`]: '',
+    // MCP servers: user and local scope, the project's .mcp.json, and the
+    // managed file, each named once, less a project server turned off.
+    'home/.claude.json': {
+      mcpServers: { github: {}, linear: {} },
+      projects: { [require('node:path').join(root, project)]: { mcpServers: { neon: {} } } },
+      oauthAccount: { emailAddress: 'me@example.com' },
+    },
+    [`${project}/.mcp.json`]: { mcpServers: { github: {}, sentry: {}, figma: {} } },
+    'managed/managed-mcp.json': { mcpServers: { intranet: {} } },
+    // Hooks: one per handler, across user, project, local and managed settings.
+    'home/.claude/settings.json': { hooks: hooks(['Stop', 2], ['SessionStart', 1]) },
+    [`${project}/.claude/settings.json`]: { hooks: hooks(['PreToolUse', 1]) },
+    [`${project}/.claude/settings.local.json`]: { disabledMcpjsonServers: ['figma'] },
+    'managed/managed-settings.json': { hooks: hooks(['Stop', 1]) },
+    // The plan, from the subscription fields beside the login.
+    'home/.claude/.credentials.json': { claudeAiOauth: { accessToken: 'secret', subscriptionType: 'max', rateLimitTier: 'default_claude_max_20x' } },
+  }));
+  const setup = readSetup(tree.project, { env: {}, home: tree.home, managedDir: tree.managedDir });
+  assert.deepEqual(setup, { claudeMd: 6, rules: 4, mcp: 5, hooks: 5, plan: 'Claude Max 20x', user: 'me@example.com' });
+  assert.doesNotMatch(JSON.stringify(setup), /secret/);
+});
+
+test('the setup follows CLAUDE_CONFIG_DIR, and names each plan', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const plan = (claudeAiOauth) => {
+    const tree = setupTree({ 'config/.credentials.json': { claudeAiOauth }, 'config/.claude.json': { oauthAccount: { emailAddress: 'work@example.com' } } });
+    const env = { CLAUDE_CONFIG_DIR: require('node:path').join(tree.root, 'config') };
+    const { plan, user } = readSetup(tree.project, { env, home: tree.home, managedDir: tree.managedDir });
+    return [plan, user];
+  };
+  assert.deepEqual(plan({ subscriptionType: 'max', rateLimitTier: 'default_claude_max_5x' }), ['Claude Max 5x', 'work@example.com']);
+  assert.deepEqual(plan({ subscriptionType: 'pro' }), ['Claude Pro', 'work@example.com']);
+  assert.deepEqual(plan({ subscriptionType: 'team', rateLimitTier: 'default_claude_team' }), ['Claude Team', 'work@example.com']);
+  assert.deepEqual(plan({}), [undefined, 'work@example.com']);
+});
+
+test('the setup is empty where there is nothing to read, and skips files that are not JSON', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const empty = setupTree({});
+  assert.deepEqual(readSetup(empty.project, { env: {}, home: empty.home, managedDir: empty.managedDir }), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
+  const broken = setupTree({
+    'home/.claude.json': '{ not json',
+    'home/.claude/settings.json': '[1, 2',
+    'home/.claude/.credentials.json': 'null',
+    'home/work/project/.mcp.json': { mcpServers: ['not', 'an', 'object'] },
+    'home/work/project/.claude/settings.json': { hooks: { Stop: 'not a list' } },
+  });
+  assert.deepEqual(readSetup(broken.project, { env: {}, home: broken.home, managedDir: broken.managedDir }), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
+});
+
 test('version shows the Claude Code version', () => {
   assert.equal(run({ version: '2.1.90' }, ['--show', 'version']), 'v2.1.90');
 });
@@ -251,10 +395,10 @@ const CONTROL = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069
 // 256-colour levels. HOSTILE's colours are none of these.
 const OWN_COLOURS = /\x1b\[(?:0|0;3\d|0;90|38;5;\d{1,3})m/g;
 
-// Renders the parts with the given payload and branch, and checks that the
-// only control codes left are claude-gauge's own colours.
-const renderClean = (data, show, branch = 'main') => {
-  const raw = render(data, { nowMs: NOW, branchOf: () => branch, config: parseArgs(['--show', show]) });
+// Renders the parts with the given payload, branch and setup, and checks
+// that the only control codes left are claude-gauge's own colours.
+const renderClean = (data, show, branch = 'main', setup = NOTHING_LOADED) => {
+  const raw = render(data, { nowMs: NOW, branchOf: () => branch, setupOf: () => setup, config: parseArgs(['--show', show]) });
   assert.doesNotMatch(raw.replace(OWN_COLOURS, ''), CONTROL, JSON.stringify(raw));
   return plain(raw);
 };
@@ -287,6 +431,11 @@ test('a hostile pull request prints without its control codes', () => {
   assert.equal(renderClean({ pr: { number: `12${HOSTILE}34` } }, 'pr'), '#1234');
 });
 
+test('a hostile plan or user from the config prints without its control codes', () => {
+  const setup = { ...NOTHING_LOADED, plan: `Claude ${HOSTILE}Max 20x`, user: `me@${HOSTILE}example.com` };
+  assert.equal(renderClean({ workspace: { current_dir: '/home/me/project' } }, 'plan', 'main', setup), 'Claude Max 20x (me@example.com)');
+});
+
 test('every part prints hostile payload text without its control codes', () => {
   const { PARTS } = require('../dist/statusline.js');
   const h = (text) => `${text.slice(0, 1)}${HOSTILE}${text.slice(1)}`;
@@ -306,7 +455,8 @@ test('every part prints hostile payload text without its control codes', () => {
     prompt_cache: { warm: true, hit_ratio: 0.5 },
     rate_limits: { five_hour: { used_percentage: 10 }, seven_day: { used_percentage: 20 }, spend_limit: { used_percentage: 30 } },
   };
-  for (const part of PARTS) assert.ok(renderClean(data, part, h('main')), part);
+  const setup = { claudeMd: 1, rules: 0, mcp: 0, hooks: 0, plan: h('Claude Max 20x'), user: h('me@example.com') };
+  for (const part of PARTS) assert.ok(renderClean(data, part, h('main'), setup), part);
   assert.equal(
     renderClean(data, 'model,effort,style,agent,version,lines,ctx'),
     'Opus │ effort high │ style explanatory │ agent reviewer │ v2.1.90 │ +15 −23 │ ctx 43% ▓▓░░░ 86.0k',

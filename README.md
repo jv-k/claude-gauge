@@ -38,7 +38,7 @@ The default rows hold these parts, in this order. The name in the first column i
 | `duration` | `1h12m` | How long the session has run: `45s`, `12m`, `1h12m`, `2d3h`. |
 | `repo` | `jv-k/claude-gauge` | The repository from the `origin` remote. Without one it shows the folder name. |
 | `branch` | `⎇ main` | The current git branch. Inside a linked worktree it names that too: `⎇ feat-x (wt my-feature)`. |
-| `model` | `Opus 5.5` | The model. |
+| `model` | `Opus 5.5` | The model. When requests do not go to the Anthropic API, the provider follows it: `Opus 5.5 (Bedrock)`. See **Provider** below. |
 | `effort` | `effort high` | The reasoning effort, following `/effort` changes, when the model supports effort. |
 
 **Context.** The percentage counts input only: fresh input, cache writes and cache reads. It does not count output. A high figure means that Claude Code will soon compact the conversation.
@@ -59,6 +59,8 @@ The default rows hold these parts, in this order. The name in the first column i
 For the first 9 minutes of the 5-hour window, and for about the first 50 minutes of the week, the marker uses the bar's own colour, because the projection is not reliable that early.
 
 **Reset times.** Reset times use the 24-hour clock and are rounded to the nearest minute.
+
+**Provider.** The `model` part reads the provider from the variables that Claude Code sets, or that you set in your shell or in the `env` block of your settings: `Bedrock` for `CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_MANTLE`, `Vertex` for `CLAUDE_CODE_USE_VERTEX`, `Foundry` for `CLAUDE_CODE_USE_FOUNDRY`, `AWS` for `CLAUDE_CODE_USE_ANTHROPIC_AWS` (Claude Platform on AWS), and `Enterprise` when `ANTHROPIC_BASE_URL` names a host other than `api.anthropic.com`, such as a company gateway. A variable counts as set when it is `1`, `true`, `yes` or `on`. With none of them, the model shows alone.
 
 **`~`.** A usage part shows `~`, as in `5h ~`, when Claude Code has not sent usage data yet. This happens before the first response of a session, and on plans that have no such limits. The usage parts need a claude.ai Pro or Max subscription.
 
@@ -81,6 +83,21 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 | `cache` | The prompt cache's hit ratio and state: `cache 91% warm`. Green when most requests hit the cache, red when most miss. | After the session's first response. |
 | `spend` | Your spend against the limit: `$314/$500`, or `spend 63%` until Claude Code has the dollar amounts. | Behind a Claude apps gateway with a spend limit. |
 | `version` | The Claude Code version: `v2.1.90`. | Always. |
+| `env` | What Claude Code loads into the session: `env 2 md 4 rules 3 mcp 2 hooks`, for CLAUDE.md files, rules, MCP servers and hooks. A kind with none stays out. See [Environment and plan](#environment-and-plan). | When anything is loaded. |
+| `plan` | Your claude.ai plan and the account you are signed in with: `Claude Max 20x (me@example.com)`. | When the config names them. |
+
+#### Environment and plan
+
+`env` and `plan` read the files Claude Code reads, on your machine, with no network call. The config folder is `~/.claude`, or `CLAUDE_CONFIG_DIR` when you set it.
+
+- **CLAUDE.md files**: the user's `CLAUDE.md` in the config folder, the managed one an administrator installs, and `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` in the folder Claude Code runs in and every folder above it. Files in subfolders load only when Claude works there, so they do not count.
+- **Rules**: every `.md` file, at any depth, under `rules/` in the config folder and under `.claude/rules/` in the folder Claude Code runs in and every folder above it.
+- **MCP servers**: the user and local servers in `.claude.json`, the project's `.mcp.json`, and the managed `managed-mcp.json`, each name once. Project servers that a settings file turns off with `disabledMcpjsonServers` do not count.
+- **Hooks**: one per hook command in the user, project, local and managed settings files.
+- **Plan**: the subscription in `.credentials.json` in the config folder: `max` on the 20x tier is `Claude Max 20x`, `pro` is `Claude Pro`. On macOS, Claude Code keeps the login in the Keychain instead, which claude-gauge does not read, so `plan` shows only the account there. Only the plan fields are read from that file.
+- **Account**: the email address of the signed-in account, from `.claude.json`.
+
+Plugin hooks and MCP servers are not counted.
 
 ### Token line
 
@@ -202,6 +219,7 @@ Each hook takes its bar's usual switches, such as `--show` and `--segments`, and
 
 - `ctx`, `model` and `effort` come from the session's last response. `duration` counts from the first entry in the transcript.
 - `time`, `dir`, `repo`, `branch` and `worktree` come from the clock and from git, as in the terminal.
+- `env` and `plan` come from the files on disk, and the provider after `model` from the environment, as in the terminal.
 - `5h` and `7d` come from the last time the status line ran in a terminal, in any session. Claude Code sends usage figures only to a status line, so each terminal render saves them in `~/.claude/claude-gauge/.state/usage.json`. The figures are as recent as that render. Until a terminal render saves them, and after a window resets, the part shows `~`.
 - The other parts, such as `cost`, `lines`, `pr` and `cache`, have nothing to report, and stay out of their row.
 

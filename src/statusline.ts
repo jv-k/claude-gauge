@@ -8,10 +8,11 @@
 //   ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
 //   14:58 │ 1h12m │ jv-k/claude-gauge │ ⎇ main │ Opus 5.5 │ effort high
 //
-// Everything comes from Claude Code's own payload
+// Almost everything comes from Claude Code's own payload
 // (https://code.claude.com/docs/en/statusline): `rate_limits` carries the
 // claude.ai 5-hour and 7-day windows. The only side call is
-// `git branch --show-current`.
+// `git branch --show-current`. The env and plan parts read Claude Code's own
+// config files, and the model part reads the provider from the environment.
 //
 // The parts it can show are in PART_REGISTRY and the switches it takes in
 // SWITCHES, both below. README.md documents each in a table, and a test fails
@@ -33,6 +34,25 @@ interface PartContext {
   cwd: string;
   folder: string;
   branchOf: (cwd: string) => string;
+  // The environment Claude Code runs the command in, which names the API
+  // provider.
+  env: Env;
+  // What Claude Code loads for the folder, read from the files on disk.
+  setupOf: (cwd: string) => Setup;
+}
+
+type Env = Record<string, string | undefined>;
+
+// What Claude Code loads into a session, and the account it signs in with:
+// counts of CLAUDE.md files, rules, MCP servers and hooks, and the plan and
+// user when the config names them.
+interface Setup {
+  claudeMd: number;
+  rules: number;
+  mcp: number;
+  hooks: number;
+  plan?: string;
+  user?: string;
 }
 
 interface PartSpec {
@@ -54,7 +74,7 @@ const partRegistry = {
   duration: { description: 'how long the session has run', row: 1, build: ({ data }) => durationPart(data) },
   repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, folder }) => repoPart(data, folder) },
   branch: { description: 'current git branch, and the linked worktree', row: 1, build: ({ data, config, cwd, branchOf }) => branchPart(data, config, branchOf(cwd)) },
-  model: { description: 'model name', row: 1, build: ({ data }) => (data.model?.display_name ? `${YELLOW}${data.model.display_name}${RESET}` : '') },
+  model: { description: 'model name, and the API provider when not first-party', row: 1, build: ({ data, env }) => modelPart(data, env) },
   effort: { description: 'reasoning effort', row: 1, build: ({ data, config }) => effortPart(data, config) },
   dir: { description: 'folder Claude Code runs in', build: ({ folder }) => `${BLUE}${folder}${RESET}` },
   cost: { description: 'estimated session cost', build: ({ data }) => costPart(data) },
@@ -69,6 +89,8 @@ const partRegistry = {
   cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config }) => cachePart(data, config) },
   spend: { description: 'spend against a gateway spend limit', build: ({ data, config }) => spendPart(data, config) },
   version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
+  env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, cwd, setupOf }) => envPart(setupOf(cwd), config) },
+  plan: { description: 'subscription plan and signed-in user', build: ({ cwd, setupOf }) => planPart(setupOf(cwd)) },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -549,12 +571,64 @@ function spendPart(data: StatusData, config: Config): string {
   return `${color}${labelOf(config, 'spend')}${Math.round(limit.used_percentage)}%${RESET}`;
 }
 
+// The API provider when requests do not go to the first-party API, from the
+// variables that select it: Bedrock (with its Mantle endpoint), Vertex,
+// Foundry, Claude Platform on AWS, or a gateway at a base URL of its own.
+// Claude Code reads these switches as on for 1, true, yes or on.
+const isOn = (value: string | undefined) => /^(?:1|true|yes|on)$/i.test(value?.trim() ?? '');
+
+function providerOf(env: Env): string {
+  if (isOn(env.CLAUDE_CODE_USE_BEDROCK) || isOn(env.CLAUDE_CODE_USE_MANTLE)) return 'Bedrock';
+  if (isOn(env.CLAUDE_CODE_USE_VERTEX)) return 'Vertex';
+  if (isOn(env.CLAUDE_CODE_USE_FOUNDRY)) return 'Foundry';
+  if (isOn(env.CLAUDE_CODE_USE_ANTHROPIC_AWS)) return 'AWS';
+  const base = env.ANTHROPIC_BASE_URL?.trim();
+  if (!base) return '';
+  let host = '';
+  try {
+    host = new URL(base).hostname;
+  } catch {
+    /* not a URL: still not the first-party API */
+  }
+  return host === 'api.anthropic.com' ? '' : 'Enterprise';
+}
+
+// The model, with the provider after it: Opus 5.5 (Bedrock).
+function modelPart(data: StatusData, env: Env): string {
+  const name = data.model?.display_name;
+  if (!name) return '';
+  const provider = providerOf(env);
+  return `${YELLOW}${name}${provider ? ` (${provider})` : ''}${RESET}`;
+}
+
+// A count and what it counts, one or many: 1 rule, 4 rules.
+const counted = (n: number, one: string, many = one) => `${n} ${n === 1 ? one : many}`;
+
+// What the session loads, kind by kind, leaving out a kind with none.
+function envPart(setup: Setup, config: Config): string {
+  const counts = [
+    setup.claudeMd ? counted(setup.claudeMd, 'md') : '',
+    setup.rules ? counted(setup.rules, 'rule', 'rules') : '',
+    setup.mcp ? counted(setup.mcp, 'mcp') : '',
+    setup.hooks ? counted(setup.hooks, 'hook', 'hooks') : '',
+  ].filter(Boolean);
+  return counts.length ? `${GRAY}${labelOf(config, 'env')}${counts.join(' ')}${RESET}` : '';
+}
+
+// The plan, with the signed-in user after it: Claude Max 20x (me@example.com).
+function planPart({ plan, user }: Setup): string {
+  const shown = plan && user ? `${plan} (${user})` : plan || user;
+  return shown ? `${GRAY}${shown}${RESET}` : '';
+}
+
 const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
 
 interface RenderOptions {
   config?: Overrides;
   nowMs?: number;
   branchOf?: (cwd: string) => string;
+  env?: Env;
+  setupOf?: (cwd: string) => Setup;
   // The terminal's width in columns, when it is known.
   columns?: number;
 }
@@ -606,12 +680,13 @@ function joinRow(shown: ShownPart[], separator: string, right: readonly string[]
 
 function render(
   data: StatusData,
-  { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch, columns }: RenderOptions = {},
+  { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch, env = process.env, setupOf, columns }: RenderOptions = {},
 ): string {
   const merged = { ...DEFAULTS, ...overrides };
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
 
+  const setups = new Map<string, Setup>();
   const input: PartContext = {
     data: sanitiseAll(data),
     config,
@@ -619,6 +694,13 @@ function render(
     cwd,
     folder: sanitise(path.basename(cwd)),
     branchOf: (dir) => sanitise(branchOf(dir)),
+    env,
+    // Read once per render, however many parts ask, and only when one does.
+    setupOf: (dir) => {
+      if (!setups.has(dir)) setups.set(dir, (setupOf ?? ((d: string) => readSetup(d, { env })))(dir));
+      const setup = setups.get(dir) as Setup;
+      return { ...setup, plan: setup.plan && sanitise(setup.plan), user: setup.user && sanitise(setup.user) };
+    },
   };
 
   const separator = `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
@@ -648,6 +730,157 @@ function render(
 // windows from the last terminal render, which saves them.
 
 const configDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+// env and plan: what Claude Code loads into a session, and the account, read
+// from the files it reads them from. Only local files, never the network or
+// the macOS Keychain, and a file that is missing or not JSON counts as empty.
+
+interface SetupOptions {
+  env?: Env;
+  home?: string;
+  // The folder of the managed policy files an administrator installs.
+  managedDir?: string;
+}
+
+const MANAGED_DIRS: Record<string, string> = {
+  darwin: '/Library/Application Support/ClaudeCode',
+  win32: 'C:\\Program Files\\ClaudeCode',
+};
+const managedDirOf = (platform: string) => MANAGED_DIRS[platform] ?? '/etc/claude-code';
+
+// A JSON object from a file, or {} when the file is missing or holds anything
+// else.
+type JsonObject = Record<string, unknown>;
+const isObject = (value: unknown): value is JsonObject => !!value && typeof value === 'object' && !Array.isArray(value);
+
+function readJson(file: string): JsonObject {
+  try {
+    const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return isObject(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+const objectAt = (value: unknown, key: string): JsonObject => (isObject(value) && isObject(value[key]) ? value[key] : {});
+const stringAt = (value: unknown, key: string): string | undefined => {
+  const field = isObject(value) ? value[key] : undefined;
+  return typeof field === 'string' && field ? field : undefined;
+};
+const listAt = (value: unknown, key: string): unknown[] => {
+  const field = isObject(value) ? value[key] : undefined;
+  return Array.isArray(field) ? field : [];
+};
+
+const isFile = (file: string) => {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+};
+
+// The .md files under a folder, at any depth.
+function markdownUnder(dir: string): string[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.flatMap((e) => {
+    const file = path.join(dir, e.name);
+    if (e.isDirectory()) return markdownUnder(file);
+    return e.name.endsWith('.md') && isFile(file) ? [file] : [];
+  });
+}
+
+// A folder and every folder above it, from the root down.
+function foldersDownTo(cwd: string): string[] {
+  const folders: string[] = [];
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    folders.unshift(dir);
+    if (path.dirname(dir) === dir) return folders;
+  }
+}
+
+// Hook handlers in a settings file: one per command in each matcher group.
+const hooksIn = (settings: JsonObject) =>
+  Object.values(objectAt(settings, 'hooks')).reduce<number>(
+    (n, groups) => n + (Array.isArray(groups) ? groups.reduce<number>((m, group) => m + listAt(group, 'hooks').length, 0) : 0),
+    0,
+  );
+
+// claude.ai plan names from the login's subscription fields: max with the
+// default_claude_max_20x tier is Claude Max 20x, pro is Claude Pro.
+function planName(oauth: JsonObject): string | undefined {
+  const type = stringAt(oauth, 'subscriptionType');
+  if (!type) return undefined;
+  const multiple = /_(\d+x)$/.exec(stringAt(oauth, 'rateLimitTier') ?? '')?.[1];
+  return ['Claude', type[0].toUpperCase() + type.slice(1), multiple].filter(Boolean).join(' ');
+}
+
+function readSetup(
+  cwd: string,
+  { env = process.env, home = os.homedir(), managedDir = managedDirOf(process.platform) }: SetupOptions = {},
+): Setup {
+  const config = env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+  const project = path.resolve(cwd);
+  const folders = foldersDownTo(project);
+
+  // CLAUDE.md files load from the managed folder, the user's config, and the
+  // project and every folder above it. A path counts once, so the user's file
+  // is not counted again as the home folder's .claude/CLAUDE.md.
+  const claudeMd = new Set(
+    [
+      path.join(managedDir, 'CLAUDE.md'),
+      path.join(config, 'CLAUDE.md'),
+      ...folders.flatMap((dir) => ['CLAUDE.md', path.join('.claude', 'CLAUDE.md'), 'CLAUDE.local.md'].map((f) => path.join(dir, f))),
+    ].filter(isFile),
+  );
+  const rules = new Set([config, ...folders.map((dir) => path.join(dir, '.claude'))].flatMap((dir) => markdownUnder(path.join(dir, 'rules'))));
+
+  // Settings: user, project, local and managed. Each may hold hooks, and
+  // the names of project MCP servers turned off.
+  const settings = [
+    path.join(config, 'settings.json'),
+    path.join(project, '.claude', 'settings.json'),
+    path.join(project, '.claude', 'settings.local.json'),
+    path.join(managedDir, 'managed-settings.json'),
+  ]
+    .filter((file, i, all) => all.indexOf(file) === i)
+    .map(readJson);
+
+  // MCP servers: user and local scope in .claude.json, the project's
+  // .mcp.json and the managed file, each name once, less the project servers
+  // turned off.
+  const global = readJson(env.CLAUDE_CONFIG_DIR ? path.join(env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(home, '.claude.json'));
+  const local = objectAt(objectAt(global, 'projects'), project);
+  const off = new Set([...settings, local].flatMap((s) => listAt(s, 'disabledMcpjsonServers')));
+  const projectServers = Object.keys(objectAt(readJson(path.join(project, '.mcp.json')), 'mcpServers')).filter((name) => !off.has(name));
+  const mcp = new Set([
+    ...Object.keys(objectAt(global, 'mcpServers')),
+    ...Object.keys(objectAt(local, 'mcpServers')),
+    ...projectServers,
+    ...Object.keys(objectAt(readJson(path.join(managedDir, 'managed-mcp.json')), 'mcpServers')),
+  ]);
+  for (const name of listAt(local, 'disabledMcpServers')) if (typeof name === 'string') mcp.delete(name);
+
+  // The plan from the login's subscription fields, where they are in a file:
+  // on macOS the login is in the Keychain, which this does not read. Only
+  // those two fields are taken from the file.
+  const plan = planName(objectAt(readJson(path.join(config, '.credentials.json')), 'claudeAiOauth'));
+  const user = stringAt(objectAt(global, 'oauthAccount'), 'emailAddress');
+
+  return {
+    claudeMd: claudeMd.size,
+    rules: rules.size,
+    mcp: mcp.size,
+    hooks: settings.reduce((n, s) => n + hooksIn(s), 0),
+    ...(plan ? { plan } : {}),
+    ...(user ? { user } : {}),
+  };
+}
+
 const usageFile = () => path.join(configDir(), 'claude-gauge', '.state', 'usage.json');
 
 // Best effort: a failed save never breaks the status line.
@@ -835,9 +1068,10 @@ export {
   worktreeFromGitDir,
   instruction,
   INSTRUCT_HOSTS,
+  readSetup,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord };
+export type { StatusData, Config, Overrides, Part, TranscriptRecord, Setup };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
