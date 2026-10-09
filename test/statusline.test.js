@@ -284,6 +284,9 @@ test('limit names every exhausted window: 5h, 7d, each model and the spend limit
 test('time shows the current local time, on the 24-hour clock unless --12h', () => {
   assert.equal(run({}, ['--show', 'time']), '12:00');
   assert.equal(run({}, ['--show', 'time', '--12h']), '12:00 pm');
+  // A reset time at noon reads 12:00 pm on the 12-hour clock too, not 00:00 pm.
+  const noon = payload({ five_hour: { used_percentage: 9, resets_at: at(NOW + 20_000) } });
+  assert.equal(run(noon, ['--show', '5h', '--no-bars', '--12h']), '5h 9% → 12:00 pm');
 });
 
 test('duration counts seconds, minutes, hours and days, leaving off a zero lower unit', () => {
