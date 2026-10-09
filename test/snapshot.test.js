@@ -13,6 +13,12 @@ const { render, parseArgs } = require('../dist/statusline.js');
 
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
+// The model part names the API provider from the environment, so the suite
+// runs without the caller's provider variables.
+for (const name of Object.keys(process.env)) {
+  if (/^CLAUDE_CODE_USE_|^ANTHROPIC_BASE_URL$/.test(name)) delete process.env[name];
+}
+
 // A fixed local noon, as in the status line suite.
 const NOW = new Date(2026, 9, 7, 12, 0, 0).getTime();
 const at = (ms) => Math.floor(ms / 1000);

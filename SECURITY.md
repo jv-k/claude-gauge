@@ -16,13 +16,13 @@ claude-gauge has no release yet. Installs track `main`, so fixes land on `main`.
 
 claude-gauge runs inside Claude Code on each render and at the end of each turn. These properties make a bug worth a private report.
 
-**It prints text it did not write.** The status line prints text from Claude Code's input, from the session transcript and from git: the model name, the session name, folder names, the repository name and the branch name. Text from any of these that puts terminal control codes on the screen, other than the colours claude-gauge writes itself, is in scope.
+**It prints text it did not write.** The status line prints text from Claude Code's input, from the session transcript and from git: the model name, the session name, folder names, the repository name and the branch name. It also prints the text of `--text` and the output of the `--command` command. Text from any of these that puts terminal control codes on the screen, other than the colours claude-gauge writes itself, is in scope.
 
 **It writes into Claude's context.** With `--instruct`, each line prints an instruction into Claude's context, and that instruction names a shell command that Claude runs on every reply. Any input that changes that command or that instruction beyond the switches the user configured is in scope. Examples are a switch value, a path or an environment variable that breaks out of its quoting.
 
 **It reads private files.** With `--latest`, the lines read the session transcript, which holds the whole conversation. The status line writes one file, `claude-gauge/.state/usage.json` under the Claude config folder, and that file holds only usage figures. Anything that copies transcript content out, writes outside that folder, or reads a file the user did not point it at is in scope.
 
-**It runs one program.** The status line runs `git` with a one-second timeout, and neither line makes a network request. A path that runs another program or makes a network request is in scope.
+**It runs few programs.** The status line runs `git` with a one-second timeout, and `vm_stat` with the same timeout on macOS for the `ram` part. It runs the `--command` command only when the user names one and a row shows the `command` part, and stops it after 500 ms. Apart from that command, which can do anything the user wrote it to do, neither line makes a network request. A path that runs another program, runs the `--command` command without both, lets it run past its timeout, or makes a network request of claude-gauge's own is in scope.
 
 ## What is out of scope
 
