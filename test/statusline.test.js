@@ -355,6 +355,18 @@ test('the setup follows CLAUDE_CONFIG_DIR, and names each plan', () => {
   assert.deepEqual(plan({}), [undefined, 'work@example.com']);
 });
 
+test('the plan falls back to the account in .claude.json where no credentials file exists', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const plan = (oauthAccount) => {
+    const tree = setupTree({ 'home/.claude.json': { oauthAccount: { emailAddress: 'me@example.com', ...oauthAccount } } });
+    return readSetup(tree.project, tree.options).plan;
+  };
+  assert.equal(plan({ organizationType: 'claude_max', organizationRateLimitTier: 'default_claude_max_20x' }), 'Claude Max 20x');
+  assert.equal(plan({ organizationType: 'claude_pro' }), 'Claude Pro');
+  assert.equal(plan({ organizationType: 'api' }), undefined);
+  assert.equal(plan({}), undefined);
+});
+
 test('the setup is empty where there is nothing to read, and skips files that are not JSON', () => {
   const { readSetup } = require('../dist/statusline.js');
   const empty = setupTree({});

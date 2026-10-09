@@ -712,12 +712,11 @@ const hooksIn = (settings: JsonObject) =>
     0,
   );
 
-// claude.ai plan names from the login's subscription fields: max with the
-// default_claude_max_20x tier is Claude Max 20x, pro is Claude Pro.
-function planName(oauth: JsonObject): string | undefined {
-  const type = stringAt(oauth, 'subscriptionType');
+// claude.ai plan names from a subscription type and a rate-limit tier: max
+// with the default_claude_max_20x tier is Claude Max 20x, pro is Claude Pro.
+function planName(type: string | undefined, tier: string | undefined): string | undefined {
   if (!type) return undefined;
-  const multiple = /_(\d+x)$/.exec(stringAt(oauth, 'rateLimitTier') ?? '')?.[1];
+  const multiple = /_(\d+x)$/.exec(tier ?? '')?.[1];
   return ['Claude', type[0].toUpperCase() + type.slice(1), multiple].filter(Boolean).join(' ');
 }
 
@@ -767,11 +766,16 @@ function readSetup(
   ]);
   for (const name of listAt(local, 'disabledMcpServers')) if (typeof name === 'string') mcp.delete(name);
 
-  // The plan from the login's subscription fields, where they are in a file:
-  // on macOS the login is in the Keychain, which this does not read. Only
-  // those two fields are taken from the file.
-  const plan = planName(objectAt(readJson(path.join(config, '.credentials.json')), 'claudeAiOauth'));
-  const user = stringAt(objectAt(claudeJson, 'oauthAccount'), 'emailAddress');
+  // The plan from the login's subscription fields where they are in a file,
+  // else from the account Claude Code keeps in .claude.json, as on macOS,
+  // where the login is in the Keychain, which this does not read. Only the
+  // plan fields are taken from the credentials file.
+  const oauth = objectAt(readJson(path.join(config, '.credentials.json')), 'claudeAiOauth');
+  const account = objectAt(claudeJson, 'oauthAccount');
+  const plan =
+    planName(stringAt(oauth, 'subscriptionType'), stringAt(oauth, 'rateLimitTier')) ??
+    planName(/^claude_(\w+)$/.exec(stringAt(account, 'organizationType') ?? '')?.[1], stringAt(account, 'organizationRateLimitTier'));
+  const user = stringAt(account, 'emailAddress');
 
   return {
     claudeMd: claudeMd.size,

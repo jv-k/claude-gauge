@@ -94,7 +94,7 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 - **Rules**: every `.md` file, at any depth, under `rules/` in the config folder and under `.claude/rules/` in the folder Claude Code runs in and every folder above it.
 - **MCP servers**: the user and local servers in `.claude.json`, the project's `.mcp.json`, and the managed `managed-mcp.json`, each name once. Project servers that a settings file turns off with `disabledMcpjsonServers` do not count.
 - **Hooks**: one per hook command in the user, project, local and managed settings files.
-- **Plan**: the subscription in `.credentials.json` in the config folder: `max` on the 20x tier is `Claude Max 20x`, `pro` is `Claude Pro`. On macOS, Claude Code keeps the login in the Keychain instead, which claude-gauge does not read, so `plan` shows only the account there. Only the plan fields are read from that file.
+- **Plan**: the subscription in `.credentials.json` in the config folder: `max` on the 20x tier is `Claude Max 20x`, `pro` is `Claude Pro`. Only the plan fields are read from that file. Where that file does not exist, as on macOS, where Claude Code keeps the login in the Keychain, the plan comes from the account in `.claude.json` instead. claude-gauge never reads the Keychain.
 - **Account**: the email address of the signed-in account, from `.claude.json`.
 
 Plugin hooks and MCP servers are not counted.
