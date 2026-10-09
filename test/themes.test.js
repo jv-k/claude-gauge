@@ -3,7 +3,7 @@
 // Golden snapshots: the default two rows in every --theme preset, colour
 // codes and all, so a change to a theme's colours shows in review as a
 // changed file. Each file in test/snapshots/themes/ is one theme, with ESC
-// written as \e so that the codes read as text.
+// written as \e and BEL as \a so that the codes read as text.
 //
 // After a deliberate change, rewrite the files and review the diff:
 //
@@ -36,8 +36,10 @@ const payload = {
   },
 };
 
+// On the host "host", so the repo's link to the folder is the same on every
+// machine.
 const snapshot = (theme) =>
-  render(payload, { nowMs: NOW, statusOf: () => '# branch.head main\n', config: parseArgs(['--theme', theme]) }).replaceAll('\x1b', '\\e') + '\n';
+  render(payload, { nowMs: NOW, statusOf: () => '# branch.head main\n', hostname: 'host', config: parseArgs(['--theme', theme]) }).replaceAll('\x1b', '\\e').replaceAll('\x07', '\\a') + '\n';
 
 const file = (theme) => path.join(dir, `${theme}.txt`);
 

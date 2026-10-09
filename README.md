@@ -36,8 +36,8 @@ The default rows hold these parts, in this order. The name in the first column i
 | `7d` | `7d 41% ▓▓░┃░ → 3d` | Your weekly usage, and the days until it resets. On the day of the reset it shows the time instead. |
 | `time` | `11:10` | The current local time, or `11:10 am` with `--12h`. |
 | `duration` | `1h12m` | How long the session has run: `45s`, `12m`, `1h12m`, `2d3h`. |
-| `repo` | `jv-k/claude-gauge` | The repository from the `origin` remote. Without one it shows the folder name. |
-| `branch` | `⎇ main* ↑1` | The current git branch. `*` follows it when the work tree has changes, untracked files included, and `↑n` and `↓n` show the commits it is ahead of and behind its upstream. Inside a linked worktree it names that too: `⎇ feat-x* (wt my-feature)`. |
+| `repo` | `jv-k/claude-gauge` | The repository from the `origin` remote. Without one it shows the folder name. It links to the folder. See [Links](#links). |
+| `branch` | `⎇ main* ↑1` | The current git branch. `*` follows it when the work tree has changes, untracked files included, and `↑n` and `↓n` show the commits it is ahead of and behind its upstream. Inside a linked worktree it names that too: `⎇ feat-x* (wt my-feature)`. On GitHub and GitLab it links to the branch's page. See [Links](#links). |
 | `model` | `Opus 5.5` | The model. When requests do not go to the Anthropic API, the provider follows it: `Opus 5.5 (Bedrock)`. See **Provider** below. |
 | `effort` | `effort high` | The reasoning effort, following `/effort` changes, when the model supports effort. |
 
@@ -72,7 +72,7 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 
 | Part | Shows | When |
 | --- | --- | --- |
-| `dir` | The folder Claude Code runs in: `my-project`. | Always. |
+| `dir` | The folder Claude Code runs in: `my-project`. It links to the folder. See [Links](#links). | Always. |
 | `cost` | The session's estimated cost at list price: `$1.23`. Behind a spend limit it takes that limit's usage colour. | Always. Resets on `/clear`. |
 | `lines` | Lines of code added and removed this session: `+156 −23`. | Always. |
 | `name` | The session's name, or its AI-generated title, cut to 30 characters with `…`. | When the session has one. |
@@ -82,7 +82,7 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 | `git` | The work tree's changes, as counts: `!2 +1 ✘1 ?3` for modified, staged, deleted and untracked files. A file staged and then changed or deleted again counts in both. An untracked folder counts once, as git lists it. | When the work tree has changes. |
 | `files` | Up to 3 changed files, the most recently changed first: `statusline.ts README.md notes.txt`. A deleted file comes last, because it has no time. In a change set of more than 1000 files, it picks from the first 1000 that git lists. | When the work tree has changes. |
 | `worktree` | The linked git worktree: `wt my-feature`. The `branch` part names it too: `⎇ feat-x (wt my-feature)`. | Inside a linked worktree. |
-| `pr` | The branch's open pull request and its review state: `#1234 approved`. Green when approved, yellow when pending, red when changes are requested, grey as a draft. A GitLab merge request reads `!1234`. | While a PR is open. |
+| `pr` | The branch's open pull request and its review state: `#1234 approved`. Green when approved, yellow when pending, red when changes are requested, grey as a draft. A GitLab merge request reads `!1234`. It links to the pull request. See [Links](#links). | While a PR is open. |
 | `agent` | The agent: `agent security-reviewer`. | When Claude Code runs with `--agent`. |
 | `cache` | The prompt cache's hit ratio and state: `cache 91% warm`. Green when most requests hit the cache, red when most miss. | After the session's first response. |
 | `spend` | Your spend against the limit: `$314/$500`, or `spend 63%` until Claude Code has the dollar amounts. | Behind a Claude apps gateway with a spend limit. |
@@ -144,6 +144,16 @@ If the system figures cannot be read, `ram` uses the free and total memory that 
 - **It has 500 ms.** After 500 ms, claude-gauge stops the command and the part shows nothing. A slow or hung command delays the status line by 500 ms at most. On macOS and Linux, claude-gauge also stops any job that the command started in the background, when the command ends or runs out of time. On Windows, such a job can keep running.
 - **It shows one clean line.** The part shows the first line of output that has text in it. claude-gauge removes terminal control codes from that line, so the output cannot move the cursor, change colours or set the window title. Error output is discarded.
 - **It fails quietly.** When the command exits with an error, runs out of time, or prints more than 64 KB, the part shows nothing and the other parts show as usual.
+
+#### Links
+
+In a terminal that supports OSC 8 hyperlinks, such as iTerm2, kitty or WezTerm, four parts are links that you can click:
+
+- **`dir` and `repo`** link to the folder Claude Code runs in. The address is a `file://` address with the machine's name in it, so that the terminal can tell a folder on another machine from a local one.
+- **`branch`** links to the branch's page on GitHub or GitLab. The link shows only when the `origin` remote is on `github.com` or `gitlab.com` and the branch has an upstream on `origin`, because a branch without one may not be on the remote. The link goes to the upstream branch, which can have a different name from the local branch.
+- **`pr`** links to the pull request, at the web address that Claude Code gives.
+
+A part shows no link when its address is not known, for example a `branch` on another host. A terminal without OSC 8 support shows the text only. If your terminal shows the link codes as text, turn the links off with `--no-links`. `--latest` never prints links, because its rows are pasted into a reply as plain text.
 
 ### Token line
 
@@ -286,6 +296,7 @@ Both scripts take switches on the command line, so you set them in the `command`
 | `--no-reset` | Drops the reset times. |
 | `--12h` | Shows the `time` part and reset times on the 12-hour clock. Default: 24-hour. |
 | `--compact` | Fits narrow terminals: `│` between parts with no spaces round it, and shorter labels: `c` for `ctx`, `eff` for `effort`, `sty` for `style`, `agt` for `agent`, `cch` for `cache`, `spd` for `spend`, `tdy` for `today`, `wk` for `week` and `cmp` for `compactions`. The other labels are short already. |
+| `--no-links` | Drops the links on `dir`, `repo`, `branch` and `pr`. See [Links](#links). |
 | `--right <parts>` | The parts to right-align, separated by commas. In each row that shows any of them, they move to the end of the row, in the row's order, and spaces fill the gap so the row ends at the terminal's right edge. Claude Code gives the terminal width in `COLUMNS`. When the width is unknown, as with `--latest`, the row is too long to leave a gap, or the row holds characters whose width varies by terminal, such as CJK text and emoji, the row is left as it is. Repeat `--right` to name more parts. |
 | `--text <text>` | The text that the `text` part shows. Quote text that holds spaces: `--text 'work laptop'`. If you give `--text` more than once, the last one counts. |
 | `--command <command>` | The shell command that the `command` part runs. Quote the command as one value: `--command 'kubectl config current-context'`. It runs only when a `--show` row names `command`. See [Memory, text and command](#memory-text-and-command) for its rules. |
