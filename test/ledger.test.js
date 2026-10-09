@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { render, parseArgs, recordCost } = require('../dist/statusline.js');
+const { render, parseArgs, recordCost, withLock } = require('../dist/statusline.js');
 
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
@@ -158,6 +158,22 @@ test('a lock a stopped render left behind is broken, and a lock another render h
   recordCost(session('a', 2), { file, nowMs: NOW + 60_000 });
   assert.deepEqual(readFile(file).days, { '2026-10-07': 2 });
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['ledger.json']);
+});
+
+test('a render whose lock was broken while it stopped commits nothing, and leaves the new holder its lock', () => {
+  const file = tempLedger();
+  const lock = `${file}.lock`;
+  let before;
+  let after;
+  withLock(file, (held) => {
+    before = held();
+    // Another render takes the lock for stale while this one is stopped.
+    fs.writeFileSync(lock, 'other');
+    after = held();
+  });
+  assert.equal(before, true);
+  assert.equal(after, false);
+  assert.equal(fs.readFileSync(lock, 'utf8'), 'other');
 });
 
 // Runs a script in a Node process of its own, with the built status line at

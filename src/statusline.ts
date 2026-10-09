@@ -1287,8 +1287,11 @@ function breakStaleLock(lock: string, token: string): void {
 // Runs write while holding the ledger's lock, a file only one render at a
 // time can create, holding a token of the render's own. A render that cannot
 // take the lock in LOCK_WAIT_MS writes nothing, and loses nothing: its
-// session's spend stays unrecorded until a later render records it.
-function withLock(file: string, write: () => void): void {
+// session's spend stays unrecorded until a later render records it. write
+// gets held, which says whether the lock is still this render's: a render
+// that stopped for longer than STALE_LOCK_MS, as across a system sleep, can
+// find its lock broken and taken by another, and must then commit nothing.
+function withLock(file: string, write: (held: () => boolean) => void): void {
   const lock = `${file}.lock`;
   const token = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
   for (let waited = 0; ; waited += 5) {
@@ -1302,16 +1305,19 @@ function withLock(file: string, write: () => void): void {
       sleep(5);
     }
   }
+  const held = () => {
+    try {
+      return fs.readFileSync(lock, 'utf8') === token;
+    } catch {
+      return false;
+    }
+  };
   try {
-    write();
+    write(held);
   } finally {
     // Only this render's own lock: another may hold it once this one was
     // taken for stale.
-    try {
-      if (fs.readFileSync(lock, 'utf8') === token) fs.unlinkSync(lock);
-    } catch {
-      /* already gone */
-    }
+    if (held()) fs.rmSync(lock, { force: true });
   }
 }
 
@@ -1335,22 +1341,26 @@ function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() 
   const temp = `${file}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    withLock(file, () => {
+    withLock(file, (held) => {
       const fresh = readLedger(file);
       const day = dayKey(nowMs);
       fresh.days[day] = (dollars(fresh.days[day]) ?? 0) + unrecorded(fresh, data);
       fresh.sessions[id] = { usd, at: nowMs };
       forgetOld(fresh, nowMs);
       fs.writeFileSync(temp, JSON.stringify(fresh));
+      // A lock lost while this render stopped: the ledger read above may be
+      // out of date, so the session's spend waits for a later render.
+      if (!held()) return;
       fs.renameSync(temp, file);
       ledger = fresh;
     });
   } catch {
-    try {
-      fs.rmSync(temp, { force: true });
-    } catch {
-      /* the folder cannot be written at all: nothing was left */
-    }
+    /* the folder cannot be written at all: the status line still shows */
+  }
+  try {
+    fs.rmSync(temp, { force: true });
+  } catch {
+    /* nothing was left */
   }
   return ledger;
 }
@@ -1736,6 +1746,7 @@ export {
   SWITCHES,
   payloadFromTranscript,
   recordCost,
+  withLock,
   modelName,
   repoFromRemote,
   worktreeFromGitDir,
