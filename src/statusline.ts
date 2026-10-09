@@ -8,11 +8,16 @@
 //   ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
 //   14:58 │ 1h12m │ jv-k/claude-gauge │ ⎇ main │ Opus 5.5 │ effort high
 //
-// Everything comes from Claude Code's own payload
+// Almost everything comes from Claude Code's own payload
 // (https://code.claude.com/docs/en/statusline): `rate_limits` carries the
-// claude.ai 5-hour and 7-day windows. The only side call is
-// `git branch --show-current`. The today and week parts add the cost ledger,
-// which each render keeps in the state folder.
+// claude.ai 5-hour and 7-day windows. The side calls are
+// `git branch --show-current`, `vm_stat` for the ram part on macOS, the
+// command --command names, for the command part, and, only when a part that
+// needs it is shown, a read of the bytes the session transcript has gained
+// since the last render. The env and plan parts read Claude Code's own config
+// files, and the model part reads the provider from the environment. The today
+// and week parts add the cost ledger, which each render keeps in the state
+// folder.
 //
 // The parts it can show are in PART_REGISTRY and the switches it takes in
 // SWITCHES, both below. README.md documents each in a table, and a test fails
@@ -21,7 +26,8 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 // What a part's builder reads: the payload, the config, the clock, the cost
 // ledger, the folder Claude Code runs in, and the git branch reader. render
@@ -36,6 +42,34 @@ interface PartContext {
   cwd: string;
   folder: string;
   branchOf: (cwd: string) => string;
+  // What the session transcript shows, read on the first call only, so a
+  // render that shows no transcript part never reads it.
+  activity: () => TranscriptActivity;
+  // The environment Claude Code runs the command in, which names the API
+  // provider.
+  processEnv: Env;
+  // What Claude Code loads for the folder, read from the files on disk the
+  // first time a part asks.
+  setup: () => Setup;
+  // The system's memory in use, read the first time a part asks.
+  memory: () => Memory | undefined;
+  // The first line of output of the command --command names, run the first
+  // time a part asks; not yet sanitised.
+  commandOutput: () => string;
+}
+
+type Env = Record<string, string | undefined>;
+
+// What Claude Code loads into a session, and the account it signs in with:
+// counts of CLAUDE.md files, rules, MCP servers and hooks, and the plan and
+// user when the config names them.
+interface Setup {
+  claudeMd: number;
+  rules: number;
+  mcp: number;
+  hooks: number;
+  plan?: string;
+  user?: string;
 }
 
 interface PartSpec {
@@ -57,7 +91,7 @@ const partRegistry = {
   duration: { description: 'how long the session has run', row: 1, build: ({ data }) => durationPart(data) },
   repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, folder }) => repoPart(data, folder) },
   branch: { description: 'current git branch, and the linked worktree', row: 1, build: ({ data, config, cwd, branchOf }) => branchPart(data, config, branchOf(cwd)) },
-  model: { description: 'model name', row: 1, build: ({ data }) => (data.model?.display_name ? `${YELLOW}${data.model.display_name}${RESET}` : '') },
+  model: { description: 'model name, and the API provider when not first-party', row: 1, build: ({ data, processEnv }) => modelPart(data, processEnv) },
   effort: { description: 'reasoning effort', row: 1, build: ({ data, config }) => effortPart(data, config) },
   dir: { description: 'folder Claude Code runs in', build: ({ folder }) => `${BLUE}${folder}${RESET}` },
   cost: { description: 'estimated session cost', build: ({ data }) => costPart(data) },
@@ -74,6 +108,12 @@ const partRegistry = {
   version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
   today: { description: "today's spend across sessions, from the cost ledger", build: (ctx) => spentPart('today', ctx) },
   week: { description: "this week's spend across sessions, from the cost ledger", build: (ctx) => spentPart('week', ctx) },
+  tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, cwd }) => toolsPart(activity(), cwd) },
+  env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
+  plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
+  ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, memory }) => ramPart(memory(), config) },
+  text: { description: 'fixed text, with --text', build: ({ config }) => outsideText(config.text) },
+  command: { description: 'first line of output of a shell command, with --command', build: ({ commandOutput }) => outsideText(commandOutput()) },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -105,6 +145,11 @@ interface Config {
   compact: boolean;
   // The parts --right moves to the end of their row.
   right: Part[];
+  // What the text part prints, as --text gives it: not yet sanitised.
+  text: string;
+  // The shell command the command part runs, as --command gives it; none
+  // when empty.
+  command: string;
 }
 
 // What parseArgs returns and render takes: any subset of the config, with
@@ -121,6 +166,8 @@ const DEFAULTS: Config = {
   hour12: false,
   compact: false,
   right: [],
+  text: '',
+  command: '',
 };
 
 interface Switch {
@@ -158,6 +205,13 @@ const SWITCHES: readonly Switch[] = [
     apply: (config, value) => {
       config.right = [...(config.right ?? []), ...value.split(',').map((p) => p.trim()).filter(isPart)];
     },
+  },
+  { name: '--text', value: '<text>', description: 'the text the text part shows', apply: (config, value) => { config.text = value; } },
+  {
+    name: '--command',
+    value: '<command>',
+    description: 'the shell command the command part runs, with a short timeout',
+    apply: (config, value) => { config.command = value; },
   },
   { name: '--latest', description: "print the calling session's rows from its transcript, as plain text" },
   { name: '--window', value: '<size>', description: 'with --latest: the context window size, such as 200k or 1m' },
@@ -267,6 +321,7 @@ interface RateLimit {
 interface StatusData {
   session_id?: string;
   cwd?: string;
+  transcript_path?: string;
   version?: string;
   session_name?: string;
   fast_mode?: boolean;
@@ -322,14 +377,14 @@ const cellsFor = (pct: number, segments: number) => {
   return '▓'.repeat(filled) + '░'.repeat(segments - filled);
 };
 
+// A program's output, with no input and a one-second timeout. Throws when
+// the program fails.
+const runQuietly = (command: string, args: string[], cwd?: string) =>
+  execFileSync(command, args, { cwd, timeout: 1000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+
 function git(cwd: string, args: string[]): string {
   try {
-    return execFileSync('git', args, {
-      cwd,
-      timeout: 1000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    return runQuietly('git', args, cwd).trim();
   } catch {
     return ''; // not a repository, or git is missing
   }
@@ -555,6 +610,82 @@ function spendPart(data: StatusData, config: Config): string {
   return `${color}${labelOf(config, 'spend')}${Math.round(limit.used_percentage)}%${RESET}`;
 }
 
+// The API provider when requests do not go to the first-party API, from the
+// variables that select it: Bedrock (with its Mantle endpoint), Vertex,
+// Foundry, Claude Platform on AWS, or a gateway at a base URL of its own.
+// Claude Code reads these switches as on for 1, true, yes or on.
+const isOn = (value: string | undefined) => /^(?:1|true|yes|on)$/i.test(value?.trim() ?? '');
+
+function providerOf(env: Env): string {
+  if (isOn(env.CLAUDE_CODE_USE_BEDROCK) || isOn(env.CLAUDE_CODE_USE_MANTLE)) return 'Bedrock';
+  if (isOn(env.CLAUDE_CODE_USE_VERTEX)) return 'Vertex';
+  if (isOn(env.CLAUDE_CODE_USE_FOUNDRY)) return 'Foundry';
+  if (isOn(env.CLAUDE_CODE_USE_ANTHROPIC_AWS)) return 'AWS';
+  const base = env.ANTHROPIC_BASE_URL?.trim();
+  if (!base) return '';
+  let host = '';
+  try {
+    host = new URL(base).hostname;
+  } catch {
+    /* not a URL: still not the first-party API */
+  }
+  return host === 'api.anthropic.com' ? '' : 'Enterprise';
+}
+
+// The model, with the provider after it: Opus 5.5 (Bedrock).
+function modelPart(data: StatusData, env: Env): string {
+  const name = data.model?.display_name;
+  if (!name) return '';
+  const provider = providerOf(env);
+  return `${YELLOW}${name}${provider ? ` (${provider})` : ''}${RESET}`;
+}
+
+// A count and what it counts, one or many: 1 rule, 4 rules.
+const counted = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+// The kinds env counts, in order, and the words for one and for many.
+const ENV_KINDS: ['claudeMd' | 'rules' | 'mcp' | 'hooks', string, string][] = [
+  ['claudeMd', 'md', 'md'],
+  ['rules', 'rule', 'rules'],
+  ['mcp', 'mcp', 'mcp'],
+  ['hooks', 'hook', 'hooks'],
+];
+
+// What the session loads, kind by kind, leaving out a kind with none.
+function envPart(setup: Setup, config: Config): string {
+  const counts = ENV_KINDS.filter(([kind]) => setup[kind]).map(([kind, one, many]) => counted(setup[kind], one, many));
+  return counts.length ? `${GRAY}${labelOf(config, 'env')}${counts.join(' ')}${RESET}` : '';
+}
+
+// The plan, with the signed-in user after it: Claude Max 20x (me@example.com).
+function planPart({ plan, user }: Setup): string {
+  const shown = plan && user ? `${plan} (${user})` : plan || user;
+  return shown ? `${GRAY}${shown}${RESET}` : '';
+}
+
+// Bytes in gibibytes, as the OS monitors count them: 0.4G, 10.5G, 120G.
+const gib = (bytes: number) => {
+  const n = bytes / 1024 ** 3;
+  return `${n >= 100 ? Math.round(n) : n.toFixed(1)}G`;
+};
+
+// The memory in use in the ctx part's shape: ram 66% ▓▓▓░░ 10.5G, on the
+// usage colours.
+function ramPart(memory: Memory | undefined, config: Config): string {
+  if (!memory) return '';
+  const pct = (memory.used * 100) / memory.total;
+  const bar = config.bars ? ` ${cellsFor(pct, config.segments)}` : '';
+  return `${levelColor(Math.round(pct))}${labelOf(config, 'ram')}${Math.round(pct)}%${bar} ${gib(memory.used)}${RESET}`;
+}
+
+// The text and command parts: text from --text or from the command's
+// output. Neither comes through render's sanitised payload, so the part
+// sanitises it here.
+function outsideText(raw: string): string {
+  const text = sanitise(raw);
+  return text ? `${GRAY}${text}${RESET}` : '';
+}
+
 const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
 
 // The cost ledger: what every session has spent, by local day, kept in the
@@ -620,14 +751,327 @@ function spentPart(period: Period, { data, config, nowMs, ledger }: PartContext)
   return `${GRAY}${labelOf(config, period)}$${usd.toFixed(2)}${RESET}`;
 }
 
+// The tools part shows the completed tools used most, up to this many, and
+// cuts a target to this many characters.
+const TOOLS_SHOWN = 5;
+const TARGET_CHARS = 30;
+
+// Tools whose target is a file: a cut keeps the end, where its name is.
+const FILE_TOOLS = ['Read', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit'];
+
+// A tool's target as the part prints it: a path inside the folder Claude
+// Code runs in made relative to it, then cut to TARGET_CHARS.
+function shortTarget(name: string, target: string, cwd: string): string {
+  const relative = path.isAbsolute(target) ? path.relative(cwd, target) : '';
+  const shown = relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? relative : target;
+  if (shown.length <= TARGET_CHARS) return shown;
+  return FILE_TOOLS.includes(name) ? `…${shown.slice(-(TARGET_CHARS - 1))}` : `${shown.slice(0, TARGET_CHARS - 1)}…`;
+}
+
+// The tool running now, with its target, then the completed tools used most,
+// with counts: ◐ Edit src/a.ts ✓ Read ×12 ✓ Bash ×3.
+function toolsPart(activity: TranscriptActivity, cwd: string): string {
+  const { running, completed } = activity.tools;
+  const items: string[] = [];
+  const now = running.at(-1);
+  if (now) items.push(`${YELLOW}◐ ${now.name}${now.target ? ` ${shortTarget(now.name, now.target, cwd)}` : ''}${RESET}`);
+  const done = Object.entries(completed)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, TOOLS_SHOWN);
+  for (const [name, count] of done) items.push(`${GREEN}✓${RESET} ${GRAY}${name} ×${count}${RESET}`);
+  return items.join(' ');
+}
+
+// env and plan: what Claude Code loads into a session, and the account, read
+// from the files it reads them from. Only local files, never the network or
+// the macOS Keychain, and a file that is missing or not JSON counts as empty.
+
+interface SetupOptions {
+  env?: Env;
+  home?: string;
+  // The folder of the managed policy files an administrator installs.
+  managedDir?: string;
+}
+
+const MANAGED_DIRS: Record<string, string> = {
+  darwin: '/Library/Application Support/ClaudeCode',
+  win32: 'C:\\Program Files\\ClaudeCode',
+};
+const managedDirOf = (platform: string) => MANAGED_DIRS[platform] ?? '/etc/claude-code';
+
+// Claude Code's config folder, and the .claude.json beside or inside it.
+const configDirOf = (env: Env, home: string) => env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+const claudeJsonOf = (env: Env, home: string) =>
+  env.CLAUDE_CONFIG_DIR ? path.join(env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(home, '.claude.json');
+
+// A JSON object from a file, or {} when the file is missing or holds anything
+// else.
+type JsonObject = Record<string, unknown>;
+const isObject = (value: unknown): value is JsonObject => !!value && typeof value === 'object' && !Array.isArray(value);
+
+function readJson(file: string): JsonObject {
+  try {
+    const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return isObject(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+const objectAt = (value: unknown, key: string): JsonObject => (isObject(value) && isObject(value[key]) ? value[key] : {});
+const stringAt = (value: unknown, key: string): string | undefined => {
+  const field = isObject(value) ? value[key] : undefined;
+  return typeof field === 'string' && field ? field : undefined;
+};
+const listAt = (value: unknown, key: string): unknown[] => {
+  const field = isObject(value) ? value[key] : undefined;
+  return Array.isArray(field) ? field : [];
+};
+
+const isFile = (file: string) => {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+};
+
+// The .md files under a folder, at any depth.
+function markdownUnder(dir: string): string[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.flatMap((e) => {
+    const file = path.join(dir, e.name);
+    if (e.isDirectory()) return markdownUnder(file);
+    return e.name.endsWith('.md') && isFile(file) ? [file] : [];
+  });
+}
+
+// A folder and every folder above it, from the root down.
+function foldersDownTo(cwd: string): string[] {
+  const folders: string[] = [];
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    folders.unshift(dir);
+    if (path.dirname(dir) === dir) return folders;
+  }
+}
+
+// Hook handlers in a settings file: one per command in each matcher group.
+const hooksIn = (settings: JsonObject) =>
+  Object.values(objectAt(settings, 'hooks')).reduce<number>(
+    (n, groups) => n + (Array.isArray(groups) ? groups.reduce<number>((m, group) => m + listAt(group, 'hooks').length, 0) : 0),
+    0,
+  );
+
+// claude.ai plan names from a subscription type and a rate-limit tier: max
+// with the default_claude_max_20x tier is Claude Max 20x, pro is Claude Pro.
+function planName(type: string | undefined, tier: string | undefined): string | undefined {
+  if (!type) return undefined;
+  const multiple = /_(\d+x)$/.exec(tier ?? '')?.[1];
+  return ['Claude', type[0].toUpperCase() + type.slice(1), multiple].filter(Boolean).join(' ');
+}
+
+function readSetup(
+  cwd: string,
+  { env = process.env, home = os.homedir(), managedDir = managedDirOf(process.platform) }: SetupOptions = {},
+): Setup {
+  const config = configDirOf(env, home);
+  const project = path.resolve(cwd);
+  const folders = foldersDownTo(project);
+
+  // CLAUDE.md files load from the managed folder, the user's config, and the
+  // project and every folder above it. A path counts once, so the user's file
+  // is not counted again as the home folder's .claude/CLAUDE.md.
+  const claudeMd = new Set(
+    [
+      path.join(managedDir, 'CLAUDE.md'),
+      path.join(config, 'CLAUDE.md'),
+      ...folders.flatMap((dir) => ['CLAUDE.md', path.join('.claude', 'CLAUDE.md'), 'CLAUDE.local.md'].map((f) => path.join(dir, f))),
+    ].filter(isFile),
+  );
+  const rules = new Set([config, ...folders.map((dir) => path.join(dir, '.claude'))].flatMap((dir) => markdownUnder(path.join(dir, 'rules'))));
+
+  // Settings: user, project, local and managed. Each may hold hooks, and
+  // the names of project MCP servers turned off.
+  const settings = [
+    path.join(config, 'settings.json'),
+    path.join(project, '.claude', 'settings.json'),
+    path.join(project, '.claude', 'settings.local.json'),
+    path.join(managedDir, 'managed-settings.json'),
+  ]
+    .filter((file, i, all) => all.indexOf(file) === i)
+    .map(readJson);
+
+  // MCP servers: user and local scope in .claude.json, the project's
+  // .mcp.json and the managed file, each name once, less the project servers
+  // turned off.
+  const claudeJson = readJson(claudeJsonOf(env, home));
+  const local = objectAt(objectAt(claudeJson, 'projects'), project);
+  const turnedOff = new Set([...settings, local].flatMap((s) => listAt(s, 'disabledMcpjsonServers')));
+  const projectServers = Object.keys(objectAt(readJson(path.join(project, '.mcp.json')), 'mcpServers')).filter((name) => !turnedOff.has(name));
+  const mcp = new Set([
+    ...Object.keys(objectAt(claudeJson, 'mcpServers')),
+    ...Object.keys(objectAt(local, 'mcpServers')),
+    ...projectServers,
+    ...Object.keys(objectAt(readJson(path.join(managedDir, 'managed-mcp.json')), 'mcpServers')),
+  ]);
+  for (const name of listAt(local, 'disabledMcpServers')) if (typeof name === 'string') mcp.delete(name);
+
+  // The plan from the login's subscription fields where they are in a file,
+  // else from the account Claude Code keeps in .claude.json, as on macOS,
+  // where the login is in the Keychain, which this does not read. Only the
+  // plan fields are taken from the credentials file.
+  const oauth = objectAt(readJson(path.join(config, '.credentials.json')), 'claudeAiOauth');
+  const account = objectAt(claudeJson, 'oauthAccount');
+  const plan =
+    planName(stringAt(oauth, 'subscriptionType'), stringAt(oauth, 'rateLimitTier')) ??
+    planName(/^claude_(\w+)$/.exec(stringAt(account, 'organizationType') ?? '')?.[1], stringAt(account, 'organizationRateLimitTier'));
+  const user = stringAt(account, 'emailAddress');
+
+  return {
+    claudeMd: claudeMd.size,
+    rules: rules.size,
+    mcp: mcp.size,
+    hooks: settings.reduce((n, s) => n + hooksIn(s), 0),
+    ...(plan ? { plan } : {}),
+    ...(user ? { user } : {}),
+  };
+}
+
+// ram: the system's memory in use, in bytes, read the way each OS's own
+// monitor reads it. Only local figures, from Node, a file or one short
+// command.
+interface Memory {
+  used: number;
+  total: number;
+}
+
+// Where readMemory reads from, for tests to replace: the OS, Node's figures,
+// a file reader and a command runner.
+interface MemorySources {
+  platform?: string;
+  totalmem?: () => number;
+  freemem?: () => number;
+  readFile?: (file: string) => string;
+  run?: (command: string, args: string[]) => string;
+}
+
+// A number after a name in text such as /proc/meminfo or vm_stat's output.
+const figureAfter = (text: string, name: string): number | undefined => {
+  const m = new RegExp(`^${name}:\\s*(\\d+)`, 'm').exec(text);
+  return m ? Number(m[1]) : undefined;
+};
+
+// Memory in use, or undefined when the total is unknown. Linux counts what
+// is not MemAvailable as used, so the page cache the kernel gives back on
+// demand stays out. macOS counts app memory, wired and compressed pages from
+// vm_stat, as Activity Monitor does, because Node's free figure there leaves
+// out the inactive pages and reads close to full. Windows, and any OS or
+// reading that fails, take Node's figures, which on Windows are the
+// available memory already.
+function readMemory({
+  platform = process.platform,
+  totalmem = os.totalmem,
+  freemem = os.freemem,
+  readFile = (file) => fs.readFileSync(file, 'utf8'),
+  run = runQuietly,
+}: MemorySources = {}): Memory | undefined {
+  const attempt = <T>(read: () => T): T | undefined => {
+    try {
+      return read();
+    } catch {
+      return undefined;
+    }
+  };
+  let reading: Memory | undefined;
+  if (platform === 'linux') {
+    const meminfo = attempt(() => readFile('/proc/meminfo')) ?? '';
+    const total = figureAfter(meminfo, 'MemTotal');
+    const available = figureAfter(meminfo, 'MemAvailable');
+    if (total && available != null) reading = { used: (total - available) * 1024, total: total * 1024 };
+  } else if (platform === 'darwin') {
+    const vmStat = attempt(() => run('vm_stat', [])) ?? '';
+    const pageSize = Number(/page size of (\d+) bytes/.exec(vmStat)?.[1]);
+    const anonymous = figureAfter(vmStat, 'Anonymous pages');
+    const wired = figureAfter(vmStat, 'Pages wired down');
+    const compressed = figureAfter(vmStat, 'Pages occupied by compressor') ?? 0;
+    const purgeable = figureAfter(vmStat, 'Pages purgeable') ?? 0;
+    const total = attempt(totalmem) ?? 0;
+    if (pageSize && anonymous != null && wired != null && total) {
+      reading = { used: (Math.max(0, anonymous - purgeable) + wired + compressed) * pageSize, total };
+    }
+  }
+  if (!reading) {
+    const total = attempt(totalmem) ?? 0;
+    const free = attempt(freemem) ?? 0;
+    if (total > 0) reading = { used: total - free, total };
+  }
+  return reading && { used: Math.min(reading.total, Math.max(0, reading.used)), total: reading.total };
+}
+
+// command: the one part that runs a command the user names. It runs only
+// when --command names one and a row shows the part, in the folder Claude
+// Code runs in, with no input. It has COMMAND_TIMEOUT_MS to finish, and is
+// then killed, so a slow or hung command costs the status line that long and
+// no longer. Its output is cut to the first line with text in it, and
+// capped at MAX_COMMAND_OUTPUT bytes; failure, a timeout or empty output
+// shows nothing.
+const COMMAND_TIMEOUT_MS = 500;
+const MAX_COMMAND_OUTPUT = 64 * 1024;
+
+function runCommand(command: string, cwd: string): string {
+  // Outside Windows the shell leads a process group of its own, so that
+  // whatever the command starts can be stopped with it.
+  // Node 18 and Bun take detached in spawnSync, though Node's types list it
+  // for spawn only.
+  const grouped = process.platform !== 'win32';
+  const options: SpawnSyncOptionsWithStringEncoding & { detached: boolean } = {
+    shell: true,
+    detached: grouped,
+    cwd,
+    timeout: COMMAND_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    maxBuffer: MAX_COMMAND_OUTPUT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  };
+  const result = spawnSync(command, options);
+  // The timeout kills the shell alone, and a job it put in the background
+  // outlives it, so stop the whole group, finished or not.
+  if (grouped && result.pid) {
+    try {
+      process.kill(-result.pid, 'SIGKILL');
+    } catch {
+      /* the group has exited already */
+    }
+  }
+  // Failed, timed out, too much output, or no such folder.
+  if (result.error || result.status !== 0) return '';
+  // The first line with text left once sanitised, so a line of control codes
+  // alone does not hide the line after it. The part sanitises what it shows.
+  return result.stdout.split(/\r?\n/).find((line) => sanitise(line).trim())?.trim() ?? '';
+}
+
 interface RenderOptions {
   config?: Overrides;
   nowMs?: number;
   // The cost ledger, as read from the state folder.
   ledger?: Ledger;
   branchOf?: (cwd: string) => string;
+  env?: Env;
+  setupOf?: (cwd: string) => Setup;
+  memoryOf?: () => Memory | undefined;
+  commandOutputOf?: (command: string, cwd: string) => string;
   // The terminal's width in columns, when it is known.
   columns?: number;
+  // Reads what a transcript shows; by default incrementally, with its state
+  // in the state folder.
+  transcript?: (file: string) => TranscriptActivity;
 }
 
 // A terminal width, from render's option or the text of COLUMNS, which
@@ -677,12 +1121,39 @@ function joinRow(shown: ShownPart[], separator: string, right: readonly string[]
 
 function render(
   data: StatusData,
-  { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch, columns, ledger }: RenderOptions = {},
+  {
+    config: overrides = {},
+    nowMs = Date.now(),
+    branchOf = gitBranch,
+    env = process.env,
+    setupOf,
+    memoryOf = readMemory,
+    commandOutputOf = runCommand,
+    transcript = readTranscriptActivity,
+    columns,
+    ledger,
+  }: RenderOptions = {},
 ): string {
   const merged = { ...DEFAULTS, ...overrides };
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
 
+  // The transcript is read at most once, and only when a part asks. A
+  // transcript that cannot be read shows nothing rather than fails.
+  let activity: TranscriptActivity | undefined;
+  const readActivity = (): TranscriptActivity => {
+    const file = data.transcript_path;
+    if (typeof file !== 'string' || !file) return emptyActivity();
+    try {
+      return sanitiseActivity(transcript(file));
+    } catch {
+      return emptyActivity();
+    }
+  };
+
+  let setup: Setup | undefined;
+  let memory: { reading: Memory | undefined } | undefined;
+  let commandOutput: string | undefined;
   const input: PartContext = {
     data: sanitiseAll(data),
     config,
@@ -691,6 +1162,19 @@ function render(
     cwd,
     folder: sanitise(path.basename(cwd)),
     branchOf: (dir) => sanitise(branchOf(dir)),
+    activity: () => (activity ??= readActivity()),
+    processEnv: env,
+    // Read once per render, however many parts ask, and only when one does.
+    setup: () => {
+      if (!setup) {
+        const read = setupOf ? setupOf(cwd) : readSetup(cwd, { env });
+        setup = { ...read, plan: read.plan && sanitise(read.plan), user: read.user && sanitise(read.user) };
+      }
+      return setup;
+    },
+    memory: () => (memory ??= { reading: memoryOf() }).reading,
+    // Nothing runs without a command, and a command runs once per render.
+    commandOutput: () => (commandOutput ??= config.command ? commandOutputOf(config.command, cwd) : ''),
   };
 
   const separator = `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
@@ -720,7 +1204,7 @@ function render(
 // windows from the last terminal render, which saves them, and today and
 // week from the cost ledger terminal renders keep.
 
-const configDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+const configDir = () => configDirOf(process.env, os.homedir());
 // A file in the state folder.
 const stateFile = (name: string) => path.join(configDir(), 'claude-gauge', '.state', name);
 const usageFile = () => stateFile('usage.json');
@@ -884,6 +1368,214 @@ function forgetOld(ledger: Ledger, nowMs: number): void {
   }
 }
 
+// The transcript reader. A transcript only grows while its session runs, so
+// each render reads just the bytes added since the last one, from an offset
+// kept per transcript in the state folder with what the earlier bytes showed.
+// A transcript that shrank or was replaced by another file is read again
+// from the start.
+
+// A tool call: the tool's name and what it works on, if anything.
+interface ToolCall {
+  name: string;
+  target?: string;
+}
+
+// What a transcript shows: the tool calls still running, oldest first, and
+// how many calls of each tool have completed.
+interface TranscriptActivity {
+  tools: { running: ToolCall[]; completed: Record<string, number> };
+}
+
+const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} } });
+
+// Activity with every name and target sanitised. Two tool names that differ
+// only in control codes count as one.
+function sanitiseActivity({ tools }: TranscriptActivity): TranscriptActivity {
+  const running = tools.running.map(({ name, target }) => ({ name: sanitise(name), ...(target ? { target: sanitise(target) } : {}) }));
+  const completed: Record<string, number> = {};
+  for (const [name, count] of Object.entries(tools.completed)) completed[sanitise(name)] = (completed[sanitise(name)] ?? 0) + count;
+  return { tools: { running, completed } };
+}
+
+// What the reader keeps between renders. version changes when the shape
+// does, so a state from an older claude-gauge is rebuilt, not misread.
+const TRANSCRIPT_STATE_VERSION = 1;
+
+interface TranscriptState {
+  version: number;
+  // The transcript, and the file it was: a replaced file has a new inode.
+  file: string;
+  dev: number;
+  ino: number;
+  // The bytes read so far, always up to the end of a whole line.
+  offset: number;
+  // The tool calls with no result yet, by call id, oldest first. A call
+  // that was running when the user sent a prompt has ended, but its result
+  // may still come, and then counts.
+  pending: (ToolCall & { id: string; ended?: boolean })[];
+  completed: Record<string, number>;
+}
+
+// The ended calls kept at most, newest first: a call whose result never
+// came must not grow the state for ever. Running calls are all kept, so a
+// large parallel batch counts in full.
+const ENDED_KEPT = 20;
+
+// The fs calls the reader makes, so a test can count the bytes it reads.
+type TranscriptFs = Pick<typeof fs, 'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync'>;
+
+interface TranscriptReadOptions {
+  stateDir?: string;
+  fs?: TranscriptFs;
+}
+
+const transcriptStateDir = () => path.join(configDir(), 'claude-gauge', '.state', 'transcripts');
+
+// The input field that names what a tool works on, most telling first.
+const TARGET_FIELDS = ['file_path', 'notebook_path', 'pattern', 'command', 'url', 'query', 'description', 'skill', 'path'];
+
+function toolTarget(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  for (const field of TARGET_FIELDS) {
+    const value = (input as Record<string, unknown>)[field];
+    if (typeof value === 'string' && value.trim()) return value.trim().split('\n')[0];
+  }
+  return undefined;
+}
+
+interface ContentBlock {
+  type?: string;
+  id?: unknown;
+  name?: unknown;
+  input?: unknown;
+  tool_use_id?: unknown;
+}
+
+// One transcript record applied to the state. Subagent records are left out,
+// as they are for --latest. A prompt from the user ends the turn, so a call
+// still running then was interrupted: it no longer shows as running.
+function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
+  if (!record || typeof record !== 'object' || record.isSidechain) return;
+  const content = record.message?.content;
+  const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
+  if (record.type === 'user' && !record.isMeta && !blocks.some((b) => b.type === 'tool_result')) {
+    if (typeof content === 'string' || blocks.length) state.pending = state.pending.map((p) => ({ ...p, ended: true })).slice(-ENDED_KEPT);
+    return;
+  }
+  for (const block of blocks) {
+    if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+      const target = toolTarget(block.input);
+      state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}) }];
+    } else if (record.type === 'user' && block.type === 'tool_result') {
+      const call = state.pending.find((p) => p.id === block.tool_use_id);
+      if (!call) continue;
+      state.pending = state.pending.filter((p) => p !== call);
+      state.completed[call.name] = (state.completed[call.name] ?? 0) + 1;
+    }
+  }
+}
+
+// Reads the transcript from offset to size, applying each whole line, and
+// returns the offset after the last one. A line still being written is left
+// for the next render.
+function readLines(io: TranscriptFs, file: string, offset: number, size: number, apply: (line: string) => void): number {
+  const fd = io.openSync(file, 'r');
+  try {
+    // The bytes read since the last newline, in the chunks they came in, so
+    // a long line is joined once rather than copied again for every chunk.
+    let rest: Buffer[] = [];
+    let restLength = 0;
+    let position = offset;
+    while (position < size) {
+      const chunk = Buffer.alloc(Math.min(1 << 16, size - position));
+      const n = io.readSync(fd, chunk, 0, chunk.length, position);
+      if (n <= 0) break;
+      position += n;
+      const read = chunk.subarray(0, n);
+      const end = read.lastIndexOf(0x0a);
+      if (end < 0) {
+        rest.push(read);
+        restLength += n;
+        continue;
+      }
+      const lines = Buffer.concat([...rest, read.subarray(0, end)]).toString('utf8');
+      for (const line of lines.split('\n')) apply(line);
+      rest = [read.subarray(end + 1)];
+      restLength = n - end - 1;
+    }
+    return position - restLength;
+  } finally {
+    io.closeSync(fd);
+  }
+}
+
+function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptState | undefined {
+  try {
+    const state = JSON.parse(String(io.readFileSync(stateFile, 'utf8'))) as TranscriptState;
+    const valid =
+      state?.version === TRANSCRIPT_STATE_VERSION &&
+      Number.isInteger(state.offset) &&
+      Array.isArray(state.pending) &&
+      state.completed &&
+      typeof state.completed === 'object';
+    return valid ? state : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Best effort, as saveUsage is. Unlike usage.json, which one render writes
+// in place, the state is written whole to a file of its own and renamed over
+// the old one: the status line can render twice at once, and the other
+// render must never read half a state.
+function saveTranscriptState(io: TranscriptFs, stateFile: string, state: TranscriptState): void {
+  const temporary = `${stateFile}.${process.pid}.tmp`;
+  try {
+    io.mkdirSync(path.dirname(stateFile), { recursive: true });
+    io.writeFileSync(temporary, JSON.stringify(state));
+    io.renameSync(temporary, stateFile);
+  } catch {
+    // Read-only home or similar: the next render reads from the start.
+    try {
+      io.rmSync(temporary, { force: true });
+    } catch {
+      /* nothing to remove */
+    }
+  }
+}
+
+// What the transcript shows, reading only what it gained since the last
+// call. A transcript that does not exist shows nothing.
+function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(), fs: io = fs }: TranscriptReadOptions = {}): TranscriptActivity {
+  let stat: fs.Stats;
+  try {
+    stat = io.statSync(file);
+  } catch {
+    return emptyActivity();
+  }
+  const stateFile = path.join(stateDir, `${createHash('sha1').update(file).digest('hex')}.json`);
+  const saved = loadTranscriptState(io, stateFile);
+  const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
+  const state: TranscriptState = unchanged
+    ? saved
+    : { version: TRANSCRIPT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0, pending: [], completed: {} };
+
+  if (stat.size > state.offset || !unchanged) {
+    state.offset = readLines(io, file, state.offset, stat.size, (line) => {
+      // Only lines that can hold a tool call, a result or a prompt are parsed.
+      if (!line.includes('"tool_') && !line.includes('"user"')) return;
+      try {
+        applyRecord(state, JSON.parse(line));
+      } catch {
+        /* not a record: skip it */
+      }
+    });
+    saveTranscriptState(io, stateFile, state);
+  }
+  const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
+  return { tools: { running, completed: { ...state.completed } } };
+}
+
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
 function modelName(id: string | undefined): string | undefined {
   if (!id) return undefined;
@@ -908,9 +1600,12 @@ interface TranscriptRecord {
   cwd?: string;
   timestamp?: string;
   isSidechain?: boolean;
+  // Text Claude Code adds to the conversation, not typed by the user.
+  isMeta?: boolean;
   effort?: string | { level?: string };
   message?: {
     model?: string;
+    content?: unknown;
     usage?: {
       input_tokens?: number;
       cache_creation_input_tokens?: number;
@@ -1046,9 +1741,14 @@ export {
   worktreeFromGitDir,
   instruction,
   INSTRUCT_HOSTS,
+  readTranscriptActivity,
+  readSetup,
+  readMemory,
+  runCommand,
+  COMMAND_TIMEOUT_MS,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger };
+export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger, TranscriptActivity, Setup, Memory };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
