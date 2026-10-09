@@ -201,6 +201,10 @@ const CONTROL_CHARACTER = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2
 // text from anywhere else, such as a switch or a command, calls this itself.
 const sanitise = (text: string) => text.replace(ESCAPE_SEQUENCE, '').replace(CONTROL_CHARACTER, '');
 
+// Text without claude-gauge's own colour codes, the only escapes left in a
+// rendered row once its parts are sanitised.
+const stripColours = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, '');
+
 // A parsed payload with every string in it sanitised, at any depth.
 function sanitiseAll<T>(value: T): T {
   if (typeof value === 'string') return sanitise(value) as T;
@@ -563,24 +567,40 @@ const columnsOf = (value: number | string | undefined): number | undefined => {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 };
 
-// The columns a rendered text takes: its characters, less claude-gauge's own
-// colour codes, the only escapes left after sanitising. A wide character,
-// such as an emoji in a session name, counts as one.
-const visibleWidth = (text: string) => [...text.replace(/\x1b\[[0-9;]*m/g, '')].length;
+// Characters that take exactly one terminal column: printable Latin,
+// Greek and Cyrillic, and the punctuation, arrows, maths signs, box drawing
+// and blocks claude-gauge draws with. CJK and emoji take two in most
+// terminals and combining marks none, so they are left out.
+const ONE_COLUMN = /^[\x20-\x7e\u00a0-\u02ff\u0370-\u0482\u048a-\u052f\u2010-\u2027\u2030-\u205e\u2190-\u22ff\u2387\u2500-\u259f]*$/;
+
+// The columns a rendered text takes, or undefined when some character in it
+// may take more or less than one.
+const visibleWidth = (text: string): number | undefined => {
+  const shown = stripColours(text);
+  return ONE_COLUMN.test(shown) ? [...shown].length : undefined;
+};
+
+// A part a row shows: its name and what it printed.
+interface ShownPart {
+  part: string;
+  text: string;
+}
 
 // A row's shown parts joined by the separator. With a known width, the parts
-// --right names move to the end of the row, in row order, and spaces fill
+// named in right move to the end of the row, in row order, and spaces fill
 // the gap so the row ends at the terminal's edge. A row with none of those
-// parts, or too little room for a gap as wide as the separator, is left as
-// it is.
-function joinRow(shown: { part: string; text: string }[], separator: string, config: Config, columns: number | undefined): string {
-  const join = (parts: typeof shown) => parts.map((p) => p.text).join(separator);
-  const right = shown.filter((p) => (config.right as string[]).includes(p.part));
-  if (columns === undefined || !right.length) return join(shown);
-  const left = join(shown.filter((p) => !right.includes(p)));
-  const end = join(right);
-  const gap = columns - visibleWidth(left) - visibleWidth(end);
-  if (gap < (left ? visibleWidth(separator) : 0)) return join(shown);
+// parts, with text of uncertain width, or with too little room for a gap as
+// wide as the separator, is left as it is.
+function joinRow(shown: ShownPart[], separator: string, right: readonly string[], columns: number | undefined): string {
+  const join = (parts: ShownPart[]) => parts.map((p) => p.text).join(separator);
+  const atEnd = shown.filter((p) => right.includes(p.part));
+  if (columns === undefined || !atEnd.length) return join(shown);
+  const left = join(shown.filter((p) => !atEnd.includes(p)));
+  const end = join(atEnd);
+  const [leftWidth, endWidth, separatorWidth] = [left, end, separator].map(visibleWidth);
+  if (leftWidth === undefined || endWidth === undefined || separatorWidth === undefined) return join(shown);
+  const gap = columns - leftWidth - endWidth;
+  if (gap < (left ? separatorWidth : 0)) return join(shown);
   return `${left}${' '.repeat(gap)}${end}`;
 }
 
@@ -615,7 +635,7 @@ function render(
           .map((part) => ({ part, text: isPart(part) ? PART_REGISTRY[part].build(input) : '' }))
           .filter((p) => p.text),
         separator,
-        config,
+        config.right,
         width,
       ),
     )
@@ -841,7 +861,7 @@ if (isMain) {
     const cwd = data.workspace?.current_dir;
     if (data.workspace && cwd) Object.assign(data.workspace, gitWorkspace(cwd));
     // Plain text: it is pasted into a reply, where colour codes show as junk.
-    process.stdout.write(render(data, { config, nowMs }).replace(/\x1b\[[0-9;]*m/g, '') + '\n');
+    process.stdout.write(stripColours(render(data, { config, nowMs })) + '\n');
   } else {
     const chunks: Buffer[] = [];
     process.stdin.on('data', (c: Buffer) => chunks.push(c));

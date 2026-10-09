@@ -23,18 +23,11 @@ const env = { ...process.env, CLAUDE_CONFIG_DIR: tmp };
 delete env.COLUMNS;
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
+const envFor = (columns) => (columns ? { ...env, COLUMNS: String(columns) } : env);
 const node = (script, args, input, columns) =>
-  execFileSync(process.execPath, [path.join(root, 'dist', `${script}.js`), ...args], {
-    env: columns ? { ...env, COLUMNS: String(columns) } : env,
-    input,
-    encoding: 'utf8',
-  });
+  execFileSync(process.execPath, [path.join(root, 'dist', `${script}.js`), ...args], { env: envFor(columns), input, encoding: 'utf8' });
 const bun = (script, args, input, columns) =>
-  execFileSync('bun', [path.join(root, 'src', `${script}.ts`), ...args], {
-    env: columns ? { ...env, COLUMNS: String(columns) } : env,
-    input,
-    encoding: 'utf8',
-  });
+  execFileSync('bun', [path.join(root, 'src', `${script}.ts`), ...args], { env: envFor(columns), input, encoding: 'utf8' });
 
 // The README's status line payload, in a folder outside any git repository,
 // so the branch part drops out and repo falls back to the folder name.
