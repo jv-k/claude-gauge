@@ -26,7 +26,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { spawnSync } from 'node:child_process';
-import { plan, commandFor, installed, ownerOf, isForeign } from './settings';
+import { plan, commandFor, installed, installedSwitches, ownerOf, isForeign } from './settings';
 import type { Choices, StatusLineSetting } from './settings';
 import { readSettings, writeSettings, writeAtomic } from './settings-file';
 import { runWizard, offerStar, confirm, loadPayload, previewer } from './wizard';
@@ -232,9 +232,10 @@ function savedStatusLine(): StatusLineSetting | null | undefined {
 
 const say = (...lines: string[]) => process.stdout.write(lines.join('\n') + '\n');
 
-// The switches chosen for each bar: a string to run it with, null to take it
-// out, undefined to leave it as it is.
-type Bars = Pick<Args, 'statusLine' | 'tokenLine'>;
+// The switches chosen for each bar: a string to run it with, or its words
+// from the wizard, null to take it out, undefined to leave it as it is.
+type Switches = string | readonly string[] | null | undefined;
+type Bars = { statusLine?: Switches; tokenLine?: Switches };
 
 // setup and configure: turns the bars' switches into commands, plans the
 // settings, and writes them.
@@ -243,8 +244,8 @@ function apply({ statusLine, tokenLine }: Bars, replace: boolean): void {
   const { settings, text } = readSettings(file);
   const where = scripts();
   const { dir } = where;
-  const command = (script: string, switches: string | null | undefined) =>
-    typeof switches === 'string' ? commandFor(path.join(dir, script), switches) : switches;
+  const command = (script: string, switches: Switches) =>
+    switches === null || switches === undefined ? switches : commandFor(path.join(dir, script), switches);
   const choices: Choices = {
     statusLine: command('statusline.js', statusLine),
     tokenLine: command('tokenline.js', tokenLine),
@@ -310,13 +311,15 @@ const hasGh = () => spawnSync('gh', ['--version'], { stdio: 'ignore' }).status =
 const starWithGh = () => spawnSync('gh', ['api', '--method', 'PUT', 'user/starred/jv-k/claude-gauge'], { stdio: ['ignore', 'ignore', 'inherit'] }).status === 0;
 
 // setup or configure with no bar switches: asks before it replaces another
-// status line, then asks for the bars, and writes them. setup ends with the
-// star offer.
+// status line, then asks for the bars, and writes them. configure starts the
+// questions from the bars set up, setup from the defaults. setup ends with
+// the star offer.
 async function interactive(command: 'setup' | 'configure', replace: boolean): Promise<void> {
   const io = terminalIo();
   try {
     const file = settingsFile();
-    const current = readSettings(file).settings.statusLine as StatusLineSetting | undefined;
+    const { settings } = readSettings(file);
+    const current = settings.statusLine as StatusLineSetting | undefined;
     const owner = ownerOf(current);
     if (!replace && isForeign(owner)) {
       io.write(`${file} already runs ${owner === 'claude-hud' ? "claude-hud's status line" : 'another status line'}:\n  ${current?.command ?? JSON.stringify(current)}\n`);
@@ -327,7 +330,7 @@ async function interactive(command: 'setup' | 'configure', replace: boolean): Pr
       replace = true;
     }
     const preview = previewer(loadPayload(payloadFile()));
-    const choices = await runWizard(io, { preview });
+    const choices = await runWizard(io, { preview, installed: command === 'configure' ? installedSwitches(settings) : undefined });
     if (!choices) {
       say('Nothing changed.');
       return;

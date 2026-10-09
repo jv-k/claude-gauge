@@ -33,12 +33,13 @@ function scripted(answers) {
   return io;
 }
 
-// A preview that shows the switches it was given, and keeps each call.
+// A preview that shows the switches it was given, and keeps each call, its
+// words joined with spaces.
 function fakePreview() {
   const calls = [];
   const preview = (switches) => {
-    calls.push(switches);
-    return `<${switches}>`;
+    calls.push(switches.join(' '));
+    return `<${switches.join(' ')}>`;
   };
   return { preview, calls };
 }
@@ -47,7 +48,7 @@ test('the defaults path completes in one confirmation, after a preview of the de
   for (const yes of ['y', '', 'Yes', ' Y ']) {
     const io = scripted([yes]);
     const { preview, calls } = fakePreview();
-    assert.deepEqual(await runWizard(io, { preview }), { statusLine: '', tokenLine: '' }, JSON.stringify(yes));
+    assert.deepEqual(await runWizard(io, { preview }), { statusLine: [], tokenLine: [] }, JSON.stringify(yes));
     assert.equal(io.questions.length, 1);
     assert.deepEqual(calls, ['']);
     assert.ok(io.output.indexOf('<>') < io.output.indexOf(io.questions[0]), 'the preview comes before the question');
@@ -60,7 +61,7 @@ test('the customise path covers rows, parts, segments, theme, labels and the tok
   const { preview, calls } = fakePreview();
   const result = await runWizard(io, { preview });
   assert.deepEqual(result, {
-    statusLine: '--show ctx,7d --show model --show time,cost --segments 10 --theme pastel --no-labels',
+    statusLine: ['--show', 'ctx,7d', '--show', 'model', '--show', 'time,cost', '--segments', '10', '--theme', 'pastel', '--no-labels'],
     tokenLine: null,
   });
   const defaultRows = DEFAULT_ROWS.map((r) => r.join(','));
@@ -86,20 +87,90 @@ test('the customise path covers rows, parts, segments, theme, labels and the tok
 test('customising with Enter at every question keeps the defaults, which need no switches', async () => {
   const io = scripted(['n', '', '', '', '', '', '', '', '']);
   const { preview } = fakePreview();
-  assert.deepEqual(await runWizard(io, { preview }), { statusLine: '', tokenLine: '' });
+  assert.deepEqual(await runWizard(io, { preview }), { statusLine: [], tokenLine: [] });
   assert.equal(io.questions.length, 9, 'two default rows: one question for each');
 });
 
 test('an answer the wizard cannot use is asked again, with the reason', async () => {
   const io = scripted(['maybe', 'n', '9', '1', 'ctx,bogus', ',', 'ctx', '7', '10', 'neon', 'mono', 'perhaps', 'y', 'y', 'y']);
   const { preview } = fakePreview();
-  assert.deepEqual(await runWizard(io, { preview }), { statusLine: '--show ctx --segments 10 --theme mono', tokenLine: '' });
+  assert.deepEqual(await runWizard(io, { preview }), { statusLine: ['--show', 'ctx', '--segments', '10', '--theme', 'mono'], tokenLine: [] });
   assert.match(io.output, /Answer y or n/);
   assert.match(io.output, /a number from 1 to 3/);
   assert.match(io.output, /Unknown part: bogus/);
   assert.match(io.output, /Name at least one part/);
   assert.match(io.output, /5 or 10/);
   assert.match(io.output, /Unknown theme: neon/);
+});
+
+// configure: the wizard starts from the switches set up now.
+test('configure offers to keep the bars set up now, and a yes leaves both as they are', async () => {
+  const io = scripted(['y']);
+  const { preview, calls } = fakePreview();
+  const installed = { statusLine: ['--theme', 'mono', '--segments', '10'] };
+  assert.deepEqual(await runWizard(io, { preview, installed }), {});
+  assert.equal(io.questions.length, 1);
+  assert.match(io.questions[0], /Keep the current bars/);
+  assert.match(io.output, /as set up now/);
+  assert.deepEqual(calls, ['--segments 10 --theme mono'], 'the preview starts from the installed layout');
+  assert.match(io.output, /Token line: off/);
+
+  const both = { statusLine: ['--text', 'a b', '--frobnicate'], tokenLine: ['--window', '1m'] };
+  assert.deepEqual(await runWizard(scripted(['']), { preview, installed: both }), {});
+  // A token line alone: the preview says the status line is not set up.
+  const tokenOnly = scripted(['y']);
+  assert.deepEqual(await runWizard(tokenOnly, { preview, installed: { tokenLine: [] } }), {});
+  assert.match(tokenOnly.output, /status line is not set up/);
+  assert.doesNotMatch(tokenOnly.output, /as set up now/);
+});
+
+test('configure: each question defaults to the installed value, and the switches it does not ask about stay', async () => {
+  const io = scripted(['n', '', '', '', '', '', '', 'y']);
+  const { preview, calls } = fakePreview();
+  const installed = {
+    statusLine: ['--text', 'a b', '--show', 'ctx,bogus,5h', '--segments=10', '--frobnicate', '--theme', 'mono', '--no-labels', '--right', 'ctx'],
+    tokenLine: ['--window', '1m', '--show', 'req,ctx'],
+  };
+  const result = await runWizard(io, { preview, installed });
+  assert.deepEqual(result, {
+    statusLine: ['--show', 'ctx,5h', '--segments', '10', '--theme', 'mono', '--no-labels', '--text', 'a b', '--frobnicate', '--right', 'ctx'],
+    tokenLine: ['--window', '1m', '--show', 'req,ctx'],
+  });
+  assert.equal(calls[0], '--show ctx,5h --segments 10 --theme mono --no-labels --text a b --frobnicate --right ctx');
+  assert.match(io.questions[1], /\[1\] $/, 'one row set up');
+  assert.match(io.questions[2], /\[ctx,5h\] $/);
+  assert.match(io.questions[3], /\[10\] $/);
+  assert.match(io.questions[4], /\[mono\] $/);
+  assert.match(io.questions[5], /\[y\/N\] $/, 'labels are off');
+  assert.match(io.questions[6], /token line.*\[Y\/n\] $/, 'a token line is set up');
+});
+
+test('configure: the token line defaults to no when none is set up, and answers change only what they name', async () => {
+  const { preview } = fakePreview();
+  const installed = { statusLine: ['--text', 'a b', '--segments', '10'] };
+  // No --show: the two default rows, one question each.
+  const io = scripted(['n', '', '', '', '5', 'pastel', '', '', 'y']);
+  assert.deepEqual(await runWizard(io, { preview, installed }), { statusLine: ['--theme', 'pastel', '--text', 'a b'], tokenLine: null });
+  assert.match(io.questions[7], /token line.*\[y\/N\] $/);
+  assert.deepEqual(await runWizard(scripted(['n', '', '', '', '', '', '', 'y', 'y']), { preview, installed }), { statusLine: ['--segments', '10', '--text', 'a b'], tokenLine: [] });
+  // Two rows asked for where one is set up: the second offers the default row.
+  const rows = scripted(['n', '2', '', '', '', '', '', '', 'y']);
+  await runWizard(rows, { preview, installed: { statusLine: ['--show', 'ctx'] } });
+  assert.match(rows.questions[3], new RegExp(`\\[${DEFAULT_ROWS[1].join(',')}\\] $`));
+  // More rows set up than the wizard offers: Enter keeps them all.
+  const four = ['--show', 'ctx', '--show', '5h', '--show', '7d', '--show', 'model'];
+  const many = scripted(['n', '', '', '', '', '', '', '', '', '', 'y']);
+  assert.deepEqual(await runWizard(many, { preview, installed: { statusLine: four } }), { statusLine: four, tokenLine: null });
+  assert.match(many.questions[1], /1 to 4\? \[4\] $/);
+});
+
+test('setup, or configure with no bar set up, starts from the factory defaults', async () => {
+  for (const installed of [undefined, {}]) {
+    const io = scripted(['y']);
+    const { preview } = fakePreview();
+    assert.deepEqual(await runWizard(io, { preview, installed }), { statusLine: [], tokenLine: [] });
+    assert.match(io.questions[0], /Use the defaults/);
+  }
 });
 
 test('a no at the last question changes nothing, and the end of the answers stops the wizard', async () => {
@@ -150,10 +221,11 @@ test('the preview uses the payload the status line saved, else a sample', () => 
     assert.deepEqual(loadPayload(file, now), saved);
 
     const preview = previewer(loadPayload(file, now), { nowMs: now, env: {} });
-    assert.equal(plain(preview('--show model,ctx --no-bars')), 'Saved Model │ ctx 12%');
+    assert.equal(plain(preview(['--show', 'model,ctx', '--no-bars'])), 'Saved Model │ ctx 12%');
+    assert.equal(plain(preview(['--show', 'text', '--text', 'a label'])), 'a label', 'a value with a space stays one word');
     const sample = previewer(samplePayload(now), { nowMs: now, env: {} });
-    assert.match(plain(sample('--show ctx,5h,7d')), /^ctx \d+% .+ │ 5h \d+% .+ │ 7d \d+% /);
-    assert.match(plain(sample('--show ctx --segments 10')), /^ctx \d+% [▓░]{10} /);
+    assert.match(plain(sample(['--show', 'ctx,5h,7d'])), /^ctx \d+% .+ │ 5h \d+% .+ │ 7d \d+% /);
+    assert.match(plain(sample(['--show', 'ctx', '--segments', '10'])), /^ctx \d+% [▓░]{10} /);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

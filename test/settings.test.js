@@ -206,3 +206,35 @@ test("installed() names claude-gauge's commands, and an --instruct hook is not t
   assert.deepEqual(installed(both), { statusLine: SL, tokenLine: TL, any: true });
   assert.throws(() => installed({ hooks: { Stop: 'x' } }), /hooks\.Stop/);
 });
+
+test("installedSwitches() reads each claude-gauge bar's switches as words, and leaves out a bar not set up", () => {
+  const { installedSwitches, commandFor } = require('../dist/settings.js');
+  assert.deepEqual(installedSwitches({}), {});
+  const settings = { statusLine: cmd(commandFor('/h/.claude/claude-gauge/runtime/statusline.js', ['--text', 'a b'])), hooks: { Stop: [entry(TL2)] } };
+  assert.deepEqual(installedSwitches(settings), { statusLine: ['--text', 'a b'], tokenLine: ['--window', '1m'] });
+  assert.deepEqual(installedSwitches({ statusLine: cmd('~/bin/mine.sh --segments 10'), hooks: { Stop: [entry(TL)] } }), { tokenLine: [] });
+});
+
+test('switchesOf() reads back the switches commandFor() wrote, quoted values included', () => {
+  const { commandFor, switchesOf } = require('../dist/settings.js');
+  const script = '/home/u/.claude/claude-gauge/runtime/statusline.js';
+  for (const words of [
+    [],
+    ['--segments', '10', '--theme', 'mono'],
+    ['--text', 'hello world', '--show', 'text,ctx'],
+    ['--text', "it's a \"quote\" $HOME `x` \\ !"],
+    ['--command', 'git status --short | wc -l', '--future-switch'],
+    ['--text', ''],
+  ]) {
+    assert.deepEqual(switchesOf(commandFor(script, words)), words, JSON.stringify(words));
+  }
+  // The string form splits on spaces, as before.
+  assert.deepEqual(switchesOf(commandFor(script, '--show ctx,5h,7d  --segments 10')), ['--show', 'ctx,5h,7d', '--segments', '10']);
+  // Commands written by hand: a quoted or Windows script path, single quotes,
+  // a backslash before a space, and no node in front.
+  assert.deepEqual(switchesOf('node "C:/Users/me/.claude/claude-gauge/runtime/statusline.js" --text \'a b\''), ['--text', 'a b']);
+  assert.deepEqual(switchesOf('node C:\\Users\\me\\.claude\\claude-gauge\\runtime\\tokenline.js --window 1m'), ['--window', '1m']);
+  assert.deepEqual(switchesOf('~/.claude/claude-gauge/statusline.js --text a\\ b'), ['--text', 'a b']);
+  // Not claude-gauge's: no switches to read.
+  assert.deepEqual(switchesOf('~/bin/my-status.sh --segments 10'), []);
+});

@@ -218,6 +218,21 @@ function installed(settings: Json): { statusLine?: string; tokenLine?: string; a
   return { statusLine, tokenLine, any: statusLine !== undefined || anyHook };
 }
 
+// The switches of each claude-gauge bar in the settings, as words:
+// undefined for a bar that is not set up.
+interface InstalledSwitches {
+  statusLine?: string[];
+  tokenLine?: string[];
+}
+
+function installedSwitches(settings: Json): InstalledSwitches {
+  const { statusLine, tokenLine } = installed(settings);
+  return {
+    ...(statusLine === undefined ? {} : { statusLine: switchesOf(statusLine) }),
+    ...(tokenLine === undefined ? {} : { tokenLine: switchesOf(tokenLine) }),
+  };
+}
+
 // A shell word for a settings command: as is when plain, in double quotes
 // when it holds only spaces or other characters both bash and cmd.exe read
 // literally there, else in single quotes. Claude Code runs the command
@@ -225,14 +240,57 @@ function installed(settings: Json): { statusLine?: string; tokenLine?: string; a
 const shellWord = (s: string) =>
   /^[\w@%+=:,./~-]+$/.test(s) ? s : /^[^"$`\\!']*$/.test(s) ? `"${s}"` : `'${s.replace(/'/g, `'\\''`)}'`;
 
-// The command that runs `script` with the switches the user chose, given as
-// one string: `--show ctx,5h,7d --segments 10`. Each switch is quoted on its
-// own, so nothing in it can run as a second command.
-function commandFor(script: string, switches = ''): string {
-  const words = switches.split(/\s+/).filter(Boolean);
+// The command that runs `script` with the switches the user chose: one
+// string split at spaces, `--show ctx,5h,7d --segments 10`, or the words
+// themselves, which keeps a value that holds a space. Each word is quoted on
+// its own, so nothing in it can run as a second command.
+function commandFor(script: string, switches: string | readonly string[] = ''): string {
+  const words = typeof switches === 'string' ? switches.split(/\s+/).filter(Boolean) : switches;
   return ['node', script.replace(/\\/g, '/'), ...words].map(shellWord).join(' ');
 }
 
-export { plan, commandFor, installed, ownerOf, scriptOf, isForeign };
+// The words of a command as the shell splits them, which undoes shellWord:
+// single quotes keep everything, double quotes keep all but an escaped " \ $
+// or `, and a backslash outside quotes keeps the next character. Each word
+// keeps its text as written too, `raw`, where a Windows path still has its
+// backslashes.
+function shellWords(command: string): { value: string; raw: string }[] {
+  const words: { value: string; raw: string }[] = [];
+  let value = '';
+  let start = -1;
+  let quote: string | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote === "'") {
+      if (c === "'") quote = null;
+      else value += c;
+    } else if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === '\\' && i + 1 < command.length && '"\\$`'.includes(command[i + 1])) value += command[++i];
+      else value += c;
+    } else if (/\s/.test(c)) {
+      if (start >= 0) words.push({ value, raw: command.slice(start, i) });
+      value = '';
+      start = -1;
+    } else {
+      if (start < 0) start = i;
+      if (c === "'" || c === '"') quote = c;
+      else if (c === '\\' && i + 1 < command.length) value += command[++i];
+      else value += c;
+    }
+  }
+  if (start >= 0) words.push({ value, raw: command.slice(start) });
+  return words;
+}
 
-export type { Choices, Plan, Owner, StatusLineSetting };
+// The switches a claude-gauge command runs its script with, as words: the
+// inverse of commandFor. None when the command runs no claude-gauge script.
+function switchesOf(command: string): string[] {
+  const words = shellWords(command);
+  const at = words.findIndex((w) => scriptOf(w.raw) !== undefined);
+  return at < 0 ? [] : words.slice(at + 1).map((w) => w.value);
+}
+
+export { plan, commandFor, switchesOf, installed, installedSwitches, ownerOf, scriptOf, isForeign };
+
+export type { Choices, Plan, Owner, StatusLineSetting, InstalledSwitches };

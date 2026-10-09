@@ -294,17 +294,36 @@ const SWITCHES: readonly Switch[] = [
 // printed as it is, in every cell.
 const isBarChar = (value: string) => Array.from(value).length === 1 && sanitise(value) === value;
 
+// One switch as readSwitches reads it: its name, its value, the switch it is
+// when the status line knows it, and the words it was read from.
+interface ReadSwitch {
+  name: string;
+  value: string;
+  known?: Switch;
+  words: string[];
+}
+
+// The switches in `argv` as the status line reads them: a known switch that
+// takes a value takes the next word, unless it has one after `=`. Any other
+// word stands alone.
+function readSwitches(argv: readonly string[]): ReadSwitch[] {
+  const read: ReadSwitch[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const start = i;
+    const [name, inline] = argv[i].split(/=(.*)/s);
+    const known = SWITCHES.find((s) => s.name === name && s.apply);
+    const value = known?.value ? (inline ?? argv[++i] ?? '') : '';
+    read.push({ name, value, known, words: argv.slice(start, i + 1) });
+  }
+  return read;
+}
+
 // Turns the switches into a config. Unknown switches and part names are
 // ignored, and a --show with no known part adds no row: a status line should
 // show something rather than fail.
 function parseArgs(argv: string[]): Overrides {
   const config: Overrides = {};
-  for (let i = 0; i < argv.length; i++) {
-    const [name, inline] = argv[i].split(/=(.*)/s);
-    const known = SWITCHES.find((s) => s.name === name);
-    if (!known?.apply) continue;
-    known.apply(config, known.value ? (inline ?? argv[++i] ?? '') : '');
-  }
+  for (const { known, value } of readSwitches(argv)) known?.apply?.(config, value);
   return config;
 }
 
@@ -2823,6 +2842,7 @@ const ownPath = () => process.argv[1].replace(new RegExp(`^${os.homedir()}(?=/)`
 export {
   render,
   parseArgs,
+  readSwitches,
   PARTS,
   THEMES,
   DEFAULT_ROWS,

@@ -405,6 +405,50 @@ test('configure with no switches runs the wizard on a set-up config, and offers 
   assert.deepEqual(gh.calls(), []);
 });
 
+test('configure starts from the bars set up: a yes keeps the status line and adds no token line', () => {
+  const dir = configFolder();
+  ok(run(dir, ['setup', '--status-line', '--segments 10 --theme mono', '--no-token-line']));
+  const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
+  const r = ask(dir, ['configure'], ['y']);
+  ok(r);
+  assert.match(r.stdout, /Keep the current bars/);
+  assert.match(r.stdout, /Nothing to change/);
+  assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
+  assert.equal(settingsOf(dir).hooks, undefined);
+});
+
+test('a yes to keeping the bars leaves a command written by hand exactly as it is, and copies no scripts', () => {
+  const statusLine = "FORCE_COLOR=1 node ~/.claude/claude-gauge/statusline.js --text 'a b' --segments 10";
+  const dir = configFolder({ statusLine: cmd(statusLine), hooks: { Stop: [entry('node ~/.claude/claude-gauge/tokenline.js'), entry('node ~/.claude/claude-gauge/tokenline.js --window 1m')] } });
+  const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
+  const r = ask(dir, ['configure'], ['y']);
+  ok(r);
+  assert.match(r.stdout, /Nothing to change/);
+  assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
+  assert.ok(!fs.existsSync(runtimeOf(dir)), 'no scripts copied');
+});
+
+test('configure keeps a quoted value and a switch it does not know, whichever path the answers take', () => {
+  const dir = configFolder();
+  const script = (name) => path.join(runtimeOf(dir), name);
+  const status = ['--show', 'text,ctx', '--text', 'my label', '--frobnicate'];
+  ok(run(dir, ['setup', '--yes']));
+  const settings = settingsOf(dir);
+  settings.statusLine.command = commandFor(script('statusline.js'), status);
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings, null, 2) + '\n');
+  const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
+
+  ok(ask(dir, ['configure'], ['y']));
+  assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
+
+  // One row set up, a bar size changed, the rest kept with Enter.
+  ok(ask(dir, ['configure'], ['n', '', '', '10', '', '', '', 'y']));
+  assert.deepEqual(settingsOf(dir), {
+    statusLine: cmd(commandFor(script('statusline.js'), ['--show', 'text,ctx', '--segments', '10', '--text', 'my label', '--frobnicate'])),
+    hooks: { Stop: [entry(commandFor(script('tokenline.js')))] },
+  });
+});
+
 test('setup ends by offering to star the repo with gh, and stars it only on a yes', { skip: process.platform === 'win32' && 'the fake gh is a shell script' }, () => {
   const declined = fakeGh();
   const no = ask(configFolder(), ['setup'], ['y', 'n'], { bin: declined.bin });
