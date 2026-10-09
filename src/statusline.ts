@@ -598,9 +598,12 @@ function unrecorded(ledger: Ledger, data: StatusData): number {
   return recorded === undefined || usd < recorded ? usd : usd - recorded;
 }
 
+// The spans the today and week parts add up, each named as its part.
+type Period = 'today' | 'week';
+
 // The local days a period covers, newest first: today alone, or each day
 // back to Monday.
-function periodDays(period: 'today' | 'week', nowMs: number): string[] {
+function periodDays(period: Period, nowMs: number): string[] {
   const now = new Date(nowMs);
   const count = period === 'today' ? 1 : ((now.getDay() + 6) % 7) + 1;
   return Array.from({ length: count }, (_, i) => dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i).getTime()));
@@ -609,11 +612,11 @@ function periodDays(period: 'today' | 'week', nowMs: number): string[] {
 // Spend across sessions for today or this week: what the ledger holds for
 // those days, and what this session has spent since it was last recorded.
 // Nothing shows when neither has anything to add.
-function spentPart(period: 'today' | 'week', { data, config, nowMs, ledger }: PartContext): string {
-  const recorded = periodDays(period, nowMs).map((day) => dollars(ledger.days[day]));
-  const known = recorded.some((usd) => usd !== undefined) || dollars(data.cost?.total_cost_usd) !== undefined;
+function spentPart(period: Period, { data, config, nowMs, ledger }: PartContext): string {
+  const byDay = periodDays(period, nowMs).map((day) => dollars(ledger.days[day]));
+  const known = byDay.some((usd) => usd !== undefined) || dollars(data.cost?.total_cost_usd) !== undefined;
   if (!known) return '';
-  const usd = recorded.reduce<number>((sum, day) => sum + (day ?? 0), 0) + unrecorded(ledger, data);
+  const usd = byDay.reduce<number>((sum, day) => sum + (day ?? 0), 0) + unrecorded(ledger, data);
   return `${GRAY}${labelOf(config, period)}$${usd.toFixed(2)}${RESET}`;
 }
 
@@ -718,7 +721,9 @@ function render(
 // week from the cost ledger terminal renders keep.
 
 const configDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-const usageFile = () => path.join(configDir(), 'claude-gauge', '.state', 'usage.json');
+// A file in the state folder.
+const stateFile = (name: string) => path.join(configDir(), 'claude-gauge', '.state', name);
+const usageFile = () => stateFile('usage.json');
 
 // Best effort: a failed save never breaks the status line.
 function saveUsage(data: StatusData, nowMs: number): void {
@@ -746,7 +751,7 @@ function loadUsage(nowMs: number): StatusData['rate_limits'] | undefined {
 
 // The cost ledger file. Each terminal render records its session's cost in
 // it; the today and week parts read it, with --latest too.
-const ledgerFile = () => path.join(configDir(), 'claude-gauge', '.state', 'ledger.json');
+const ledgerFile = () => stateFile('ledger.json');
 
 // A session records its cost at most once in this time. The parts still show
 // its latest cost, as the spend the ledger has not recorded yet.
@@ -773,23 +778,42 @@ function readLedger(file: string): Ledger {
 
 const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
+const isStale = (file: string) => Date.now() - fs.statSync(file).mtimeMs > STALE_LOCK_MS;
+
+// Removes a lock a render left when it stopped while holding it. The lock is
+// first renamed to a name of this render's own, which only one render can do,
+// and then checked again, so a lock another render took in the meantime is
+// put back rather than removed.
+function breakStaleLock(lock: string, token: string): void {
+  const taken = `${lock}.${token}`;
+  try {
+    if (!isStale(lock)) return;
+    fs.renameSync(lock, taken);
+  } catch {
+    return; // the lock went, or another render took it first
+  }
+  try {
+    if (!isStale(taken)) fs.linkSync(taken, lock);
+  } catch {
+    /* a newer lock is in place: leave it */
+  }
+  fs.rmSync(taken, { force: true });
+}
+
 // Runs write while holding the ledger's lock, a file only one render at a
-// time can create. A render that cannot take the lock in LOCK_WAIT_MS writes
-// nothing, and loses nothing: its session's spend stays unrecorded until a
-// later render records it.
+// time can create, holding a token of the render's own. A render that cannot
+// take the lock in LOCK_WAIT_MS writes nothing, and loses nothing: its
+// session's spend stays unrecorded until a later render records it.
 function withLock(file: string, write: () => void): void {
   const lock = `${file}.lock`;
+  const token = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
   for (let waited = 0; ; waited += 5) {
     try {
-      fs.closeSync(fs.openSync(lock, 'wx'));
+      fs.writeFileSync(lock, token, { flag: 'wx' });
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > STALE_LOCK_MS) fs.unlinkSync(lock);
-      } catch {
-        /* the lock went in the meantime: try again */
-      }
+      breakStaleLock(lock, token);
       if (waited >= LOCK_WAIT_MS) return;
       sleep(5);
     }
@@ -797,7 +821,13 @@ function withLock(file: string, write: () => void): void {
   try {
     write();
   } finally {
-    fs.rmSync(lock, { force: true });
+    // Only this render's own lock: another may hold it once this one was
+    // taken for stale.
+    try {
+      if (fs.readFileSync(lock, 'utf8') === token) fs.unlinkSync(lock);
+    } catch {
+      /* already gone */
+    }
   }
 }
 

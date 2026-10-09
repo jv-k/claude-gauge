@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { render, parseArgs } = require('../dist/statusline.js');
+const { render, parseArgs, recordCost } = require('../dist/statusline.js');
 
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
@@ -62,7 +62,6 @@ const readFile = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 const session = (id, usd) => ({ session_id: id, cost: { total_cost_usd: usd } });
 
 test("a render records the session's new spend against today", () => {
-  const { recordCost } = require('../dist/statusline.js');
   const file = tempLedger();
   recordCost(session('a', 1.5), { file, nowMs: NOW });
   recordCost(session('b', 0.5), { file, nowMs: NOW + 1000 });
@@ -73,7 +72,6 @@ test("a render records the session's new spend against today", () => {
 });
 
 test('a session that runs past midnight puts its spend on the day it was spent', () => {
-  const { recordCost } = require('../dist/statusline.js');
   const file = tempLedger();
   const late = new Date(2026, 9, 6, 23, 59).getTime();
   recordCost(session('a', 1), { file, nowMs: late });
@@ -82,7 +80,6 @@ test('a session that runs past midnight puts its spend on the day it was spent',
 });
 
 test('a cost that falls counts again from zero', () => {
-  const { recordCost } = require('../dist/statusline.js');
   const file = tempLedger();
   recordCost(session('a', 3), { file, nowMs: NOW });
   recordCost(session('a', 0.5), { file, nowMs: NOW + 60_000 });
@@ -90,7 +87,6 @@ test('a cost that falls counts again from zero', () => {
 });
 
 test('writes are throttled to one every 10 seconds per session, and the parts still show the latest cost', () => {
-  const { recordCost } = require('../dist/statusline.js');
   const file = tempLedger();
   recordCost(session('a', 1), { file, nowMs: NOW });
   const ledger = recordCost(session('a', 1.25), { file, nowMs: NOW + 9_999 });
@@ -106,7 +102,6 @@ test('writes are throttled to one every 10 seconds per session, and the parts st
 });
 
 test('a render writes nothing when the cost has not changed, or there is no session or cost to record', () => {
-  const { recordCost } = require('../dist/statusline.js');
   const file = tempLedger();
   recordCost(session('a', 1), { file, nowMs: NOW });
   recordCost(session('a', 1), { file, nowMs: NOW + 60_000 });
@@ -119,7 +114,6 @@ test('a render writes nothing when the cost has not changed, or there is no sess
 });
 
 test('the ledger forgets days and sessions older than 31 days', () => {
-  const { recordCost } = require('../dist/statusline.js');
   const file = tempLedger();
   recordCost(session('old', 1), { file, nowMs: NOW - 32 * DAY });
   recordCost(session('kept', 1), { file, nowMs: NOW - 30 * DAY });
@@ -130,7 +124,6 @@ test('the ledger forgets days and sessions older than 31 days', () => {
 });
 
 test('a ledger file that is not a ledger is started again, and an unwritable one is left alone', () => {
-  const { recordCost } = require('../dist/statusline.js');
   const file = tempLedger();
   fs.writeFileSync(file, '{"days": [1, 2');
   recordCost(session('a', 1), { file, nowMs: NOW });
@@ -140,18 +133,37 @@ test('a ledger file that is not a ledger is started again, and an unwritable one
 });
 
 test('a session id is a key like any other', () => {
-  const { recordCost } = require('../dist/statusline.js');
   const file = tempLedger();
   recordCost(session('__proto__', 1), { file, nowMs: NOW });
   recordCost(session('__proto__', 3), { file, nowMs: NOW + 60_000 });
-  assert.deepEqual(readFile(file).days, { '2026-10-07': 3 });
-  assert.equal({}.usd, undefined);
+  const ledger = readFile(file);
+  assert.deepEqual(ledger.days, { '2026-10-07': 3 });
+  assert.deepEqual(Object.keys(ledger.sessions), ['__proto__']);
+  assert.equal(Object.prototype.usd, undefined);
+});
+
+test('a lock a stopped render left behind is broken, and a lock another render holds is left alone', () => {
+  const file = tempLedger();
+  const lock = `${file}.lock`;
+  // Held now by another render: this render records nothing, and leaves the
+  // lock as it found it.
+  fs.writeFileSync(lock, 'other');
+  recordCost(session('a', 1), { file, nowMs: NOW });
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.readFileSync(lock, 'utf8'), 'other');
+  // Left by a render that stopped a minute ago: the lock is broken, the
+  // spend held back before is recorded too, and no lock is left.
+  const minuteAgo = new Date(Date.now() - 60_000);
+  fs.utimesSync(lock, minuteAgo, minuteAgo);
+  recordCost(session('a', 2), { file, nowMs: NOW + 60_000 });
+  assert.deepEqual(readFile(file).days, { '2026-10-07': 2 });
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ['ledger.json']);
 });
 
 // Runs a script in a Node process of its own, with the built status line at
 // hand as gauge, and resolves with what it printed.
 const { spawn } = require('node:child_process');
-const inProcess = (script, ...args) =>
+const inNodeProcess = (script, ...args) =>
   new Promise((resolve, reject) => {
     const gauge = path.join(__dirname, '..', 'dist', 'statusline.js');
     const child = spawn(process.execPath, ['-e', `const gauge = require(${JSON.stringify(gauge)}); ${script}`, ...args], {
@@ -169,15 +181,15 @@ test('two sessions rendering at once keep the ledger whole, and lose none of its
   const renders = 400;
   // Each session renders over and over, 10 seconds apart on its clock so that
   // every render writes, and spends a cent each time.
-  const session = (id) =>
-    inProcess(
+  const keepRendering = (id) =>
+    inNodeProcess(
       `const [file, id, n, now] = process.argv.slice(1);
        for (let i = 1; i <= +n; i++) gauge.recordCost({ session_id: id, cost: { total_cost_usd: i / 100 } }, { file, nowMs: +now + i * 10000 });`,
       file, id, String(renders), String(NOW),
     );
   // A third process reads the file all the while, and counts the reads that
   // were not a whole ledger.
-  const reader = inProcess(
+  const reader = inNodeProcess(
     `const fs = require('node:fs');
      const [file, stop] = process.argv.slice(1);
      let torn = 0;
@@ -187,12 +199,11 @@ test('two sessions rendering at once keep the ledger whole, and lose none of its
      process.stdout.write(String(torn));`,
     file, `${file}.stop`,
   );
-  await Promise.all([session('a'), session('b')]);
+  await Promise.all([keepRendering('a'), keepRendering('b')]);
   fs.writeFileSync(`${file}.stop`, '');
   assert.equal(await reader, '0');
 
   // A render each afterwards records anything a busy lock held back.
-  const { recordCost } = require('../dist/statusline.js');
   const after = NOW + (renders + 1) * 10_000;
   recordCost({ session_id: 'a', cost: { total_cost_usd: renders / 100 + 0.01 } }, { file, nowMs: after });
   recordCost({ session_id: 'b', cost: { total_cost_usd: renders / 100 + 0.01 } }, { file, nowMs: after });
