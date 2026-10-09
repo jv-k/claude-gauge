@@ -13,9 +13,10 @@
 // claude.ai 5-hour and 7-day windows. The only side call is
 // `git branch --show-current`.
 //
-// The parts it can show are in PART_REGISTRY and the switches it takes in
-// SWITCHES, both below. README.md documents each in a table, and a test fails
-// when the tables and the registry disagree.
+// The parts it can show are in PART_REGISTRY, the switches it takes in
+// SWITCHES and the --theme presets in THEME_REGISTRY, all below. README.md
+// documents each in a table, and a test fails when the tables and the
+// registry disagree. test/snapshots/ holds the default rows in every theme.
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -28,6 +29,9 @@ import { execFileSync } from 'node:child_process';
 interface PartContext {
   data: StatusData;
   config: Config;
+  // The colours to draw with: the --theme preset, or one --color for the
+  // whole part.
+  theme: Theme;
   nowMs: number;
   // The folder's path as it is, for git to run in, and its name to print.
   cwd: string;
@@ -47,28 +51,28 @@ interface PartSpec {
 // first, in the order their rows show them; the order of the rest is the
 // README's.
 const partRegistry = {
-  ctx: { description: 'context window in use: percentage, bar and token count', row: 0, build: ({ data, config }) => contextPart(data, config) },
-  '5h': { description: '5-hour usage, with pace marker and reset time', row: 0, build: ({ data, config, nowMs }) => windowPart('5h', data, config, nowMs) },
-  '7d': { description: 'weekly usage, with pace marker and days to reset', row: 0, build: ({ data, config, nowMs }) => windowPart('7d', data, config, nowMs) },
-  time: { description: 'current local time', row: 1, build: ({ config, nowMs }) => timePart(config, nowMs) },
-  duration: { description: 'how long the session has run', row: 1, build: ({ data }) => durationPart(data) },
-  repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, folder }) => repoPart(data, folder) },
-  branch: { description: 'current git branch, and the linked worktree', row: 1, build: ({ data, config, cwd, branchOf }) => branchPart(data, config, branchOf(cwd)) },
-  model: { description: 'model name', row: 1, build: ({ data }) => (data.model?.display_name ? `${YELLOW}${data.model.display_name}${RESET}` : '') },
-  effort: { description: 'reasoning effort', row: 1, build: ({ data, config }) => effortPart(data, config) },
-  dir: { description: 'folder Claude Code runs in', build: ({ folder }) => `${BLUE}${folder}${RESET}` },
-  cost: { description: 'estimated session cost', build: ({ data }) => costPart(data) },
-  lines: { description: 'lines added and removed this session', build: ({ data }) => linesPart(data) },
-  name: { description: 'session name or title', build: ({ data }) => namePart(data) },
-  thinking: { description: 'extended thinking, when on', build: ({ data }) => thinkingPart(data) },
-  fast: { description: 'fast mode, when on', build: ({ data }) => fastPart(data) },
-  style: { description: 'output style, when not the default', build: ({ data, config }) => stylePart(data, config) },
-  worktree: { description: 'linked git worktree', build: ({ data, config }) => worktreePart(data, config) },
-  pr: { description: "the branch's open pull request and its review state", build: ({ data }) => prPart(data) },
-  agent: { description: 'agent name, with --agent', build: ({ data, config }) => agentPart(data, config) },
-  cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config }) => cachePart(data, config) },
-  spend: { description: 'spend against a gateway spend limit', build: ({ data, config }) => spendPart(data, config) },
-  version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
+  ctx: { description: 'context window in use: percentage, bar and token count', row: 0, build: ({ data, config, theme }) => contextPart(data, config, theme) },
+  '5h': { description: '5-hour usage, with pace marker and reset time', row: 0, build: ({ data, config, theme, nowMs }) => windowPart('5h', data, config, theme, nowMs) },
+  '7d': { description: 'weekly usage, with pace marker and days to reset', row: 0, build: ({ data, config, theme, nowMs }) => windowPart('7d', data, config, theme, nowMs) },
+  time: { description: 'current local time', row: 1, build: ({ config, theme, nowMs }) => timePart(config, theme, nowMs) },
+  duration: { description: 'how long the session has run', row: 1, build: ({ data, theme }) => durationPart(data, theme) },
+  repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, theme, folder }) => repoPart(data, theme, folder) },
+  branch: { description: 'current git branch, and the linked worktree', row: 1, build: ({ data, config, theme, cwd, branchOf }) => branchPart(data, config, theme, branchOf(cwd)) },
+  model: { description: 'model name', row: 1, build: ({ data, theme }) => (data.model?.display_name ? `${theme.accent}${data.model.display_name}${RESET}` : '') },
+  effort: { description: 'reasoning effort', row: 1, build: ({ data, config, theme }) => effortPart(data, config, theme) },
+  dir: { description: 'folder Claude Code runs in', build: ({ theme, folder }) => `${theme.info}${folder}${RESET}` },
+  cost: { description: 'estimated session cost', build: ({ data, theme }) => costPart(data, theme) },
+  lines: { description: 'lines added and removed this session', build: ({ data, theme }) => linesPart(data, theme) },
+  name: { description: 'session name or title', build: ({ data, theme }) => namePart(data, theme) },
+  thinking: { description: 'extended thinking, when on', build: ({ data, theme }) => thinkingPart(data, theme) },
+  fast: { description: 'fast mode, when on', build: ({ data, theme }) => fastPart(data, theme) },
+  style: { description: 'output style, when not the default', build: ({ data, config, theme }) => stylePart(data, config, theme) },
+  worktree: { description: 'linked git worktree', build: ({ data, config, theme }) => worktreePart(data, config, theme) },
+  pr: { description: "the branch's open pull request and its review state", build: ({ data, theme }) => prPart(data, theme) },
+  agent: { description: 'agent name, with --agent', build: ({ data, config, theme }) => agentPart(data, config, theme) },
+  cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config, theme }) => cachePart(data, config, theme) },
+  spend: { description: 'spend against a gateway spend limit', build: ({ data, config, theme }) => spendPart(data, config, theme) },
+  version: { description: 'Claude Code version', build: ({ data, theme }) => versionPart(data, theme) },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -97,6 +101,14 @@ interface Config {
   pace: boolean;
   reset: boolean;
   hour12: boolean;
+  // The --theme preset's name, as given: render takes an unknown one as the
+  // default.
+  theme: string;
+  // The --color overrides: a colour code for each part named.
+  colors: Partial<Record<Part, string>>;
+  // The characters of a bar's filled and empty cells.
+  barFilled: string;
+  barEmpty: string;
 }
 
 // What parseArgs returns and render takes: any subset of the config, with
@@ -111,6 +123,10 @@ const DEFAULTS: Config = {
   pace: true,
   reset: true,
   hour12: false,
+  theme: 'default',
+  colors: {},
+  barFilled: '▓',
+  barEmpty: '░',
 };
 
 interface Switch {
@@ -140,10 +156,29 @@ const SWITCHES: readonly Switch[] = [
   { name: '--no-pace', description: 'drop the pace markers', apply: (config) => { config.pace = false; } },
   { name: '--no-reset', description: 'drop the reset times', apply: (config) => { config.reset = false; } },
   { name: '--12h', description: '12-hour clock for the time part and reset times', apply: (config) => { config.hour12 = true; } },
+  { name: '--theme', value: '<name>', description: 'the colour preset: default, mono, high-contrast or pastel', apply: (config, value) => { config.theme = value.trim(); } },
+  {
+    name: '--color',
+    value: '<part>=<colour>',
+    description: "one part's colour: a name, a 256-colour number or a hex colour; comma-separate or repeat it for more parts",
+    apply: (config, value) => {
+      for (const pair of value.split(',')) {
+        const [part, color] = pair.split(/=(.*)/s).map((p) => p.trim());
+        const code = colorCode(color ?? '');
+        if (isPart(part) && code) config.colors = { ...config.colors, [part]: code };
+      }
+    },
+  },
+  { name: '--bar-filled', value: '<char>', description: 'the character of a filled bar cell (default ▓)', apply: (config, value) => { if (isBarChar(value)) config.barFilled = value; } },
+  { name: '--bar-empty', value: '<char>', description: 'the character of an empty bar cell (default ░)', apply: (config, value) => { if (isBarChar(value)) config.barEmpty = value; } },
   { name: '--latest', description: "print the calling session's rows from its transcript, as plain text" },
   { name: '--window', value: '<size>', description: 'with --latest: the context window size, such as 200k or 1m' },
   { name: '--instruct', description: 'as a SessionStart hook: have Claude end each reply with the --latest rows' },
 ];
+
+// A bar cell is one character, and never a control character: the switch is
+// printed as it is, in every cell.
+const isBarChar = (value: string) => Array.from(value).length === 1 && sanitise(value) === value;
 
 // Turns the switches into a config. Unknown switches and part names are
 // ignored, and a --show with no known part adds no row: a status line should
@@ -167,6 +202,118 @@ const YELLOW = '\x1b[0;33m';
 const CYAN = '\x1b[0;36m';
 const RED = '\x1b[0;31m';
 const ansi256 = (n: number) => `\x1b[38;5;${n}m`;
+// The 16-colour palette's bright half, and its bold form.
+const bright = (n: number) => `\x1b[0;${n}m`;
+const bold = (n: number) => `\x1b[1;${n}m`;
+
+// The colours a status line draws with. Each part takes its colours from
+// these roles, never a code of its own, so a theme restyles every part.
+interface Theme {
+  description: string;
+  // Usage, in ten steps: 0-10% up to above 90%.
+  levels: readonly string[];
+  // The pace marker, by the usage projected for the end of the window:
+  // below 50%, 75%, 90%, 100%, 120%, and above.
+  pace: readonly string[];
+  // ctx: up to 50%, up to 75%, and above.
+  context: readonly string[];
+  // Session details and the separator: time, duration, repo, name and the like.
+  muted: string;
+  // Model state, and a usage window not reported yet.
+  accent: string;
+  // The branch, lines added, an approved pull request.
+  good: string;
+  // Lines removed, a pull request with changes requested.
+  bad: string;
+  // The folder.
+  info: string;
+}
+
+// The --theme presets, by name. default is the first, and what an unknown
+// name gives.
+const THEME_REGISTRY = {
+  default: {
+    description: 'green-to-red usage, cyan context, grey details',
+    levels: [22, 28, 34, 100, 142, 178, 172, 166, 160, 124].map(ansi256),
+    pace: [34, 37, 178, 208, 160, 135].map(ansi256),
+    context: [CYAN, YELLOW, ansi256(160)],
+    muted: GRAY,
+    accent: YELLOW,
+    good: GREEN,
+    bad: RED,
+    info: BLUE,
+  },
+  mono: {
+    description: "no colour: the terminal's own text colour throughout",
+    levels: Array(10).fill(''),
+    pace: Array(6).fill(''),
+    context: ['', '', ''],
+    muted: '',
+    accent: '',
+    good: '',
+    bad: '',
+    info: '',
+  },
+  'high-contrast': {
+    description: "the terminal's bright colours, and white details, for dim screens and low vision",
+    levels: [92, 92, 92, 92, 93, 93, 93, 91, 91].map(bright).concat(bold(91)),
+    pace: [bright(92), bright(96), bright(93), bold(93), bright(91), bright(95)],
+    context: [bright(96), bright(93), bright(91)],
+    muted: bright(97),
+    accent: bright(93),
+    good: bright(92),
+    bad: bright(91),
+    info: bright(94),
+  },
+  pastel: {
+    description: 'soft 256-colour tones on the same green-to-red scale',
+    levels: [157, 151, 150, 187, 229, 223, 216, 217, 210, 211].map(ansi256),
+    pace: [151, 152, 229, 216, 210, 183].map(ansi256),
+    context: [152, 229, 210].map(ansi256),
+    muted: ansi256(248),
+    accent: ansi256(229),
+    good: ansi256(151),
+    bad: ansi256(210),
+    info: ansi256(153),
+  },
+} satisfies Record<string, Theme>;
+
+const THEMES = Object.keys(THEME_REGISTRY);
+
+// The preset a --theme names, else the default.
+// A --color value as a colour code: a name such as red or bright-red, a
+// 256-colour number, or a hex colour as #f80 or #ff8800. Anything else is
+// none, so a switch can never print a code of its own.
+const NAMED_COLORS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+
+function colorCode(text: string): string | undefined {
+  const name = text.toLowerCase();
+  if (name === 'gray' || name === 'grey') return GRAY;
+  const named = NAMED_COLORS.indexOf(name.replace(/^bright-/, ''));
+  if (named >= 0) return `\x1b[0;${(name.startsWith('bright-') ? 90 : 30) + named}m`;
+  if (/^\d{1,3}$/.test(name) && Number(name) <= 255) return ansi256(Number(name));
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/.exec(name)?.[1];
+  if (!hex) return undefined;
+  const full = hex.length === 3 ? [...hex].map((d) => d + d).join('') : hex;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16));
+  return `\x1b[38;2;${r};${g};${b}m`;
+}
+
+// A theme that draws everything in one colour, for a part --color names. The
+// pace marker keeps the theme's colours, because its colour is what it says.
+const solid = (theme: Theme, color: string): Theme => ({
+  description: theme.description,
+  levels: theme.levels.map(() => color),
+  pace: theme.pace,
+  context: theme.context.map(() => color),
+  muted: color,
+  accent: color,
+  good: color,
+  bad: color,
+  info: color,
+});
+
+const themeOf = (name: string): Theme => (Object.hasOwn(THEME_REGISTRY, name) ? (THEME_REGISTRY as Record<string, Theme>)[name] : THEME_REGISTRY.default);
 
 // Terminal escape sequences, whole: CSI (colours, cursor moves, erases), OSC
 // (window titles, hyperlinks, the clipboard), the DCS, SOS, PM and APC
@@ -197,19 +344,17 @@ function sanitiseAll<T>(value: T): T {
   return value;
 }
 
-// Ten usage levels: dark green at 0-10%, deep red above 90%.
-const LEVELS = [22, 28, 34, 100, 142, 178, 172, 166, 160, 124].map(ansi256);
-const levelColor = (pct: number) => LEVELS[Math.min(9, Math.max(0, Math.ceil(pct / 10) - 1))];
+// The usage level's colour, in ten steps: in the default theme, dark green
+// at 0-10% and deep red above 90%.
+const levelColor = (theme: Theme, pct: number) => theme.levels[Math.min(9, Math.max(0, Math.ceil(pct / 10) - 1))];
 
-// Pace marker colours, by the usage the current rate projects for the end of
-// the window.
-const paceColor = (projected: number) =>
-  projected < 50 ? ansi256(34) // comfortable
-  : projected < 75 ? ansi256(37) // on track
-  : projected < 90 ? ansi256(178) // warming
-  : projected < 100 ? ansi256(208) // pressing
-  : projected < 120 ? ansi256(160) // critical
-  : ansi256(135); // runaway
+// The pace marker's colour, by the usage the current rate projects for the
+// end of the window.
+const PACE_LIMITS = [50, 75, 90, 100, 120]; // comfortable, on track, warming, pressing, critical; then runaway
+const paceColor = (theme: Theme, projected: number) => {
+  const step = PACE_LIMITS.findIndex((limit) => projected < limit);
+  return theme.pace[step < 0 ? PACE_LIMITS.length : step];
+};
 
 interface UsageWindow {
   key: 'five_hour' | 'seven_day';
@@ -283,10 +428,10 @@ const fmt = (n: number) =>
 // Bars come in 5 or 10 cells; anything else falls back to 5.
 const segmentsOf = (value: number | string | undefined) => (Number(value) === 10 ? 10 : 5);
 
-// The cells of a bar, filled in proportion to pct.
-const cellsFor = (pct: number, segments: number) => {
+// The cells of a bar, filled in proportion to pct, one character each.
+const cellsFor = (pct: number, { segments, barFilled, barEmpty }: Config) => {
   const filled = Math.min(segments, Math.max(0, Math.round((pct * segments) / 100)));
-  return '▓'.repeat(filled) + '░'.repeat(segments - filled);
+  return [...Array<string>(filled).fill(barFilled), ...Array<string>(segments - filled).fill(barEmpty)];
 };
 
 function git(cwd: string, args: string[]): string {
@@ -331,31 +476,32 @@ function usageBar(
   window: UsageWindow,
   resetsAt: number | undefined,
   config: Config,
+  theme: Theme,
   nowMs: number,
 ): string {
-  const cells = cellsFor(pct, config.segments);
+  const cells = cellsFor(pct, config);
   const remaining = resetsAt ? resetsAt - nowMs / 1000 : 0;
-  if (!config.pace || remaining <= 0 || remaining >= window.seconds) return ` ${cells}`;
+  if (!config.pace || remaining <= 0 || remaining >= window.seconds) return ` ${cells.join('')}`;
 
   const elapsed = window.seconds - remaining;
   const pos = Math.min(config.segments - 1, Math.max(0, Math.round((elapsed * config.segments) / window.seconds)));
   // Early in a window the projection is noise, so keep the usage colour.
-  const marker = elapsed >= window.minElapsed ? paceColor((pct * window.seconds) / elapsed) : color;
-  return ` ${cells.slice(0, pos)}${marker}┃${RESET}${color}${cells.slice(pos + 1)}`;
+  const marker = elapsed >= window.minElapsed ? paceColor(theme, (pct * window.seconds) / elapsed) : color;
+  return ` ${cells.slice(0, pos).join('')}${marker}┃${RESET}${color}${cells.slice(pos + 1).join('')}`;
 }
 
 // The 5h or 7d part. rate_limits is present only for claude.ai Pro and Max
 // subscribers, after the first response of a session; "~" marks a window
 // Claude Code has not reported yet.
-function windowPart(name: '5h' | '7d', data: StatusData, config: Config, nowMs: number): string {
+function windowPart(name: '5h' | '7d', data: StatusData, config: Config, theme: Theme, nowMs: number): string {
   const window = WINDOWS[name];
   const label = config.labels ? `${name} ` : '';
   const limit = data.rate_limits?.[window.key];
-  if (limit?.used_percentage == null) return `${YELLOW}${label}~${RESET}`;
+  if (limit?.used_percentage == null) return `${theme.accent}${label}~${RESET}`;
 
   const pct = Math.round(limit.used_percentage);
-  const color = levelColor(pct);
-  const bar = config.bars ? usageBar(pct, color, window, limit.resets_at, config, nowMs) : '';
+  const color = levelColor(theme, pct);
+  const bar = config.bars ? usageBar(pct, color, window, limit.resets_at, config, theme, nowMs) : '';
   let reset = '';
   if (config.reset && limit.resets_at) {
     const when = name === '7d' ? formatDaysOrTime(limit.resets_at, config, nowMs) : formatTime(limit.resets_at, config);
@@ -367,7 +513,7 @@ function windowPart(name: '5h' | '7d', data: StatusData, config: Config, nowMs: 
 // The context in the token line's shape: ctx 43% ▓▓░░░ 86.0k. Both figures
 // count input only (fresh input plus cache writes and reads), as Claude
 // Code's used_percentage does.
-function contextPart(data: StatusData, config: Config): string {
+function contextPart(data: StatusData, config: Config, theme: Theme): string {
   const ctx = data.context_window;
   if (!ctx) return '';
   const u = ctx.current_usage;
@@ -379,17 +525,17 @@ function contextPart(data: StatusData, config: Config): string {
   if (pct == null) return '';
   if (tokens == null && size) tokens = Math.round((pct * size) / 100);
 
-  const color = pct <= 50 ? CYAN : pct <= 75 ? YELLOW : LEVELS[8];
+  const color = theme.context[pct <= 50 ? 0 : pct <= 75 ? 1 : 2];
   const label = config.labels ? 'ctx ' : '';
-  const bar = config.bars ? ` ${cellsFor(pct, config.segments)}` : '';
+  const bar = config.bars ? ` ${cellsFor(pct, config).join('')}` : '';
   const count = tokens != null ? ` ${fmt(tokens)}` : '';
   return `${color}${label}${Math.round(pct)}%${bar}${count}${RESET}`;
 }
 
 // The current local time, on the same clock as the reset times.
-function timePart(config: Config, nowMs: number): string {
+function timePart(config: Config, theme: Theme, nowMs: number): string {
   const time = new Date(nowMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: config.hour12 });
-  return `${GRAY}${time}${RESET}`;
+  return `${theme.muted}${time}${RESET}`;
 }
 
 // A session's running time: 45s, 12m, 1h12m, 2d3h. A zero lower unit is
@@ -405,61 +551,61 @@ function formatDuration(ms: number): string {
   return h % 24 ? `${d}d${h % 24}h` : `${d}d`;
 }
 
-function durationPart(data: StatusData): string {
+function durationPart(data: StatusData, theme: Theme): string {
   const ms = data.cost?.total_duration_ms;
-  return ms != null ? `${GRAY}${formatDuration(ms)}${RESET}` : '';
+  return ms != null ? `${theme.muted}${formatDuration(ms)}${RESET}` : '';
 }
 
 // The session's estimated cost. Behind a spend limit it takes the usage
 // colour of the limit's percentage; otherwise it is plain metadata.
-function costPart(data: StatusData): string {
+function costPart(data: StatusData, theme: Theme): string {
   const usd = data.cost?.total_cost_usd;
   if (usd == null) return '';
   const spent = data.rate_limits?.spend_limit?.used_percentage;
-  const color = spent != null ? levelColor(Math.round(spent)) : GRAY;
+  const color = spent != null ? levelColor(theme, Math.round(spent)) : theme.muted;
   return `${color}$${usd.toFixed(2)}${RESET}`;
 }
 
-function linesPart(data: StatusData): string {
+function linesPart(data: StatusData, theme: Theme): string {
   const added = data.cost?.total_lines_added;
   const removed = data.cost?.total_lines_removed;
   if (added == null && removed == null) return '';
-  return `${GREEN}+${added ?? 0}${RESET} ${RED}−${removed ?? 0}${RESET}`;
+  return `${theme.good}+${added ?? 0}${RESET} ${theme.bad}−${removed ?? 0}${RESET}`;
 }
 
 // The session's custom name or AI-generated title, cut to 30 characters.
-function namePart(data: StatusData): string {
+function namePart(data: StatusData, theme: Theme): string {
   const name = data.session_name;
   if (!name) return '';
   const shown = name.length > 30 ? `${name.slice(0, 29)}…` : name;
-  return `${GRAY}${shown}${RESET}`;
+  return `${theme.muted}${shown}${RESET}`;
 }
 
-// Model state, in the model's yellow. effort is labelled because "high" on
+// Model state, in the model's colour, yellow by default. effort is labelled because "high" on
 // its own could mean anything; thinking and fast are their own label and
 // show only when on; style shows only when it is not the default.
-function effortPart(data: StatusData, config: Config): string {
+function effortPart(data: StatusData, config: Config, theme: Theme): string {
   const level = data.effort?.level;
-  return level ? `${YELLOW}${config.labels ? 'effort ' : ''}${level}${RESET}` : '';
+  return level ? `${theme.accent}${config.labels ? 'effort ' : ''}${level}${RESET}` : '';
 }
 
-const thinkingPart = (data: StatusData) => (data.thinking?.enabled ? `${YELLOW}think${RESET}` : '');
+const thinkingPart = (data: StatusData, theme: Theme) => (data.thinking?.enabled ? `${theme.accent}think${RESET}` : '');
 
-const fastPart = (data: StatusData) => (data.fast_mode ? `${YELLOW}fast${RESET}` : '');
+const fastPart = (data: StatusData, theme: Theme) => (data.fast_mode ? `${theme.accent}fast${RESET}` : '');
 
-function stylePart(data: StatusData, config: Config): string {
+function stylePart(data: StatusData, config: Config, theme: Theme): string {
   const name = data.output_style?.name;
   if (!name || name === 'default') return '';
-  return `${GRAY}${config.labels ? 'style ' : ''}${name}${RESET}`;
+  return `${theme.muted}${config.labels ? 'style ' : ''}${name}${RESET}`;
 }
 
 // The repository as owner/name from the origin remote. Without one (outside
 // git, or no origin) it falls back to the folder name, so a row that leads
 // with repo never loses its location.
-function repoPart(data: StatusData, folder: string): string {
+function repoPart(data: StatusData, theme: Theme, folder: string): string {
   const repo = data.workspace?.repo;
   const shown = repo?.owner && repo?.name ? `${repo.owner}/${repo.name}` : folder;
-  return `${GRAY}${shown}${RESET}`;
+  return `${theme.muted}${shown}${RESET}`;
 }
 
 // The linked git worktree the session is in, if any. workspace.git_worktree
@@ -468,61 +614,62 @@ function repoPart(data: StatusData, folder: string): string {
 const worktreeName = (data: StatusData) => data.workspace?.git_worktree || data.worktree?.name || '';
 
 // The branch, followed by the worktree name inside a linked worktree.
-function branchPart(data: StatusData, config: Config, branch: string): string {
+function branchPart(data: StatusData, config: Config, theme: Theme, branch: string): string {
   if (!branch) return '';
   const wt = worktreeName(data);
   const inWorktree = wt ? ` (${config.labels ? 'wt ' : ''}${wt})` : '';
-  return `${GREEN}⎇ ${branch}${inWorktree}${RESET}`;
+  return `${theme.good}⎇ ${branch}${inWorktree}${RESET}`;
 }
 
-function worktreePart(data: StatusData, config: Config): string {
+function worktreePart(data: StatusData, config: Config, theme: Theme): string {
   const wt = worktreeName(data);
-  return wt ? `${GRAY}${config.labels ? 'wt ' : ''}${wt}${RESET}` : '';
+  return wt ? `${theme.muted}${config.labels ? 'wt ' : ''}${wt}${RESET}` : '';
 }
 
 // The branch's open pull request, coloured by its review state. A GitLab
 // merge request takes GitLab's ! prefix instead of #.
-const PR_COLORS: Record<string, string> = { approved: GREEN, pending: YELLOW, changes_requested: RED, draft: GRAY };
+const PR_ROLES: Record<string, 'good' | 'accent' | 'bad' | 'muted'> = { approved: 'good', pending: 'accent', changes_requested: 'bad', draft: 'muted' };
 
-function prPart(data: StatusData): string {
+function prPart(data: StatusData, theme: Theme): string {
   const pr = data.pr;
   if (pr?.number == null) return '';
   const number = `${pr.kind === 'mr' ? '!' : '#'}${pr.number}`;
   const state = pr.review_state ? ` ${pr.review_state}` : '';
-  return `${PR_COLORS[pr.review_state ?? ''] ?? GRAY}${number}${state}${RESET}`;
+  const role = Object.hasOwn(PR_ROLES, pr.review_state ?? '') ? PR_ROLES[pr.review_state ?? ''] : 'muted';
+  return `${theme[role]}${number}${state}${RESET}`;
 }
 
-function agentPart(data: StatusData, config: Config): string {
+function agentPart(data: StatusData, config: Config, theme: Theme): string {
   const name = data.agent?.name;
-  return name ? `${GRAY}${config.labels ? 'agent ' : ''}${name}${RESET}` : '';
+  return name ? `${theme.muted}${config.labels ? 'agent ' : ''}${name}${RESET}` : '';
 }
 
 // The prompt cache's hit ratio and whether it is still warm. A high hit
 // ratio is good, so the colour follows the miss rate on the usage scale.
-function cachePart(data: StatusData, config: Config): string {
+function cachePart(data: StatusData, config: Config, theme: Theme): string {
   const cache = data.prompt_cache;
   if (!cache) return '';
   const label = config.labels ? 'cache ' : '';
   const state = cache.warm ? 'warm' : 'cold';
-  if (cache.hit_ratio == null) return `${GRAY}${label}${state}${RESET}`;
+  if (cache.hit_ratio == null) return `${theme.muted}${label}${state}${RESET}`;
   const hit = Math.round(cache.hit_ratio * 100);
-  return `${levelColor(100 - hit)}${label}${hit}% ${state}${RESET}`;
+  return `${levelColor(theme, 100 - hit)}${label}${hit}% ${state}${RESET}`;
 }
 
 // The spend limit behind a Claude apps gateway: dollars when Claude Code has
 // them, which arrive a little after the percentage, and the percentage until
 // then.
-function spendPart(data: StatusData, config: Config): string {
+function spendPart(data: StatusData, config: Config, theme: Theme): string {
   const limit = data.rate_limits?.spend_limit;
   if (limit?.used_percentage == null) return '';
-  const color = levelColor(Math.round(limit.used_percentage));
+  const color = levelColor(theme, Math.round(limit.used_percentage));
   if (limit.used_usd != null && limit.limit_usd != null) {
     return `${color}$${Math.round(limit.used_usd)}/$${Math.round(limit.limit_usd)}${RESET}`;
   }
   return `${color}${config.labels ? 'spend ' : ''}${Math.round(limit.used_percentage)}%${RESET}`;
 }
 
-const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
+const versionPart = (data: StatusData, theme: Theme) => (data.version ? `${theme.muted}v${data.version}${RESET}` : '');
 
 interface RenderOptions {
   config?: Overrides;
@@ -534,10 +681,12 @@ function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), 
   const merged = { ...DEFAULTS, ...overrides };
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
+  const theme = themeOf(config.theme);
 
   const input: PartContext = {
     data: sanitiseAll(data),
     config,
+    theme,
     nowMs,
     cwd,
     folder: sanitise(path.basename(cwd)),
@@ -551,9 +700,13 @@ function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), 
       row
         // Rows handed in from JavaScript may name parts the registry lacks;
         // those render as nothing, like every other part with nothing to show.
-        .map((part) => (isPart(part) ? PART_REGISTRY[part].build(input) : ''))
+        .map((part) => {
+          if (!isPart(part)) return '';
+          const color = Object.hasOwn(config.colors, part) ? config.colors[part] : undefined;
+          return PART_REGISTRY[part].build(color ? { ...input, theme: solid(theme, color) } : input);
+        })
         .filter(Boolean)
-        .join(`${GRAY} │ ${RESET}`),
+        .join(`${theme.muted} │ ${RESET}`),
     )
     .filter(Boolean)
     .join('\n');
@@ -743,6 +896,7 @@ export {
   render,
   parseArgs,
   PARTS,
+  THEMES,
   DEFAULT_ROWS,
   SWITCHES,
   payloadFromTranscript,
@@ -753,7 +907,7 @@ export {
   INSTRUCT_HOSTS,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord };
+export type { StatusData, Config, Overrides, Part, Theme, TranscriptRecord };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs

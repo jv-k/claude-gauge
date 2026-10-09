@@ -55,6 +55,10 @@ const statusExamples = [
     'ctx 43% ▓▓▓▓░░░░░░ 86.0k │ 5h 9% ▓░░░░░░░░░ │ 7d 41% ▓▓▓▓░░░░░░\n',
   ],
   [['--show', 'ctx,5h,7d,model', '--no-labels', '--no-bars', '--no-reset', '--12h'], '43% 86.0k │ 9% │ 41% │ Opus 5.5\n'],
+  [
+    ['--show', 'ctx,5h,7d', '--theme', 'pastel', '--bar-filled', '█', '--bar-empty', '·', '--no-reset'],
+    'ctx 43% ██··· 86.0k │ 5h 9% ···┃· │ 7d 41% ██·┃·\n',
+  ],
 ];
 
 // A transcript of one prompt and two API responses, as the Stop hook sees it.

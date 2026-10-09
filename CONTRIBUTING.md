@@ -30,7 +30,7 @@ pnpm test
 | `src/statusline.ts` | The status line. |
 | `src/tokenline.ts` | The token line. |
 | `dist/` | The two built files that users' settings run. `pnpm build` writes them. The `dist` workflow commits them to `main`. |
-| `test/` | The suites, one per line; the parity suite, which checks the README examples against the build; the README sync suite, which checks the README's status line tables against the registry; and the release suites, which check the release notes script and what npm would publish. |
+| `test/` | The suites, one per line; the parity suite, which checks the README examples against the build; the README sync suite, which checks the README's status line tables against the registry; the themes suite, which checks the default rows in every theme against the golden snapshots in `test/snapshots/`; and the release suites, which check the release notes script and what npm would publish. |
 | `scripts/release-notes.js` | Prints a version's section of `CHANGELOG.md`, which the `release` workflow uses as the GitHub release notes. It is not part of the package. |
 | `README.md` | The user docs: every part and every switch. |
 | `INSTALL-WITH-CLAUDE.md` | The steps Claude follows when a user asks it to install claude-gauge. |
@@ -45,7 +45,7 @@ pnpm test
 - **Ignore what is unknown.** An unknown switch or part name is ignored, so that a typo never breaks a user's status line or turn. New parsing keeps that rule.
 - **Keep switches the only configuration.** Each line reads its switches from the `command` in the user's settings. There is no configuration file.
 - **Keep tests out of the real config folder.** A test that renders the status line sets `CLAUDE_CONFIG_DIR` to a temporary folder, because a terminal render saves usage into the config folder.
-- **Update the docs with the code.** A new or changed part or switch updates the tables in `README.md`. Each status line part goes in `PART_REGISTRY` and each switch in `SWITCHES` in `src/statusline.ts`, and the README sync suite fails until the README's tables name the same parts and switches. If it changes a README example, update the parity suite too. If it changes how Claude installs claude-gauge, update `INSTALL-WITH-CLAUDE.md`.
+- **Update the docs with the code.** A new or changed part or switch updates the tables in `README.md`. Each status line part goes in `PART_REGISTRY`, each switch in `SWITCHES` and each theme in `THEME_REGISTRY` in `src/statusline.ts`, and the README sync suite fails until the README's tables name the same parts, switches and themes. A new or changed theme also changes its golden snapshot: rewrite the snapshots with `pnpm build && UPDATE_SNAPSHOTS=1 node --test test/themes.test.js`, and check the diff before you commit it. If it changes a README example, update the parity suite too. If it changes how Claude installs claude-gauge, update `INSTALL-WITH-CLAUDE.md`.
 - **Test new behaviour.** Add a test to the suite for the line you change.
 
 ## Branches

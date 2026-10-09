@@ -125,6 +125,67 @@ test('switches drop labels, bars, pace markers and reset times', () => {
   assert.equal(run(data, ['--show', 'ctx,5h,7d', '--no-labels', '--no-bars']), '43% 86.0k │ 9% → 14:00 │ 41% → 3d');
 });
 
+// The colour codes in a render, in order, without the resets.
+const colours = (raw) => (raw.match(/\x1b\[[0-9;]*m/g) ?? []).filter((c) => c !== '\x1b[0m');
+
+test('--theme picks a preset: mono drops every colour, and an unknown theme gives the default', () => {
+  const { THEMES } = require('../dist/statusline.js');
+  assert.deepEqual(THEMES, ['default', 'mono', 'high-contrast', 'pastel']);
+  const raw = (args) => render(bothWindows(), { nowMs: NOW, branchOf: () => 'main', config: parseArgs(args) });
+  assert.deepEqual(colours(raw(['--theme', 'mono'])), []);
+  assert.equal(plain(raw(['--theme', 'mono'])), run(bothWindows()));
+  assert.equal(raw(['--theme', 'neon']), raw([]));
+  assert.equal(raw(['--theme', 'constructor']), raw([]));
+  assert.equal(raw(['--theme=default']), raw([]));
+  // Each preset colours the rows differently, and keeps their text.
+  const looks = THEMES.map((theme) => colours(raw(['--theme', theme])).join(''));
+  assert.equal(new Set(looks).size, THEMES.length);
+  for (const theme of THEMES) assert.equal(plain(raw(['--theme', theme])), run(bothWindows()), theme);
+});
+
+test('--color sets a part to a named, 256-colour or hex colour', () => {
+  const raw = (args) => render(bothWindows(), { nowMs: NOW, branchOf: () => 'main', config: parseArgs(['--show', 'model,branch,dir', ...args]) });
+  assert.deepEqual(colours(raw(['--color', 'model=magenta'])), ['\x1b[0;35m', '\x1b[0;90m', '\x1b[0;32m', '\x1b[0;90m', '\x1b[0;34m']);
+  assert.deepEqual(colours(raw(['--color', 'model=bright-magenta,branch=208', '--color=dir=#ff8800'])), [
+    '\x1b[0;95m',
+    '\x1b[0;90m',
+    '\x1b[38;5;208m',
+    '\x1b[0;90m',
+    '\x1b[38;2;255;136;0m',
+  ]);
+  // Short hex, grey or gray, and any case.
+  assert.equal(colours(raw(['--color', 'model=#F80']))[0], '\x1b[38;2;255;136;0m');
+  assert.equal(colours(raw(['--color', 'model=Grey']))[0], colours(raw(['--color', 'model=gray']))[0]);
+  // Unknown parts and colours, and colours that are not one, change nothing.
+  for (const bad of ['weather=red', 'model=pink', 'model=256', 'model=#ff88', 'model=', 'model', 'model=1;31', 'model=\x1b[31m', 'constructor=red']) {
+    assert.equal(raw(['--color', bad]), raw([]), bad);
+  }
+  // On top of a theme, the override wins for its part only.
+  assert.deepEqual(colours(raw(['--theme', 'mono', '--color', 'branch=red'])), ['\x1b[0;31m']);
+});
+
+test('--color colours the whole part, and the pace marker keeps its own colour', () => {
+  const data = payload({ five_hour: { used_percentage: 62, resets_at: at(NOW + 2 * HOUR) } });
+  data.cost = { total_lines_added: 156, total_lines_removed: 23 };
+  const raw = render(data, { nowMs: NOW, config: parseArgs(['--show', '5h,ctx,lines', '--color', '5h=blue,ctx=blue,lines=blue']) });
+  // 62% three-fifths through the window projects 103%: the critical red.
+  assert.deepEqual([...new Set(colours(raw))], ['\x1b[0;34m', '\x1b[38;5;160m', '\x1b[0;90m']);
+  assert.equal(plain(raw), '5h 62% ▓▓▓┃░ → 14:00 │ ctx 43% ▓▓░░░ 86.0k │ +156 −23');
+});
+
+test('--bar-filled and --bar-empty change the bar characters', () => {
+  const data = payload({ five_hour: { used_percentage: 62, resets_at: at(NOW + 2 * HOUR) } });
+  const show = ['--show', 'ctx,5h', '--no-reset'];
+  assert.equal(run(data, [...show, '--bar-filled', '█', '--bar-empty=·']), 'ctx 43% ██··· 86.0k │ 5h 62% ███┃·');
+  assert.equal(run(data, [...show, '--bar-empty', '-']), 'ctx 43% ▓▓--- 86.0k │ 5h 62% ▓▓▓┃-');
+  // A character outside the Basic Multilingual Plane is one cell, too.
+  assert.equal(run(data, [...show, '--bar-filled', '🟩', '--bar-empty', '⬜', '--segments', '10']), 'ctx 43% 🟩🟩🟩🟩⬜⬜⬜⬜⬜⬜ 86.0k │ 5h 62% 🟩🟩🟩🟩🟩🟩┃⬜⬜⬜');
+  // Anything but one character changes nothing, and neither does a control code.
+  for (const bad of ['', '##', '\x1b', '\x1b[31m#', '‮']) {
+    assert.equal(run(data, [...show, '--bar-filled', bad, '--bar-empty', bad]), run(data, show), JSON.stringify(bad));
+  }
+});
+
 test('time shows the current local time, on the 24-hour clock unless --12h', () => {
   assert.equal(run({}, ['--show', 'time']), '12:00');
   assert.equal(run({}, ['--show', 'time', '--12h']), '12:00 pm');
