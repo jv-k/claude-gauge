@@ -53,8 +53,12 @@ jobs:
       # the built lines with process.execPath, so those run under Bun too.
       # Bun stops a test after 5 seconds and Node's runner never does, so the
       # timeout is raised for the suites that spawn many commands on Windows.
+      # REQUIRE_BUN=1 makes the parity suite fail its Bun cases where bun is
+      # missing, so a failed Bun install cannot pass as a skip.
       - name: Run the suite under Bun
         if: matrix.runtime == 'bun'
+        env:
+          REQUIRE_BUN: '1'
         run: bun test --timeout 60000 ./test/
 
   typecheck:

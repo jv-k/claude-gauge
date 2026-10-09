@@ -2,6 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { execFileSync, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { summarize, parseArgs, parseSize, contextWindow } = require('../dist/tokenline.js');
 
 const NOW = new Date(2026, 9, 7, 12, 5);
@@ -114,4 +118,71 @@ test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () =>
   assert.equal(run('cli'), '');
   // A Windows path holds a backslash, so the script comes in quotes there.
   assert.match(run('claude-vscode'), /^## Token line in replies\n[\s\S]*tokenline\.js'? --latest\n/);
+});
+
+// --latest as a program: a home folder and a config folder of the test's own,
+// each holding a transcript only where the test writes one.
+const made = [];
+test.after(() => {
+  for (const dir of made) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+const tempFolder = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+  made.push(dir);
+  return dir;
+};
+
+// Both runs name the same session, as Claude Code exports it to the commands
+// it runs.
+const SESSION = 'session-1';
+
+// Writes a transcript of one request to <folder>/projects/<project>/<session>.jsonl.
+const writeTranscript = (folder) => {
+  const dir = path.join(folder, 'projects', '-some-project');
+  fs.mkdirSync(dir, { recursive: true });
+  const records = [prompt('go'), assistant('m1', usage(100, 6000, 100000))];
+  fs.writeFileSync(path.join(dir, `${SESSION}.jsonl`), records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+};
+
+// Runs --latest on the build under Node, or on the source under Bun, with
+// CLAUDE_CONFIG_DIR set to config, or unset when config is undefined.
+const latestRun = (runtime, { config, home }) => {
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CODE_SESSION_ID: SESSION };
+  if (config === undefined) delete env.CLAUDE_CONFIG_DIR;
+  else env.CLAUDE_CONFIG_DIR = config;
+  const [command, script] =
+    runtime === 'bun' ? ['bun', path.join(__dirname, '..', 'src', 'tokenline.ts')] : [process.execPath, path.join(__dirname, '..', 'dist', 'tokenline.js')];
+  return execFileSync(command, [script, '--latest', '--show', 'req,ctx'], { env, encoding: 'utf8' });
+};
+
+const LINE = '1 req │ ctx 53% ▓▓▓░░ 106k\n';
+
+test('--latest reads the transcript under CLAUDE_CONFIG_DIR when it is set', () => {
+  const [home, config] = [tempFolder(), tempFolder()];
+  writeTranscript(config);
+  assert.equal(latestRun('node', { config, home }), LINE);
+});
+
+test('--latest reads ~/.claude/projects when CLAUDE_CONFIG_DIR is unset or empty, and only then', () => {
+  const home = tempFolder();
+  writeTranscript(path.join(home, '.claude'));
+  assert.equal(latestRun('node', { config: undefined, home }), LINE);
+  assert.equal(latestRun('node', { config: '', home }), LINE);
+  // A config folder without the transcript: the one in the home folder is not read.
+  assert.equal(latestRun('node', { config: tempFolder(), home }), '');
+});
+
+// The token line runs under Bun too, from its source. The check skips where
+// Bun is not installed, as the parity suite's do.
+const hasBun = spawnSync('bun', ['--version'], { encoding: 'utf8' }).status === 0;
+const withoutBun = !hasBun && 'bun is not installed';
+
+test('bun runs --latest from source and finds the same transcripts', { skip: withoutBun }, () => {
+  const [home, config] = [tempFolder(), tempFolder()];
+  writeTranscript(config);
+  assert.equal(latestRun('bun', { config, home }), LINE);
+  const otherHome = tempFolder();
+  writeTranscript(path.join(otherHome, '.claude'));
+  assert.equal(latestRun('bun', { config: undefined, home: otherHome }), LINE);
 });
