@@ -94,7 +94,7 @@ Tell the user, in a few lines:
 
 ## The npm route
 
-The `claude-gauge` command from npm does the fetch and the settings merge itself. It copies the scripts into `~/.claude/claude-gauge/runtime/` and backs up `~/.claude/settings.json` before it changes it.
+The `claude-gauge` command from npm does the fetch and the settings merge itself. It copies the scripts into `~/.claude/claude-gauge/runtime/` (under `$CLAUDE_CONFIG_DIR` when that is set) and backs up `~/.claude/settings.json` before it changes it.
 
 1. **Check the prerequisites.** Run `node --version` and `npm --version`. Done when Node.js is 18 or later and npm is present. If not, stop and tell the user claude-gauge needs Node.js 18 or later, with npm.
 2. **Learn the switches.** Read the **Options** section of the README, at `https://raw.githubusercontent.com/jv-k/claude-gauge/main/README.md`. Done when you can name the parts `--show` accepts for each line.
@@ -107,4 +107,4 @@ The `claude-gauge` command from npm does the fetch and the settings merge itself
 
    Give `""` for a bar with no switches, and `--no-token-line` or `--no-status-line` in place of a bar the user does not want. If setup stops because the settings run another status line, show that command to the user, and run again with `--replace` only with their consent. Setup saves the status line it replaces, and `npx claude-gauge uninstall` puts it back. Done when setup prints the commands it set up.
 5. **Add the SessionStart hooks (if chosen),** as in step 7, with commands that name `~/.claude/claude-gauge/runtime/` in place of `~/.claude/claude-gauge/dist/`. Done when settings.json holds one SessionStart entry per chosen bar, or the user has the JSON to merge.
-6. **Report,** as in step 8, with the backup path that setup printed. The update command is `npx claude-gauge@latest update`, which keeps the user's switches.
+6. **Report,** as in step 8, with the backup path if setup printed one. It makes no backup when there was no settings file. The update command is `npx claude-gauge@latest update`, which keeps the user's switches.

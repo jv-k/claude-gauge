@@ -4,7 +4,7 @@
 
 Two small bars for [Claude Code](https://code.claude.com) that show how much room you have left: in the context window, in your 5-hour usage window, and in your weekly limit.
 
-Install it as a Claude Code plugin or from npm (see [Install](#install)). Coming from claude-hud? See [Coming from claude-hud](#coming-from-claude-hud).
+Install it as a Claude Code plugin or from npm (see [Install](#install)). To switch from claude-hud, see [Coming from claude-hud](#coming-from-claude-hud).
 
 **Status line**, shown under the prompt in the terminal, in two rows by default:
 
@@ -27,7 +27,7 @@ Both are TypeScript modules built to single Node.js files with no dependencies, 
 
 The terminal CLI shows both bars by itself. In the VS Code extension and the desktop app, Claude can paste them into its replies instead (see [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app)).
 
-Setup asks which bars and parts you want, and redraws the status line after each answer:
+Setup shows the status line with the defaults, and redraws it after each answer as you choose the rows, parts, bar size and theme:
 
 ![claude-gauge setup in a terminal: it shows the default rows, then redraws them as the answers change the second row, the bar size and the theme, and writes the choices to the settings](docs/media/demo.gif)
 
@@ -220,9 +220,9 @@ In a terminal, run setup with npx:
 npx claude-gauge setup
 ```
 
-Setup asks which bars you want, and whether to keep the defaults or choose the rows, bar size, theme and labels. It redraws the status line after each answer, from your last terminal session's figures or from a sample. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is no.
+Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, and then whether to add the token line. It redraws the status line after each answer, from your last terminal session's figures or from a sample. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is no.
 
-Setup copies the two scripts into `~/.claude/claude-gauge/runtime/` and points the settings there, so the bars keep working when npm clears its npx cache. To keep the `claude-gauge` command at hand instead of running it through npx, install it globally with `npm install -g claude-gauge`.
+Setup copies the two scripts into `~/.claude/claude-gauge/runtime/` (under `$CLAUDE_CONFIG_DIR` when that is set) and points the settings there, so the bars keep working when npm clears its npx cache. To keep the `claude-gauge` command at hand instead of running it through npx, install it globally with `npm install -g claude-gauge`.
 
 The `claude-gauge` command has four commands:
 
@@ -536,7 +536,7 @@ rm -rf ~/.claude/claude-gauge
 
 claude-gauge has parts for claude-hud's main options, listed in the table below. It also has an npm route, a token line for each turn, theme presets, and an uninstall that puts your old status line back.
 
-Switch in one step. Install the plugin as in [As a Claude Code plugin](#as-a-claude-code-plugin), then run its setup:
+One setup command makes the switch. Install the plugin as in [As a Claude Code plugin](#as-a-claude-code-plugin), then run its setup:
 
 ```text
 /claude-gauge:setup
@@ -564,7 +564,7 @@ Setup does not read claude-hud's `config.json`. claude-gauge has no configuratio
 | `display.showUsage`, `display.usageBarEnabled` | `5h` and `7d`. `--no-bars` drops the bars. |
 | `display.usagePace` | The pace marker `┃` on the `5h` and `7d` bars, on by default. `--no-pace` drops it. |
 | `display.showModelScopedUsage` | `models`, and `limit` for a window at 100%. |
-| `display.timeFormat`, `display.showResetLabel` | `5h` shows its reset as a time and `7d` as days. `--no-reset` drops the resets. |
+| `display.timeFormat` | `5h` always shows its reset as a time, and `7d` as days, after `→`. `--no-reset` drops the resets. |
 | `display.hourCycle` | `--12h` for the 12-hour clock. The default is 24-hour. |
 | `gitStatus.enabled`, `gitStatus.showDirty`, `gitStatus.showAheadBehind` | `branch`, which always shows `*` for changes and `↑n ↓n` against its upstream. |
 | `gitStatus.showFileStats` | `git`: `!2 +1 ✘1 ?3` |
@@ -593,7 +593,7 @@ Setup does not read claude-hud's `config.json`. claude-gauge has no configuratio
 | `colors.barFilled`, `colors.barEmpty` | `--bar-filled <char>`, `--bar-empty <char>` |
 | `refreshInterval` in `settings.json` | The same, next to claude-gauge's command. See [Keeping time-based parts fresh](#keeping-time-based-parts-fresh). |
 
-These claude-hud options have no claude-gauge equivalent: `language`, `jjStatus.*`, `display.showAddedDirs`, `display.modelOverride`, `display.showAdvisor`, the thresholds that hide a part until it reaches a value (`display.usageThreshold`, `display.sevenDayThreshold`, `display.environmentThreshold`), and the external usage files (`display.externalUsagePath`, `display.externalUsageWritePath`). claude-gauge's parts show whenever a `--show` names them and they have something to report.
+Among claude-hud's other options, these have no claude-gauge equivalent: `language`, `jjStatus.*`, `display.showAddedDirs`, `display.modelOverride`, `display.modelFormat`, `display.effortFormat`, `display.usageValue`, `display.showResetLabel`, `display.showSessionTokens`, `display.showAdvisor`, the thresholds that hide a part until it reaches a value (`display.usageThreshold`, `display.sevenDayThreshold`, `display.environmentThreshold`), and the external usage files (`display.externalUsagePath`, `display.externalUsageWritePath`). claude-gauge's parts show whenever a `--show` names them and they have something to report.
 
 ## Development
 
