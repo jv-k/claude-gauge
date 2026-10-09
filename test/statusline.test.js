@@ -375,8 +375,8 @@ test('dir and repo link to the folder Claude Code runs in, as a file URL on this
 const tracking = (branch, upstream) => `# branch.head ${branch}\n# branch.upstream ${upstream}\n# branch.ab +0 -0\n`;
 
 test('branch links to its page on GitHub or GitLab, by the name it has on origin', () => {
-  const at = (host, owner, name) => ({ workspace: { current_dir: '/home/me/project', repo: { host, owner, name } } });
-  const github = at('github.com', 'jv-k', 'claude-gauge');
+  const repoAt = (host, owner, name) => ({ workspace: { current_dir: '/home/me/project', repo: { host, owner, name } } });
+  const github = repoAt('github.com', 'jv-k', 'claude-gauge');
   assert.deepEqual(linksIn(linked(github, ['--show', 'branch'], tracking('feat/links', 'origin/feat/links'))), [
     ['https://github.com/jv-k/claude-gauge/tree/feat/links', '⎇ feat/links'],
   ]);
@@ -384,20 +384,20 @@ test('branch links to its page on GitHub or GitLab, by the name it has on origin
   assert.deepEqual(linksIn(linked(github, ['--show', 'branch'], tracking('mine', 'origin/fix/#12'))), [
     ['https://github.com/jv-k/claude-gauge/tree/fix/%2312', '⎇ mine'],
   ]);
-  assert.deepEqual(linksIn(linked(at('gitlab.com', 'group/sub', 'app'), ['--show', 'branch'], tracking('main', 'origin/main'))), [
+  assert.deepEqual(linksIn(linked(repoAt('gitlab.com', 'group/sub', 'app'), ['--show', 'branch'], tracking('main', 'origin/main'))), [
     ['https://gitlab.com/group/sub/app/-/tree/main', '⎇ main'],
   ]);
 });
 
 test('branch has no link when its page on the remote is not known', () => {
-  const at = (host) => ({ workspace: { current_dir: '/home/me/project', repo: { host, owner: 'jv-k', name: 'claude-gauge' } } });
-  const github = at('github.com');
+  const repoAt = (host) => ({ workspace: { current_dir: '/home/me/project', repo: { host, owner: 'jv-k', name: 'claude-gauge' } } });
+  const github = repoAt('github.com');
   // No upstream, so the branch may not be on the remote at all.
   assert.deepEqual(linksIn(linked(github, ['--show', 'branch'], onMain())), []);
   // The upstream is on a remote other than origin, which the repo names.
   assert.deepEqual(linksIn(linked(github, ['--show', 'branch'], tracking('main', 'fork/main'))), []);
   // A host that is not GitHub or GitLab, whose page addresses are unknown.
-  assert.deepEqual(linksIn(linked(at('git.example.com'), ['--show', 'branch'], tracking('main', 'origin/main'))), []);
+  assert.deepEqual(linksIn(linked(repoAt('git.example.com'), ['--show', 'branch'], tracking('main', 'origin/main'))), []);
   // No origin remote.
   assert.deepEqual(linksIn(linked({ workspace: { current_dir: '/home/me/project' } }, ['--show', 'branch'], tracking('main', 'origin/main'))), []);
   // git gave no status in time, so only the branch's name is known.
@@ -804,8 +804,8 @@ const OWN_LINKS = /\x1b\]8;;[\x21-\x7e]*\x07/g;
 
 // Renders the parts with the given payload, branch, setup and switches, and
 // checks that the only control codes left are claude-gauge's own colours and
-// links. The
-// branch comes from git's fallback read, unless options give a statusOf.
+// links. The branch comes from git's fallback read, unless options give a
+// statusOf.
 const renderClean = (data, show, branch = 'main', setup = NOTHING_LOADED, args = [], options = {}) => {
   const raw = render(data, {
     nowMs: NOW,

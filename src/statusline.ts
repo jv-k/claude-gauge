@@ -114,7 +114,7 @@ const partRegistry = {
     description: 'owner/name from the origin remote, else the folder name',
     row: 1,
     build: ({ data, theme, folder }) => repoPart(data, theme, folder),
-    link: ({ cwd, hostname }) => folderUrl(cwd, hostname),
+    link: folderUrl,
   },
   branch: {
     description: 'current git branch, dirty marker, ahead and behind, and the linked worktree',
@@ -124,7 +124,7 @@ const partRegistry = {
   },
   model: { description: 'model name, and the API provider when not first-party', row: 1, build: ({ data, theme, processEnv }) => modelPart(data, theme, processEnv) },
   effort: { description: 'reasoning effort', row: 1, build: ({ data, config, theme }) => effortPart(data, config, theme) },
-  dir: { description: 'folder Claude Code runs in', build: ({ theme, folder }) => `${theme.info}${folder}${RESET}`, link: ({ cwd, hostname }) => folderUrl(cwd, hostname) },
+  dir: { description: 'folder Claude Code runs in', build: ({ theme, folder }) => `${theme.info}${folder}${RESET}`, link: folderUrl },
   cost: { description: 'estimated session cost', build: ({ data, theme }) => costPart(data, theme) },
   lines: { description: 'lines added and removed this session', build: ({ data, theme }) => linesPart(data, theme) },
   name: { description: 'session name or title', build: ({ data, theme }) => namePart(data, theme) },
@@ -958,9 +958,10 @@ function repoPart(data: StatusData, theme: Theme, folder: string): string {
   return `${theme.muted}${shown}${RESET}`;
 }
 
-// The folder as a file URL that names its machine, as the OSC 8 spec asks,
-// so a terminal can tell a folder on a remote machine from a local one.
-function folderUrl(cwd: string, hostname: string): string | undefined {
+// The folder Claude Code runs in as a file URL that names its machine, as
+// the OSC 8 spec asks, so a terminal can tell a folder on a remote machine
+// from a local one. dir and repo both link to it.
+function folderUrl({ cwd, hostname }: PartContext): string | undefined {
   try {
     return `file://${hostname}${pathToFileURL(cwd).pathname}`;
   } catch {
@@ -983,12 +984,15 @@ const BRANCH_PAGES: Record<string, string> = { 'github.com': '/tree/', 'gitlab.c
 function branchUrl(repo: NonNullable<StatusData['workspace']>['repo'], upstream: string): string | undefined {
   const { host, owner, name } = repo ?? {};
   if (typeof host !== 'string' || typeof owner !== 'string' || typeof name !== 'string' || !owner || !name) return undefined;
-  const page = ownValue(BRANCH_PAGES, host.toLowerCase());
+  const forge = host.toLowerCase();
+  const page = ownValue(BRANCH_PAGES, forge);
   const branch = /^origin\/(.+)$/.exec(upstream)?.[1];
   if (!page || !branch) return undefined;
+  // Each name between slashes percent-encoded, the slashes kept: a GitLab
+  // group and a branch name may both hold them.
   const encoded = (text: string) => text.split('/').map(encodeURIComponent).join('/');
   try {
-    return `https://${host.toLowerCase()}/${encoded(owner)}/${encoded(name)}${page}${encoded(branch)}`;
+    return `https://${forge}/${encoded(owner)}/${encoded(name)}${page}${encoded(branch)}`;
   } catch {
     return undefined; // text that is not valid UTF-16
   }
