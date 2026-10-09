@@ -162,6 +162,15 @@ test('models shows each per-model window in key order, and skips one with no per
   );
 });
 
+test('models reads a model name with dots and hyphens, and skips a key with anything else', () => {
+  const data = payload({
+    'seven_day_opus-4.5': { used_percentage: 41.2, resets_at: at(NOW + 3 * DAY) },
+    'seven_day_so nnet': { used_percentage: 62, resets_at: at(NOW + 3 * DAY) },
+    'seven_day_': { used_percentage: 62, resets_at: at(NOW + 3 * DAY) },
+  });
+  assert.equal(run(data, ['--show', 'models']), '7d Opus-4.5 41% ▓▓░┃░ → 3d');
+});
+
 test('models drops out when Claude Code sends no per-model window', () => {
   assert.equal(run(bothWindows(), ['--show', 'models']), '');
   assert.equal(run(payload(undefined), ['--show', 'models,model']), 'Opus');
@@ -195,6 +204,11 @@ test('limit names every exhausted window: 5h, 7d, each model and the spend limit
     spend_limit: { used_percentage: 100 },
   });
   assert.equal(run(data, ['--show', 'limit']), 'limit reached: 5h → 14:00, 7d → 3d, 7d Opus → 23:30, spend');
+  // The notice names each window in full, labels or not.
+  assert.equal(run(data, ['--show', 'limit', '--no-labels', '--no-reset']), 'limit reached: 5h, 7d, 7d Opus, spend');
+  // A spend reset, when Claude Code sends one, shows as the weekly resets do.
+  data.rate_limits = { spend_limit: { used_percentage: 100, resets_at: at(NOW + 3 * DAY) } };
+  assert.equal(run(data, ['--show', 'limit']), 'limit reached: spend → 3d');
 });
 
 test('time shows the current local time, on the 24-hour clock unless --12h', () => {

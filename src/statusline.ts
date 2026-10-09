@@ -250,6 +250,9 @@ const COMPACT_LABELS: Record<string, string> = { ctx: 'c', effort: 'eff', style:
 const labelOf = (config: Config, name: string) =>
   config.labels ? `${config.compact ? (COMPACT_LABELS[name] ?? name) : name} ` : '';
 
+// The separator between a row's segments.
+const separatorOf = (config: Config) => `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
+
 // Ten usage levels: dark green at 0-10%, deep red above 90%.
 const LEVELS = [22, 28, 34, 100, 142, 178, 172, 166, 160, 124].map(ansi256);
 const levelColor = (pct: number) => LEVELS[Math.min(9, Math.max(0, Math.ceil(pct / 10) - 1))];
@@ -264,12 +267,14 @@ const paceColor = (projected: number) =>
   : projected < 120 ? ansi256(160) // critical
   : ansi256(135); // runaway
 
+// A reset as a window shows it: a time of day, or days away.
+type ResetText = (epochSeconds: number, config: Config, nowMs: number) => string;
+
 interface UsageWindow {
   key: 'five_hour' | 'seven_day';
   seconds: number;
   minElapsed: number;
-  // The reset as the window shows it: a time of day, or days away.
-  resetText: (epochSeconds: number, config: Config, nowMs: number) => string;
+  resetText: ResetText;
 }
 
 const WINDOWS: Record<'5h' | '7d', UsageWindow> = {
@@ -286,6 +291,9 @@ interface RateLimit {
   used_usd?: number | null;
   limit_usd?: number | null;
 }
+
+// A window Claude Code has reported a percentage for.
+type ReportedLimit = RateLimit & { used_percentage: number };
 
 interface StatusData {
   cwd?: string;
@@ -337,6 +345,9 @@ const fmt = (n: number) =>
   : n >= 1e5 ? `${Math.round(n / 1e3)}k`
   : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k`
   : String(n);
+
+// A word with its first letter in capitals: opus → Opus.
+const capitalised = (word: string) => word[0].toUpperCase() + word.slice(1);
 
 // Bars come in 5 or 10 cells; anything else falls back to 5.
 const segmentsOf = (value: number | string | undefined) => (Number(value) === 10 ? 10 : 5);
@@ -410,36 +421,31 @@ function windowPart(name: '5h' | '7d', data: StatusData, config: Config, nowMs: 
   const label = labelOf(config, name);
   const limit = data.rate_limits?.[window.key];
   if (limit?.used_percentage == null) return `${YELLOW}${label}~${RESET}`;
-  return usageSegment(label, limit.used_percentage, limit.resets_at, window, config, nowMs);
+  return usageSegment(label, { ...limit, used_percentage: limit.used_percentage }, window, config, nowMs);
 }
 
 // A reported window's percentage, bar and reset, behind its label.
-function usageSegment(
-  label: string,
-  usedPercentage: number,
-  resetsAt: number | undefined,
-  window: UsageWindow,
-  config: Config,
-  nowMs: number,
-): string {
-  const pct = Math.round(usedPercentage);
+function usageSegment(label: string, limit: ReportedLimit, window: UsageWindow, config: Config, nowMs: number): string {
+  const pct = Math.round(limit.used_percentage);
   const color = levelColor(pct);
-  const bar = config.bars ? usageBar(pct, color, window, resetsAt, config, nowMs) : '';
-  const reset = config.reset && resetsAt ? ` → ${window.resetText(resetsAt, config, nowMs)}` : '';
+  const bar = config.bars ? usageBar(pct, color, window, limit.resets_at, config, nowMs) : '';
+  const reset = config.reset && limit.resets_at ? ` → ${window.resetText(limit.resets_at, config, nowMs)}` : '';
   return `${color}${label}${pct}%${bar}${reset}${RESET}`;
 }
 
 // The per-model weekly windows Claude Code reports, as seven_day_<model>
-// keys, in key order: the model's name and the window. A name is letters,
-// digits and underscores only, since keys reach the row unsanitised.
-function modelWindows(data: StatusData): { name: string; limit: RateLimit & { used_percentage: number } }[] {
+// keys, sorted by key: the model's name and the window. Keys reach the row
+// unsanitised, so a name is letters, digits, underscores, dots and hyphens
+// only, and a key with anything else stays out. Underscores read as spaces:
+// seven_day_opus is Opus, seven_day_oauth_apps is Oauth Apps.
+function modelWindows(data: StatusData): { name: string; limit: ReportedLimit }[] {
   return Object.entries(data.rate_limits ?? {})
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .flatMap(([key, limit]) => {
-      const model = /^seven_day_([a-z0-9]+(?:_[a-z0-9]+)*)$/i.exec(key)?.[1];
+      const model = /^seven_day_([a-z0-9][\w.-]*)$/i.exec(key)?.[1];
       const used = limit?.used_percentage;
       if (!model || used == null) return [];
-      const name = model.split('_').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+      const name = model.split('_').filter(Boolean).map(capitalised).join(' ');
       return [{ name, limit: { ...limit, used_percentage: used } }];
     });
 }
@@ -450,7 +456,7 @@ function modelWindows(data: StatusData): { name: string; limit: RateLimit & { us
 function modelsPart(data: StatusData, config: Config, nowMs: number): string {
   return modelWindows(data)
     .map(({ name, limit }) =>
-      usageSegment(`${labelOf(config, '7d')}${name} `, limit.used_percentage, limit.resets_at, WINDOWS['7d'], config, nowMs),
+      usageSegment(`${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], config, nowMs),
     )
     .join(separatorOf(config));
 }
@@ -666,27 +672,26 @@ function planPart({ plan, user }: Setup): string {
   return shown ? `${GRAY}${shown}${RESET}` : '';
 }
 
-// The limit part: every window at 100% or more, by the name its part shows
-// it under, with its reset as that part shows it. The spend limit's reset,
-// when Claude Code sends one, shows as the week's does.
+// The limit part: every window at 100% or more, by its full name (5h, 7d,
+// 7d Opus, spend) with or without --no-labels, since a notice that names no
+// window says nothing. A reset shows as its window's part shows it. The
+// spend part shows none, so a spend reset, when Claude Code sends one, shows
+// as days or a time of day, as the weekly resets do.
 function limitPart(data: StatusData, config: Config, nowMs: number): string {
   const limits = data.rate_limits ?? {};
-  const windows: [string, RateLimit | null | undefined, UsageWindow][] = [
-    ['5h', limits.five_hour, WINDOWS['5h']],
-    ['7d', limits.seven_day, WINDOWS['7d']],
-    ...modelWindows(data).map(({ name, limit }): [string, RateLimit, UsageWindow] => [`7d ${name}`, limit, WINDOWS['7d']]),
-    ['spend', limits.spend_limit, WINDOWS['7d']],
+  const windows: [string, RateLimit | null | undefined, ResetText][] = [
+    ['5h', limits.five_hour, WINDOWS['5h'].resetText],
+    ['7d', limits.seven_day, WINDOWS['7d'].resetText],
+    ...modelWindows(data).map(({ name, limit }): [string, RateLimit, ResetText] => [`7d ${name}`, limit, WINDOWS['7d'].resetText]),
+    ['spend', limits.spend_limit, formatDaysOrTime],
   ];
   const reached = windows
     .filter(([, limit]) => (limit?.used_percentage ?? 0) >= 100)
-    .map(([name, limit, window]) =>
-      config.reset && limit?.resets_at ? `${name} → ${window.resetText(limit.resets_at, config, nowMs)}` : name,
+    .map(([name, limit, resetText]) =>
+      config.reset && limit?.resets_at ? `${name} → ${resetText(limit.resets_at, config, nowMs)}` : name,
     );
   return reached.length ? `${LEVELS[9]}limit reached: ${reached.join(', ')}${RESET}` : '';
 }
-
-// The separator between a row's segments.
-const separatorOf = (config: Config) => `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
 
 const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
 
@@ -780,7 +785,7 @@ const hooksIn = (settings: JsonObject) =>
 function planName(type: string | undefined, tier: string | undefined): string | undefined {
   if (!type) return undefined;
   const multiple = /_(\d+x)$/.exec(tier ?? '')?.[1];
-  return ['Claude', type[0].toUpperCase() + type.slice(1), multiple].filter(Boolean).join(' ');
+  return ['Claude', capitalised(type), multiple].filter(Boolean).join(' ');
 }
 
 function readSetup(
@@ -991,7 +996,7 @@ function modelName(id: string | undefined): string | undefined {
   const parts = id.replace(/^claude-/, '').split('-').filter((p) => !/^\d{8}$/.test(p));
   const family = parts.shift();
   if (!family) return id;
-  return [family[0].toUpperCase() + family.slice(1), parts.join('.')].filter(Boolean).join(' ');
+  return [capitalised(family), parts.join('.')].filter(Boolean).join(' ');
 }
 
 const SCALES: Record<string, number> = { '': 1, k: 1e3, m: 1e6 };
