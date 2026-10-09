@@ -770,8 +770,10 @@ interface TranscriptState {
   ino: number;
   // The bytes read so far, always up to the end of a whole line.
   offset: number;
-  // The tool calls with no result yet, by call id, oldest first.
-  pending: (ToolCall & { id: string })[];
+  // The tool calls with no result yet, by call id, oldest first. A call
+  // that was running when the user sent a prompt has ended, but its result
+  // may still come, and then counts.
+  pending: (ToolCall & { id: string; ended?: boolean })[];
   completed: Record<string, number>;
 }
 
@@ -780,7 +782,7 @@ interface TranscriptState {
 const PENDING_KEPT = 20;
 
 // The fs calls the reader makes, so a test can count the bytes it reads.
-type TranscriptFs = Pick<typeof fs, 'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync'>;
+type TranscriptFs = Pick<typeof fs, 'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync'>;
 
 interface TranscriptReadOptions {
   stateDir?: string;
@@ -811,13 +813,13 @@ interface ContentBlock {
 
 // One transcript record applied to the state. Subagent records are left out,
 // as they are for --latest. A prompt from the user ends the turn, so a call
-// still marked running then was interrupted.
-function applyRecord(state: TranscriptState, record: TranscriptRecord & { isMeta?: boolean }): void {
+// still running then was interrupted: it no longer shows as running.
+function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   if (!record || typeof record !== 'object' || record.isSidechain) return;
-  const content = (record.message as { content?: unknown } | undefined)?.content;
+  const content = record.message?.content;
   const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
   if (record.type === 'user' && !record.isMeta && !blocks.some((b) => b.type === 'tool_result')) {
-    if (typeof content === 'string' || blocks.length) state.pending = [];
+    if (typeof content === 'string' || blocks.length) state.pending = state.pending.map((p) => ({ ...p, ended: true }));
     return;
   }
   for (const block of blocks) {
@@ -839,23 +841,29 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord & { isMeta
 function readLines(io: TranscriptFs, file: string, offset: number, size: number, apply: (line: string) => void): number {
   const fd = io.openSync(file, 'r');
   try {
-    const chunk = Buffer.alloc(1 << 16);
-    let rest = Buffer.alloc(0);
+    // The bytes read since the last newline, in the chunks they came in, so
+    // a long line is joined once rather than copied again for every chunk.
+    let rest: Buffer[] = [];
+    let restLength = 0;
     let position = offset;
     while (position < size) {
-      const n = io.readSync(fd, chunk, 0, Math.min(chunk.length, size - position), position);
+      const chunk = Buffer.alloc(Math.min(1 << 16, size - position));
+      const n = io.readSync(fd, chunk, 0, chunk.length, position);
       if (n <= 0) break;
       position += n;
-      const data = Buffer.concat([rest, chunk.subarray(0, n)]);
-      const end = data.lastIndexOf(0x0a);
+      const read = chunk.subarray(0, n);
+      const end = read.lastIndexOf(0x0a);
       if (end < 0) {
-        rest = data;
+        rest.push(read);
+        restLength += n;
         continue;
       }
-      for (const line of data.subarray(0, end).toString('utf8').split('\n')) apply(line);
-      rest = data.subarray(end + 1);
+      const lines = Buffer.concat([...rest, read.subarray(0, end)]).toString('utf8');
+      for (const line of lines.split('\n')) apply(line);
+      rest = [read.subarray(end + 1)];
+      restLength = n - end - 1;
     }
-    return position - rest.length;
+    return position - restLength;
   } finally {
     io.closeSync(fd);
   }
@@ -876,17 +884,23 @@ function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptSta
   }
 }
 
-// Best effort, like saveUsage. The state is written whole to a file of its
-// own, then renamed over the old one, so a render running alongside never
-// reads half a state.
+// Best effort, as saveUsage is. Unlike usage.json, which one render writes
+// in place, the state is written whole to a file of its own and renamed over
+// the old one: the status line can render twice at once, and the other
+// render must never read half a state.
 function saveTranscriptState(io: TranscriptFs, stateFile: string, state: TranscriptState): void {
+  const temporary = `${stateFile}.${process.pid}.tmp`;
   try {
     io.mkdirSync(path.dirname(stateFile), { recursive: true });
-    const temporary = `${stateFile}.${process.pid}.tmp`;
     io.writeFileSync(temporary, JSON.stringify(state));
     io.renameSync(temporary, stateFile);
   } catch {
-    /* read-only home or similar: the next render reads from the start */
+    // Read-only home or similar: the next render reads from the start.
+    try {
+      io.rmSync(temporary, { force: true });
+    } catch {
+      /* nothing to remove */
+    }
   }
 }
 
@@ -918,7 +932,8 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
     });
     saveTranscriptState(io, stateFile, state);
   }
-  return { tools: { running: state.pending.map(({ id: _id, ...call }) => call), completed: { ...state.completed } } };
+  const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
+  return { tools: { running, completed: { ...state.completed } } };
 }
 
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
@@ -945,9 +960,12 @@ interface TranscriptRecord {
   cwd?: string;
   timestamp?: string;
   isSidechain?: boolean;
+  // Text Claude Code adds to the conversation, not typed by the user.
+  isMeta?: boolean;
   effort?: string | { level?: string };
   message?: {
     model?: string;
+    content?: unknown;
     usage?: {
       input_tokens?: number;
       cache_creation_input_tokens?: number;
@@ -1106,7 +1124,6 @@ if (isMain) {
     const transcript = latestTranscript(process.cwd());
     const records = transcript ? readRecords(transcript) : [];
     const data = payloadFromTranscript(records, { nowMs, window, usage: loadUsage(nowMs) });
-    if (transcript) data.transcript_path = transcript;
     const cwd = data.workspace?.current_dir;
     if (data.workspace && cwd) Object.assign(data.workspace, gitWorkspace(cwd));
     // Plain text: it is pasted into a reply, where colour codes show as junk.

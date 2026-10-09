@@ -33,8 +33,9 @@ const prompt = (text) => ({ type: 'user', message: { role: 'user', content: text
 const jsonl = (records) => records.map((r) => `${JSON.stringify(r)}\n`).join('');
 
 // Renders the given switches over a payload whose transcript is file, read
-// by reader (the real one by default, with its state in stateDir).
-const renderTools = (file, { args = ['--show', 'tools'], stateDir, reader } = {}) =>
+// by reader (the real one by default, with its state in stateDir, a folder
+// of its own unless one is given, so a test never writes the real one).
+const renderTools = (file, { args = ['--show', 'tools'], stateDir = path.join(tmpDir(), 'state'), reader } = {}) =>
   plain(
     render(
       { workspace: { current_dir: CWD }, transcript_path: file },
@@ -113,6 +114,14 @@ test('a line still being written is read once it is complete', () => {
   assert.deepEqual(readTranscriptActivity(file, { stateDir }).tools, { running: [{ name: 'Grep', target: 'TODO' }], completed: {} });
 });
 
+test('a line longer than one read, with characters split across reads, is read whole', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'session.jsonl');
+  const big = { ...toolResult('a'), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'é✓'.repeat(100_000) }] } };
+  fs.writeFileSync(file, jsonl([toolUse('a', 'Read', { file_path: `${CWD}/big.txt` }), big, toolUse('b', 'Edit', { file_path: `${CWD}/é.ts` })]));
+  assert.equal(renderTools(file), '◐ Edit é.ts ✓ Read ×1');
+});
+
 test('a truncated transcript is read again from the start', () => {
   const dir = tmpDir();
   const stateDir = path.join(dir, 'state');
@@ -159,6 +168,13 @@ test('a new prompt ends the tools still marked running, and subagent records are
     ]),
   );
   assert.equal(renderTools(file, { stateDir: path.join(dir, 'state') }), '◐ WebFetch https://example.com/docs');
+});
+
+test('a result that arrives after a prompt still counts', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'session.jsonl');
+  fs.writeFileSync(file, jsonl([toolUse('a', 'Bash', { command: 'make' }), prompt('<local-command-stdout>done</local-command-stdout>'), toolResult('a')]));
+  assert.equal(renderTools(file), '✓ Bash ×1');
 });
 
 test('tools shows the five most used tools, and long targets cut to 30 characters', () => {
