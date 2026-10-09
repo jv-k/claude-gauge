@@ -118,7 +118,7 @@ If the system figures cannot be read, `ram` uses the free and total memory that 
 
 - **It runs only when you ask twice.** `--command` must name a command, and a `--show` row must name the `command` part. Without both, nothing runs.
 - **It runs as you wrote it.** claude-gauge passes the command to the system shell (`sh` on macOS and Linux, `cmd.exe` on Windows) with your permissions, in the folder Claude Code runs in, with no input. Claude Code renders the status line often, so use a quick command that only reads.
-- **It has 500 ms.** After 500 ms, claude-gauge stops the command and the part shows nothing. A slow or hung command delays the status line by 500 ms at most. A job that the command starts in the background can keep running after that.
+- **It has 500 ms.** After 500 ms, claude-gauge stops the command and the part shows nothing. A slow or hung command delays the status line by 500 ms at most. On macOS and Linux, claude-gauge also stops any job that the command started in the background, when the command ends or runs out of time. On Windows, such a job can keep running.
 - **It shows one clean line.** The part shows the first line of output that has text in it. claude-gauge removes terminal control codes from that line, so the output cannot move the cursor, change colours or set the window title. Error output is discarded.
 - **It fails quietly.** When the command exits with an error, runs out of time, or prints more than 64 KB, the part shows nothing and the other parts show as usual.
 

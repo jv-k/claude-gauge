@@ -411,8 +411,10 @@ test('the memory reading on macOS is app memory, wired and compressed, as Activi
     readMemory({ platform: 'darwin', totalmem: () => 24 * GIB, freemem: () => GIB, run: (cmd, args) => ((ran = [cmd, ...args]), text) });
   assert.deepEqual(read(vmStat), { used: (200000 + 100000 + 50000) * 16384, total: 24 * GIB });
   assert.deepEqual(ran, ['vm_stat']);
-  // Without vm_stat's figures it falls back to Node's.
+  // Without vm_stat's figures, or without its app memory, it falls back to
+  // Node's.
   assert.deepEqual(read(''), { used: 23 * GIB, total: 24 * GIB });
+  assert.deepEqual(read(vmStat.replace(/^Anonymous pages.*$/m, '')), { used: 23 * GIB, total: 24 * GIB });
 });
 
 test('the memory reading on Windows takes the available memory Node reports', () => {
@@ -469,9 +471,9 @@ test('text shows the fixed text --text gives it', () => {
 // shell, colours stripped, and the commands it was asked to run.
 const withCommand = (args, output = 'out') => {
   const ran = [];
-  const runCommand = (command, cwd) => (ran.push([command, cwd]), output);
+  const commandOutputOf = (command, cwd) => (ran.push([command, cwd]), output);
   const data = { model: { display_name: 'Opus' }, workspace: { current_dir: '/home/me/project' } };
-  return { shown: plain(render(data, { config: parseArgs(args), runCommand })), ran };
+  return { shown: plain(render(data, { config: parseArgs(args), commandOutputOf })), ran };
 };
 
 test('command shows the output of the command --command names, run in the folder Claude Code runs in', () => {
@@ -516,11 +518,19 @@ test('the command runner stops a slow command within its timeout and shows nothi
   assert.ok(took >= COMMAND_TIMEOUT_MS && took < COMMAND_TIMEOUT_MS + 1500, `${took}ms`);
 });
 
-test('the command runner stops a command whose background job keeps its output open', { skip: process.platform === 'win32' && 'sh only' }, () => {
+test('the command runner stops a command and its background jobs, which leave nothing running', { skip: process.platform === 'win32' && 'sh only' }, async () => {
   const { runCommand, COMMAND_TIMEOUT_MS } = require('../dist/statusline.js');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'claude-gauge-command-'));
+  // A job that keeps the output open past the timeout, and one that finishes
+  // after a command that exits at once.
   const started = Date.now();
-  assert.equal(runCommand('(sleep 10; echo late) & echo early', require('node:os').tmpdir()), '');
+  assert.equal(runCommand('(sleep 1; echo late > slow) & echo early; sleep 5', dir), '');
   assert.ok(Date.now() - started < COMMAND_TIMEOUT_MS + 1500);
+  assert.equal(runCommand('(sleep 1; echo late > fast) > /dev/null 2>&1 & echo early', dir), 'early');
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.deepEqual(fs.readdirSync(dir), []);
 });
 
 test('version shows the Claude Code version', () => {
@@ -602,13 +612,13 @@ test('hostile custom text from --text prints without its control codes', () => {
 });
 
 test("hostile output from --command's command prints without its control codes", () => {
-  const runCommand = () => `prod-${HOSTILE}eu`;
-  assert.equal(renderClean({}, 'command', 'main', NOTHING_LOADED, ['--command', 'ctx'], { runCommand }), 'prod-eu');
+  const commandOutputOf = () => `prod-${HOSTILE}eu`;
+  assert.equal(renderClean({}, 'command', 'main', NOTHING_LOADED, ['--command', 'ctx'], { commandOutputOf }), 'prod-eu');
   // And from a real command, whose escape codes reach the runner as they are.
   const { runCommand: real } = require('../dist/statusline.js');
   const hostile = real(nodeCommand("process.stdout.write('pro\\u001b]0;pwned\\u0007d\\u001b[2J\\u202eeu')"), require('node:os').tmpdir());
   assert.match(hostile, /\x1b/);
-  assert.equal(renderClean({}, 'command', 'main', NOTHING_LOADED, ['--command', 'ctx'], { runCommand: () => hostile }), 'prodeu');
+  assert.equal(renderClean({}, 'command', 'main', NOTHING_LOADED, ['--command', 'ctx'], { commandOutputOf: () => hostile }), 'prodeu');
 });
 
 test('every part prints hostile payload text without its control codes', () => {
@@ -633,7 +643,7 @@ test('every part prints hostile payload text without its control codes', () => {
   const setup = { claudeMd: 1, rules: 0, mcp: 0, hooks: 0, plan: h('Claude Max 20x'), user: h('me@example.com') };
   // The parts that print text from a switch, and the memory reading.
   const args = ['--text', h('label'), '--command', 'ctx'];
-  const options = { memoryOf: () => ({ used: GIB, total: 2 * GIB }), runCommand: () => h('output') };
+  const options = { memoryOf: () => ({ used: GIB, total: 2 * GIB }), commandOutputOf: () => h('output') };
   for (const part of PARTS) assert.ok(renderClean(data, part, h('main'), setup, args, options), part);
   assert.equal(
     renderClean(data, 'model,effort,style,agent,version,lines,ctx'),

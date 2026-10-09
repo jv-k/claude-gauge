@@ -23,7 +23,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync, spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 
 // What a part's builder reads: the payload, the config, the clock, the
 // folder Claude Code runs in, and the git branch reader. render sanitises the
@@ -100,8 +100,8 @@ const partRegistry = {
   env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
   plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
   ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, memory }) => ramPart(memory(), config) },
-  text: { description: 'fixed text, with --text', build: ({ config }) => textPart(config) },
-  command: { description: 'first line of output of a shell command, with --command', build: ({ commandOutput }) => commandPart(commandOutput()) },
+  text: { description: 'fixed text, with --text', build: ({ config }) => outsideText(config.text) },
+  command: { description: 'first line of output of a shell command, with --command', build: ({ commandOutput }) => outsideText(commandOutput()) },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -363,14 +363,14 @@ const cellsFor = (pct: number, segments: number) => {
   return '▓'.repeat(filled) + '░'.repeat(segments - filled);
 };
 
+// A program's output, with no input and a one-second timeout. Throws when
+// the program fails.
+const runQuietly = (command: string, args: string[], cwd?: string) =>
+  execFileSync(command, args, { cwd, timeout: 1000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+
 function git(cwd: string, args: string[]): string {
   try {
-    return execFileSync('git', args, {
-      cwd,
-      timeout: 1000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    return runQuietly('git', args, cwd).trim();
   } catch {
     return ''; // not a repository, or git is missing
   }
@@ -664,17 +664,11 @@ function ramPart(memory: Memory | undefined, config: Config): string {
   return `${levelColor(Math.round(pct))}${labelOf(config, 'ram')}${Math.round(pct)}%${bar} ${gib(memory.used)}${RESET}`;
 }
 
-// The text from --text. It comes from a switch, not the payload, so render
-// has not sanitised it, and the part does it here.
-function textPart(config: Config): string {
-  const text = sanitise(config.text);
-  return text ? `${GRAY}${text}${RESET}` : '';
-}
-
-// The command's output, as runCommand cut it to one line. It comes from
-// outside claude-gauge, so the part sanitises it.
-function commandPart(output: string): string {
-  const text = sanitise(output);
+// The text and command parts: text from --text or from the command's
+// output. Neither comes through render's sanitised payload, so the part
+// sanitises it here.
+function outsideText(raw: string): string {
+  const text = sanitise(raw);
   return text ? `${GRAY}${text}${RESET}` : '';
 }
 
@@ -864,9 +858,6 @@ const figureAfter = (text: string, name: string): number | undefined => {
   return m ? Number(m[1]) : undefined;
 };
 
-const runQuietly = (command: string, args: string[]) =>
-  execFileSync(command, args, { timeout: 1000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
-
 // Memory in use, or undefined when the total is unknown. Linux counts what
 // is not MemAvailable as used, so the page cache the kernel gives back on
 // demand stays out. macOS counts app memory, wired and compressed pages from
@@ -897,7 +888,7 @@ function readMemory({
   } else if (platform === 'darwin') {
     const vmStat = attempt(() => run('vm_stat', [])) ?? '';
     const pageSize = Number(/page size of (\d+) bytes/.exec(vmStat)?.[1]);
-    const anonymous = figureAfter(vmStat, 'Anonymous pages') ?? figureAfter(vmStat, 'Pages active');
+    const anonymous = figureAfter(vmStat, 'Anonymous pages');
     const wired = figureAfter(vmStat, 'Pages wired down');
     const compressed = figureAfter(vmStat, 'Pages occupied by compressor') ?? 0;
     const purgeable = figureAfter(vmStat, 'Pages purgeable') ?? 0;
@@ -925,20 +916,35 @@ const COMMAND_TIMEOUT_MS = 500;
 const MAX_COMMAND_OUTPUT = 64 * 1024;
 
 function runCommand(command: string, cwd: string): string {
-  try {
-    const output = execSync(command, {
-      cwd,
-      timeout: COMMAND_TIMEOUT_MS,
-      killSignal: 'SIGKILL',
-      maxBuffer: MAX_COMMAND_OUTPUT,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      windowsHide: true,
-    });
-    return output.split(/\r?\n/).find((line) => line.trim())?.trim() ?? '';
-  } catch {
-    return ''; // failed, timed out, too much output, or no such folder
+  // Outside Windows the shell leads a process group of its own, so that
+  // whatever the command starts can be stopped with it.
+  // Node 18 and Bun take detached in spawnSync, though Node's types list it
+  // for spawn only.
+  const grouped = process.platform !== 'win32';
+  const options: SpawnSyncOptionsWithStringEncoding & { detached: boolean } = {
+    shell: true,
+    detached: grouped,
+    cwd,
+    timeout: COMMAND_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    maxBuffer: MAX_COMMAND_OUTPUT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  };
+  const result = spawnSync(command, options);
+  // The timeout kills the shell alone, and a job it put in the background
+  // outlives it, so stop the whole group, finished or not.
+  if (grouped && result.pid) {
+    try {
+      process.kill(-result.pid, 'SIGKILL');
+    } catch {
+      /* the group has exited already */
+    }
   }
+  // Failed, timed out, too much output, or no such folder.
+  if (result.error || result.status !== 0) return '';
+  return result.stdout.split(/\r?\n/).find((line) => line.trim())?.trim() ?? '';
 }
 
 interface RenderOptions {
@@ -948,7 +954,7 @@ interface RenderOptions {
   env?: Env;
   setupOf?: (cwd: string) => Setup;
   memoryOf?: () => Memory | undefined;
-  runCommand?: (command: string, cwd: string) => string;
+  commandOutputOf?: (command: string, cwd: string) => string;
   // The terminal's width in columns, when it is known.
   columns?: number;
 }
@@ -1007,7 +1013,7 @@ function render(
     env = process.env,
     setupOf,
     memoryOf = readMemory,
-    runCommand: run = runCommand,
+    commandOutputOf = runCommand,
     columns,
   }: RenderOptions = {},
 ): string {
@@ -1036,7 +1042,7 @@ function render(
     },
     memory: () => (memory ??= { reading: memoryOf() }).reading,
     // Nothing runs without a command, and a command runs once per render.
-    commandOutput: () => (commandOutput ??= config.command ? run(config.command, cwd) : ''),
+    commandOutput: () => (commandOutput ??= config.command ? commandOutputOf(config.command, cwd) : ''),
   };
 
   const separator = `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
