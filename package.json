@@ -6,6 +6,9 @@
   "author": "John Valai",
   "repository": "github:jv-k/claude-gauge",
   "private": true,
+  "bin": {
+    "claude-gauge": "dist/cli.js"
+  },
   "packageManager": "pnpm@10.27.0",
   "engines": {
     "node": ">=18"

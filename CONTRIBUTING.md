@@ -29,8 +29,11 @@ pnpm test
 | --- | --- |
 | `src/statusline.ts` | The status line. |
 | `src/tokenline.ts` | The token line. |
-| `dist/` | The two built files that users' settings run. `pnpm build` writes them. The `dist` workflow commits them to `main`. |
-| `test/` | The suites, one per line; the parity suite, which checks the README examples against the build; and the README sync suite, which checks the README's status line tables against the registry. |
+| `src/cli.ts` | The `claude-gauge` command: `setup`, `configure`, `uninstall` and `update`. |
+| `src/settings.ts` | `plan()`, which works out the next `settings.json` from the current one and the user's choices, without reading or writing a file. |
+| `src/settings-file.ts` | Reads `settings.json`, and writes it atomically, through a symlink, after a timestamped backup. |
+| `dist/` | The built files: the two scripts that users' settings run, and the `claude-gauge` command. `pnpm build` writes them. The `dist` workflow commits them to `main`. |
+| `test/` | The suites, one per line, and one each for `plan()` and the `claude-gauge` command; the parity suite, which checks the README examples against the build; and the README sync suite, which checks the README's status line tables against the registry. |
 | `README.md` | The user docs: every part and every switch. |
 | `INSTALL-WITH-CLAUDE.md` | The steps Claude follows when a user asks it to install claude-gauge. |
 | `docs/agents/` | How agent skills use the issue tracker, the triage labels and the domain docs. |
