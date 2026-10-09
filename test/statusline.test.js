@@ -225,6 +225,114 @@ test('version shows the Claude Code version', () => {
   assert.equal(run({ version: '2.1.90' }, ['--show', 'version']), 'v2.1.90');
 });
 
+// Text that tries to take over the terminal: clear the screen, move the
+// cursor, set the window title, open a hyperlink, ring the bell, back over
+// what came before, and reverse the text, in 7-bit and 8-bit forms.
+const HOSTILE = [
+  '\x1b[2J\x1b[H', // CSI: erase the screen, cursor home
+  '\x1b[1;31m\x1b[38;2;255;0;0m', // CSI: colours
+  '\x1b]0;pwned\x07', // OSC: window title, BEL-terminated
+  '\x1b]8;;https://evil.example\x1b\\', // OSC 8: hyperlink, ST-terminated
+  '\x1b]52;c;cHduZWQ=\x07', // OSC 52: write the clipboard
+  '\x1bP1$r\x1b\\', // DCS string
+  '\x1b_payload\x1b\\', // APC string
+  '\x1b(0', // character set switch
+  '\x9b31m', // 8-bit CSI
+  '\x9d0;pwned\x9c', // 8-bit OSC and ST
+  '\x07\b\r\n\t\x7f\x85', // C0, DEL and C1 characters
+  '\u202e\u2066\u200f', // bidi override, isolate and mark
+].join('');
+
+// Every terminal control character that may reach the terminal: C0, DEL, C1
+// and the bidi formatting characters.
+const CONTROL = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+
+// claude-gauge's own colour codes: reset, the 16 colours it names, and the
+// 256-colour levels. HOSTILE's colours are none of these.
+const OWN_COLOURS = /\x1b\[(?:0|0;3\d|0;90|38;5;\d{1,3})m/g;
+
+// Renders the parts with the given payload and branch, and checks that the
+// only control codes left are claude-gauge's own colours.
+const renderClean = (data, show, branch = 'main') => {
+  const raw = render(data, { nowMs: NOW, branchOf: () => branch, config: parseArgs(['--show', show]) });
+  assert.doesNotMatch(raw.replace(OWN_COLOURS, ''), CONTROL, JSON.stringify(raw));
+  return plain(raw);
+};
+
+test('a hostile session name prints without its control codes', () => {
+  assert.equal(renderClean({ session_name: `fix ${HOSTILE}the bug` }, 'name'), 'fix the bug');
+  // Cut to 30 characters after the codes are gone, not before.
+  assert.equal(renderClean({ session_name: `${HOSTILE}a session title of exactly thirty` }, 'name'), 'a session title of exactly th…');
+  // An OSC with no terminator runs to the end, as a terminal reads it.
+  assert.equal(renderClean({ session_name: 'title\x1b]0;pwned' }, 'name'), 'title');
+});
+
+test('a hostile branch from git, and a hostile worktree name, print without their control codes', () => {
+  const data = { workspace: { current_dir: '/home/me/project', git_worktree: `my-${HOSTILE}feature` } };
+  assert.equal(renderClean(data, 'branch,worktree', `feat/${HOSTILE}x`), '⎇ feat/x (wt my-feature) │ wt my-feature');
+});
+
+test('a hostile repo, from the remote or the folder name, prints without its control codes', () => {
+  const repo = { host: 'github.com', owner: `jv-${HOSTILE}k`, name: `claude-${HOSTILE}gauge` };
+  assert.equal(renderClean({ workspace: { current_dir: '/home/me/project', repo } }, 'repo'), 'jv-k/claude-gauge');
+  // A folder name cannot hold a slash, so the hyperlink's URL loses its own.
+  const folder = { workspace: { current_dir: `/home/me/pro${HOSTILE.replaceAll('/', '')}ject` } };
+  assert.equal(renderClean(folder, 'repo,dir'), 'project │ project');
+});
+
+test('a hostile pull request prints without its control codes', () => {
+  assert.equal(renderClean({ pr: { number: 12, review_state: `appr${HOSTILE}oved` } }, 'pr'), '#12 approved');
+  // The payload is JSON from outside, so a field meant to be a number may
+  // arrive as text.
+  assert.equal(renderClean({ pr: { number: `12${HOSTILE}34` } }, 'pr'), '#1234');
+});
+
+test('every part prints hostile payload text without its control codes', () => {
+  const { PARTS } = require('../dist/statusline.js');
+  const h = (text) => `${text.slice(0, 1)}${HOSTILE}${text.slice(1)}`;
+  const data = {
+    version: h('2.1.90'),
+    session_name: h('session'),
+    model: { display_name: h('Opus') },
+    workspace: { current_dir: '/home/me/project', repo: { host: 'github.com', owner: h('jv-k'), name: h('claude-gauge') }, git_worktree: h('wt') },
+    context_window: { context_window_size: 200000, used_percentage: 43, total_input_tokens: h('86000') },
+    cost: { total_duration_ms: 60_000, total_cost_usd: 1, total_lines_added: h('15'), total_lines_removed: h('23') },
+    effort: { level: h('high') },
+    thinking: { enabled: true },
+    fast_mode: true,
+    output_style: { name: h('explanatory') },
+    pr: { number: h('12'), kind: 'pr', review_state: h('pending') },
+    agent: { name: h('reviewer') },
+    prompt_cache: { warm: true, hit_ratio: 0.5 },
+    rate_limits: { five_hour: { used_percentage: 10 }, seven_day: { used_percentage: 20 }, spend_limit: { used_percentage: 30 } },
+  };
+  for (const part of PARTS) assert.ok(renderClean(data, part, h('main')), part);
+  assert.equal(
+    renderClean(data, 'model,effort,style,agent,version,lines,ctx'),
+    'Opus │ effort high │ style explanatory │ agent reviewer │ v2.1.90 │ +15 −23 │ ctx 43% ▓▓░░░ 86.0k',
+  );
+});
+
+test('hostile text from the transcript prints without its control codes', () => {
+  const { payloadFromTranscript } = require('../dist/statusline.js');
+  const records = [
+    { type: 'assistant', effort: `hi${HOSTILE}gh`, message: { model: `claude-op${HOSTILE}us-5-5`, usage: { input_tokens: 1000 } } },
+  ];
+  assert.equal(renderClean(payloadFromTranscript(records, { nowMs: NOW }), 'model,effort'), 'Opus 5.5 │ effort high');
+});
+
+test('the folder git runs in keeps its name as it is', () => {
+  const dir = `/home/me/pro\x1b[2Jject`;
+  let seen;
+  render({ workspace: { current_dir: dir } }, { config: parseArgs(['--show', 'branch']), branchOf: (cwd) => ((seen = cwd), 'main') });
+  assert.equal(seen, dir);
+});
+
+test("external colour codes go and claude-gauge's own colours stay", () => {
+  const raw = render({ session_name: 'red\x1b[31m\x1b[1;41mtext\x1b[0m' }, { config: parseArgs(['--show', 'name']) });
+  assert.equal(raw, '\x1b[0;90mredtext\x1b[0m');
+});
+
 test('computes context from token counts when Claude Code sends no percentage', () => {
   const data = payload(undefined);
   data.context_window = {
