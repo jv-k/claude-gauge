@@ -220,7 +220,7 @@ In a terminal, run setup with npx:
 npx claude-gauge setup
 ```
 
-Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, and then whether to add the token line. It redraws the status line after each answer, from your last terminal session's figures or from a sample. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is no.
+Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, then whether to add the token line, and if so, which parts it shows. It redraws the status line after each answer, from your last terminal session's figures or from a sample. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is no.
 
 Setup copies the two scripts into `~/.claude/claude-gauge/runtime/` (under `$CLAUDE_CONFIG_DIR` when that is set) and points the settings there, so the bars keep working when npm clears its npx cache. To keep the `claude-gauge` command at hand instead of running it through npx, install it globally with `npm install -g claude-gauge`.
 

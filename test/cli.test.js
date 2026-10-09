@@ -351,7 +351,7 @@ test('the wizard previews the payload the status line saved', () => {
   fs.mkdirSync(path.join(dir, 'claude-gauge', '.state'), { recursive: true });
   const saved = { model: { display_name: 'Saved Model' }, context_window: { used_percentage: 77 } };
   fs.writeFileSync(path.join(dir, 'claude-gauge', '.state', 'last-payload.json'), JSON.stringify(saved));
-  const r = ask(dir, ['setup'], ['n', '1', 'model,ctx', '', 'mono', 'n', '', '']);
+  const r = ask(dir, ['setup'], ['n', '1', 'model,ctx', '', 'mono', 'n', '', '', '']);
   ok(r);
   const out = plainText(r.stdout);
   assert.match(out, /Saved Model/);
@@ -366,9 +366,30 @@ test('the customise path writes the switches chosen, and can leave the token lin
   });
 });
 
+test('the token line parts the wizard is given go into the Stop hook command, and Enter adds no --show', () => {
+  const tokenLine = (dir) => settingsOf(dir).hooks.Stop[0].hooks[0].command;
+  const script = (dir) => path.join(runtimeOf(dir), 'tokenline.js');
+  const enter = configFolder();
+  ok(ask(enter, ['setup'], ['n', '', '', '', '', '', '', '', '', 'y']));
+  assert.equal(tokenLine(enter), commandFor(script(enter)));
+
+  const fewer = configFolder();
+  const r = ask(fewer, ['setup'], ['n', '', '', '', '', '', '', '', 'req,bogus', 'req,out,ctx', 'y']);
+  ok(r);
+  assert.match(r.stdout, /Unknown part: bogus/);
+  assert.equal(tokenLine(fewer), commandFor(script(fewer), '--show req,out,ctx'));
+
+  // configure starts from that --show and keeps the --window set up.
+  ok(run(fewer, ['configure', '--token-line', '--show req,out,ctx --window 1m']));
+  const again = ask(fewer, ['configure'], ['n', '', '', '', '', '', '', '', 'ctx', 'y']);
+  ok(again);
+  assert.match(again.stdout, /Token line parts.*\[req,out,ctx\]/);
+  assert.equal(tokenLine(fewer), commandFor(script(fewer), '--show ctx --window 1m'));
+});
+
 test('a no at the last question, or answers that end early, change nothing', () => {
   const dir = configFolder();
-  const declined = ask(dir, ['setup'], ['n', '', '', '', '', '', '', '', 'n']);
+  const declined = ask(dir, ['setup'], ['n', '', '', '', '', '', '', '', '', 'n']);
   ok(declined);
   assert.match(declined.stdout, /Nothing changed/);
   const ended = ask(dir, ['setup'], []);
@@ -398,7 +419,7 @@ test('configure with no switches runs the wizard on a set-up config, and offers 
   assert.equal(ask(dir, ['configure'], ['y']).status, 1, 'not set up yet');
   ok(run(dir, ['setup', '--yes']));
   const gh = fakeGh();
-  const r = ask(dir, ['configure'], ['n', '1', 'ctx', '', '', '', '', 'y'], { bin: gh.bin });
+  const r = ask(dir, ['configure'], ['n', '1', 'ctx', '', '', '', '', '', 'y'], { bin: gh.bin });
   ok(r);
   assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(runtimeOf(dir), 'statusline.js'), '--show ctx'));
   assert.doesNotMatch(r.stdout, /Star /);
@@ -442,7 +463,7 @@ test('configure keeps a quoted value and a switch it does not know, whichever pa
   assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
 
   // One row set up, a bar size changed, the rest kept with Enter.
-  ok(ask(dir, ['configure'], ['n', '', '', '10', '', '', '', 'y']));
+  ok(ask(dir, ['configure'], ['n', '', '', '10', '', '', '', '', 'y']));
   assert.deepEqual(settingsOf(dir), {
     statusLine: cmd(commandFor(script('statusline.js'), ['--show', 'text,ctx', '--segments', '10', '--text', 'my label', '--frobnicate'])),
     hooks: { Stop: [entry(commandFor(script('tokenline.js')))] },
