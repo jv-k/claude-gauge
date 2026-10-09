@@ -20,7 +20,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { plan, commandFor, ownerOf, scriptOf } from './settings';
+import { plan, commandFor, installed } from './settings';
 import type { Choices, StatusLineSetting } from './settings';
 import { readSettings, writeSettings, writeAtomic } from './settings-file';
 
@@ -58,17 +58,26 @@ interface Args {
   yes: boolean;
 }
 
+// Every switch: its names, the commands that take it, and what it sets.
+// --help goes with any command.
+const SWITCHES: { names: string[]; commands: Command[]; apply: (args: Args, value: () => string) => void }[] = [
+  { names: ['--status-line'], commands: ['setup', 'configure'], apply: (args, value) => { args.statusLine = value(); } },
+  { names: ['--no-status-line'], commands: ['setup', 'configure'], apply: (args) => { args.statusLine = null; } },
+  { names: ['--token-line'], commands: ['setup', 'configure'], apply: (args, value) => { args.tokenLine = value(); } },
+  { names: ['--no-token-line'], commands: ['setup', 'configure'], apply: (args) => { args.tokenLine = null; } },
+  { names: ['--replace'], commands: ['setup', 'configure'], apply: (args) => { args.replace = true; } },
+  { names: ['--yes', '-y'], commands: ['setup'], apply: (args) => { args.yes = true; } },
+  { names: ['--help', '-h'], commands: [...COMMANDS], apply: (args) => { args.help = true; } },
+];
+
+// Unlike the two bars, which ignore what they do not know so that a typo
+// never blanks the status line, the command refuses an unknown word: it
+// writes the user's settings, and a typo there should stop it.
 function parseArgs(argv: string[]): Args {
   const args: Args = { help: false, replace: false, yes: false };
-  const seen: string[] = [];
+  const seen: (typeof SWITCHES)[number][] = [];
   for (let i = 0; i < argv.length; i++) {
     const [name, inline] = argv[i].split(/=(.*)/s);
-    // A value is the next word whatever it holds, since switches start with --.
-    const value = () => {
-      const v = inline ?? argv[++i];
-      if (v === undefined) throw new UsageError(`${name} needs a value: the switches for that bar, or "" for none.`);
-      return v;
-    };
     if (!name.startsWith('-')) {
       if (args.command) throw new UsageError(`Unexpected word: ${name}`);
       if (name === 'help') args.help = true;
@@ -76,26 +85,18 @@ function parseArgs(argv: string[]): Args {
       else throw new UsageError(`Unknown command: ${name}`);
       continue;
     }
-    seen.push(name);
-    switch (name) {
-      case '--help': case '-h': args.help = true; break;
-      case '--status-line': args.statusLine = value(); break;
-      case '--no-status-line': args.statusLine = null; break;
-      case '--token-line': args.tokenLine = value(); break;
-      case '--no-token-line': args.tokenLine = null; break;
-      case '--replace': args.replace = true; break;
-      case '--yes': case '-y': args.yes = true; break;
-      default: throw new UsageError(`Unknown switch: ${name}`);
-    }
+    const known = SWITCHES.find((s) => s.names.includes(name));
+    if (!known) throw new UsageError(`Unknown switch: ${name}`);
+    // A value is the next word whatever it holds, since switches start with --.
+    known.apply(args, () => {
+      const v = inline ?? argv[++i];
+      if (v === undefined) throw new UsageError(`${name} needs a value: the switches for that bar, or "" for none.`);
+      return v;
+    });
+    seen.push(known);
   }
-  const allowed: Record<Command, string[]> = {
-    setup: ['--status-line', '--no-status-line', '--token-line', '--no-token-line', '--replace', '--yes', '-y'],
-    configure: ['--status-line', '--no-status-line', '--token-line', '--no-token-line', '--replace'],
-    uninstall: [],
-    update: [],
-  };
-  const stray = args.command && seen.find((s) => s !== '--help' && s !== '-h' && !allowed[args.command!].includes(s));
-  if (stray) throw new UsageError(`${args.command} takes no ${stray}`);
+  const stray = args.command && seen.find((s) => !s.commands.includes(args.command!));
+  if (stray) throw new UsageError(`${args.command} takes no ${stray.names[0]}`);
   return args;
 }
 
@@ -157,34 +158,22 @@ function savedStatusLine(): StatusLineSetting | null | undefined {
 
 const say = (...lines: string[]) => process.stdout.write(lines.join('\n') + '\n');
 
-// claude-gauge's commands in the settings: the status line, and the token
-// line's Stop hook.
-function ourCommands(settings: Record<string, unknown>): { statusLine?: string; tokenLine?: string; any: boolean } {
-  const statusLine = ownerOf(settings.statusLine) === 'claude-gauge' ? (settings.statusLine as StatusLineSetting).command : undefined;
-  const all: string[] = [];
-  const hooks = settings.hooks as Record<string, { hooks?: { command?: string }[] }[]> | undefined;
-  for (const entries of Object.values(hooks ?? {})) {
-    for (const e of Array.isArray(entries) ? entries : []) for (const h of e?.hooks ?? []) if (scriptOf(h?.command)) all.push(h.command!);
-  }
-  const tokenLine = (hooks?.Stop ?? []).flatMap((e) => e.hooks ?? []).find((h) => scriptOf(h.command) === 'tokenline')?.command;
-  return { statusLine, tokenLine, any: statusLine !== undefined || all.length > 0 };
-}
+// The switches chosen for each bar: a string to run it with, null to take it
+// out, undefined to leave it as it is.
+type Bars = Pick<Args, 'statusLine' | 'tokenLine'>;
 
 // setup and configure: turns the bars' switches into commands, plans the
 // settings, and writes them.
-function apply(args: Args, { statusLine, tokenLine }: Pick<Args, 'statusLine' | 'tokenLine'>, mustExist: boolean): void {
+function apply({ statusLine, tokenLine }: Bars, replace: boolean): void {
   const file = settingsFile();
   const { settings, text } = readSettings(file);
-  if (mustExist && !ourCommands(settings).any) {
-    throw new Error(`claude-gauge is not set up in ${file}. Run claude-gauge setup first.`);
-  }
   const { dir, copy } = scripts();
   const command = (script: string, switches: string | null | undefined) =>
     typeof switches === 'string' ? commandFor(path.join(dir, script), switches) : switches;
   const choices: Choices = {
     statusLine: command('statusline.js', statusLine),
     tokenLine: command('tokenline.js', tokenLine),
-    replace: args.replace,
+    replace,
     previous: savedStatusLine() ?? null,
   };
   const next = plan(settings, choices);
@@ -205,18 +194,18 @@ function apply(args: Args, { statusLine, tokenLine }: Pick<Args, 'statusLine' | 
   // The status line to put back is saved before the settings change, so a
   // failed save leaves nothing to restore wrongly.
   if (next.backup) writeAtomic(savedStatusLineFile(), JSON.stringify(next.backup, null, 2) + '\n');
-  const backup = next.changed ? writeSettings(file, next.settings, text) : null;
+  const settingsBackup = next.changed ? writeSettings(file, next.settings, text) : null;
   if (next.dropBackup) fs.rmSync(savedStatusLineFile(), { force: true });
 
   if (!next.changed) {
     say(`${file} already holds these choices. Nothing to change.`);
     return;
   }
-  const ours = ourCommands(next.settings);
+  const ours = installed(next.settings);
   say(
     `Status line: ${ours.statusLine ?? 'not set up'}`,
     `Token line:  ${ours.tokenLine ?? 'not set up'}`,
-    ...(backup ? [`Backup of the previous settings: ${backup}`] : []),
+    ...(settingsBackup ? [`Backup of the previous settings: ${settingsBackup}`] : []),
     'Start a new Claude Code session to pick up the changes.',
   );
 }
@@ -229,14 +218,18 @@ function setup(args: Args): void {
     );
   }
   const orDefault = (v: string | null | undefined) => (v === undefined && args.yes ? '' : v);
-  apply(args, { statusLine: orDefault(args.statusLine), tokenLine: orDefault(args.tokenLine) }, false);
+  apply({ statusLine: orDefault(args.statusLine), tokenLine: orDefault(args.tokenLine) }, args.replace);
 }
 
 function configure(args: Args): void {
   if (args.statusLine === undefined && args.tokenLine === undefined) {
     throw new UsageError('Say what to change: --status-line, --token-line, --no-status-line or --no-token-line.');
   }
-  apply(args, args, true);
+  const file = settingsFile();
+  if (!installed(readSettings(file).settings).any) {
+    throw new Error(`claude-gauge is not set up in ${file}. Run claude-gauge setup first.`);
+  }
+  apply(args, args.replace);
 }
 
 function uninstall(): void {
@@ -244,17 +237,19 @@ function uninstall(): void {
   const { settings, text } = readSettings(file);
   const saved = savedStatusLine();
   const next = plan(settings, { uninstall: true, previous: saved ?? null });
+  // The saved status line goes only once the settings no longer need it, so
+  // a failed write leaves it for the next try.
+  const settingsBackup = next.changed ? writeSettings(file, next.settings, text) : null;
   fs.rmSync(savedStatusLineFile(), { force: true });
   if (!next.changed) {
     say(`claude-gauge is not in ${file}. Nothing to change.`);
     return;
   }
-  const backup = writeSettings(file, next.settings, text);
   const restored = next.found === 'claude-gauge' && saved ? `Put back the previous status line: ${saved.command ?? JSON.stringify(saved)}` : undefined;
   say(
     `Took claude-gauge out of ${file}.`,
     ...(restored ? [restored] : []),
-    ...(backup ? [`Backup of the previous settings: ${backup}`] : []),
+    ...(settingsBackup ? [`Backup of the previous settings: ${settingsBackup}`] : []),
     `The scripts stay in ${stateDir()}. Delete that folder to remove them too.`,
     'Start a new Claude Code session to pick up the changes.',
   );

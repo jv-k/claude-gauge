@@ -182,3 +182,13 @@ test('refuses hooks it cannot read rather than overwrite them', () => {
   assert.throws(() => plan({ hooks: [] }, { tokenLine: TL }), /hooks/);
   assert.throws(() => plan({ statusLine: 'node x.js' }, { statusLine: SL }), /statusLine/);
 });
+
+test("installed() names claude-gauge's commands, and an --instruct hook is not the token line", () => {
+  const { installed } = require('../dist/settings.js');
+  assert.deepEqual(installed({}), { statusLine: undefined, tokenLine: undefined, any: false });
+  const instructOnly = { hooks: { SessionStart: [entry('node ~/.claude/claude-gauge/dist/tokenline.js --instruct')] } };
+  assert.deepEqual(installed(instructOnly), { statusLine: undefined, tokenLine: undefined, any: true });
+  const both = plan({}, { statusLine: SL, tokenLine: TL }).settings;
+  assert.deepEqual(installed(both), { statusLine: SL, tokenLine: TL, any: true });
+  assert.throws(() => installed({ hooks: { Stop: 'x' } }), /hooks\.Stop/);
+});

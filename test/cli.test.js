@@ -258,3 +258,40 @@ test('usage errors exit 2 and say what to run', () => {
   ok(run(dir, ['--help']));
   assert.ok(!fs.existsSync(path.join(dir, 'settings.json')));
 });
+
+test('a hand-formatted settings.json keeps its tab indent and CRLF line ends', () => {
+  const dir = configFolder();
+  fs.writeFileSync(path.join(dir, 'settings.json'), '{\r\n\t"model": "opus"\r\n}\r\n');
+  ok(run(dir, ['setup', '--yes']));
+  const text = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
+  assert.match(text, /^\{\r\n\t"model": "opus",\r\n\t"statusLine": \{\r\n\t\t"type": "command",/);
+  assert.ok(!/[^\r]\n/.test(text), 'every line ends in CRLF');
+});
+
+test('configure stops at hooks it cannot read, with a message, not a crash', () => {
+  const dir = configFolder({ statusLine: cmd('node ~/.claude/claude-gauge/dist/statusline.js'), hooks: { Stop: { hooks: [] } } });
+  const r = run(dir, ['configure', '--token-line', '']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /hooks\.Stop .*Fix it by hand/);
+});
+
+test('a failed uninstall keeps the saved status line for the next try', (t) => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    t.skip('needs a folder that POSIX permissions can make read-only');
+    return;
+  }
+  const dir = configFolder();
+  const dotfiles = configFolder({ statusLine: cmd('~/bin/my-status.sh') });
+  fs.symlinkSync(path.join(dotfiles, 'settings.json'), path.join(dir, 'settings.json'));
+  ok(run(dir, ['setup', '--yes', '--replace']));
+  fs.chmodSync(dotfiles, 0o555);
+  try {
+    const r = run(dir, ['uninstall']);
+    assert.equal(r.status, 1);
+  } finally {
+    fs.chmodSync(dotfiles, 0o755);
+  }
+  assert.deepEqual(JSON.parse(fs.readFileSync(savedStatusLine(dir), 'utf8')), { statusLine: cmd('~/bin/my-status.sh') });
+  ok(run(dir, ['uninstall']));
+  assert.deepEqual(settingsOf(dir), { statusLine: cmd('~/bin/my-status.sh') });
+});

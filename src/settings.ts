@@ -199,6 +199,18 @@ function plan(current: Json, choices: Choices): Plan {
   };
 }
 
+// claude-gauge's commands in the settings: the status line, the token
+// line's Stop hook, and whether any hook in any event runs one of its
+// scripts. Hooks it cannot read stop it, as they stop plan().
+function installed(settings: Json): { statusLine?: string; tokenLine?: string; any: boolean } {
+  const statusLine = ownerOf(settings.statusLine) === 'claude-gauge' ? (settings.statusLine as StatusLineSetting).command : undefined;
+  const hooks = readHooks(settings) ?? {};
+  const commandsIn = (entries: HookEntry[]) => entries.flatMap((e) => e.hooks ?? []);
+  const tokenLine = commandsIn(hooks.Stop ?? []).find(isTokenLine)?.command;
+  const anyHook = Object.values(hooks).some((entries) => commandsIn(entries).some(isOurs));
+  return { statusLine, tokenLine, any: statusLine !== undefined || anyHook };
+}
+
 // A shell word for a settings command: as is when plain, in double quotes
 // when it holds only spaces or other characters both bash and cmd.exe read
 // literally there, else in single quotes. Claude Code runs the command
@@ -214,6 +226,6 @@ function commandFor(script: string, switches = ''): string {
   return ['node', script.replace(/\\/g, '/'), ...words].map(shellWord).join(' ');
 }
 
-export { plan, commandFor, ownerOf, scriptOf };
+export { plan, commandFor, installed, ownerOf, scriptOf };
 
 export type { Choices, Plan, Owner, StatusLineSetting };
