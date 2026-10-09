@@ -30,7 +30,7 @@ pnpm test
 | `src/statusline.ts` | The status line. |
 | `src/tokenline.ts` | The token line. |
 | `dist/` | The two built files that users' settings run. `pnpm build` writes them. The `dist` workflow commits them to `main`. |
-| `test/` | The suites, one per line; the parity suite, which checks the README examples against the build; and the README sync suite, which checks the README's status line tables against the registry; and the release suites, which check the release notes script and what npm would publish. |
+| `test/` | The suites, one per line; the parity suite, which checks the README examples against the build; the README sync suite, which checks the README's status line tables against the registry; and the release suites, which check the release notes script and what npm would publish. |
 | `scripts/release-notes.js` | Prints a version's section of `CHANGELOG.md`, which the `release` workflow uses as the GitHub release notes. It is not part of the package. |
 | `README.md` | The user docs: every part and every switch. |
 | `INSTALL-WITH-CLAUDE.md` | The steps Claude follows when a user asks it to install claude-gauge. |
@@ -52,7 +52,7 @@ pnpm test
 
 While 1.0 is in progress, branch from `integration/1.0` and open the pull request against `integration/1.0`. That branch collects the 1.0 work, and it merges into `main` when 1.0 is ready.
 
-`main` is what users run. Installs clone `main` and update with `git pull`, so a merge into `main` reaches users on their next pull, whether or not a release follows.
+`main` is what users run. Installs clone `main` and update with `git pull`, so a merge into `main` reaches those users on their next pull, whether or not a release follows. npm users get a change when a release publishes it.
 
 Name a branch after the type of change and its topic, for example `feat/instruct-hook` or `docs/contributor-docs-24`.
 

@@ -86,6 +86,8 @@ test('the script fails, and says why, when the version has no section', () => {
   assert.equal(result.stdout, '');
   assert.match(result.stderr, /2\.0\.0/);
   assert.match(result.stderr, /CHANGELOG\.md/);
+  // The tag is public by then, so the way on is the next version.
+  assert.match(result.stderr, /next/);
 });
 
 test('the script fails when the section is empty', () => {

@@ -11,7 +11,7 @@ Installs that clone `main` update with `git pull`, so those users get a change w
 
 The owner of jv-k/claude-gauge does this before the first release.
 
-1. On [npmjs.com](https://www.npmjs.com), create an access token that can publish `claude-gauge`: a granular token with read and write access to the package, or an automation token. Set its expiry date in your calendar.
+1. On [npmjs.com](https://www.npmjs.com), create a granular access token with read and write access to packages, and turn on its option to bypass two-factor authentication, because a workflow cannot answer a two-factor prompt. Before the first release, the package does not exist yet, so the token cannot name it. After the first release, limit the token to `claude-gauge`. npm sets an expiry date on a token that can write, so put the date in your calendar.
 2. In the repository, go to **Settings**, then **Secrets and variables**, then **Actions**. Add a repository secret named `NPM_TOKEN` with the token as its value.
 
 The workflow gives the token to `npm publish` and to nothing else. When the token expires, make a new one and replace the secret. The workflow's own `GITHUB_TOKEN` creates the GitHub release, so that step needs no secret.
@@ -51,7 +51,7 @@ pnpm bump-release
 1. VerBump checks that the tree is clean and that `main` is not behind `origin`.
 2. It runs `pnpm test`, the `PRE_BUMP_CMD` in `.verbumprc`. The tests build `dist/` and run every suite. If a test fails, the release stops before VerBump changes a file.
 3. It reads the Conventional Commits since the last tag and suggests the next version. You confirm it or enter another one.
-4. It writes the version to `package.json`, adds the new section to `CHANGELOG.md`, commits, and tags `vX.Y.Z`. It pauses so that you can edit the new section before the commit. The section becomes the release notes.
+4. It writes the version to `package.json`, adds the new section to `CHANGELOG.md`, commits, and tags `vX.Y.Z`. The section becomes the release notes. The dry run shows the section first. To edit it before the commit, add `-l` (`--pause-changelog`) to `pnpm bump-release`, and VerBump waits while you edit.
 5. It pushes the commit and the tag to `origin`.
 
 VerBump does not create the GitHub release. The tag starts the `release` workflow, which goes through these steps:
@@ -85,7 +85,7 @@ Before step 5, nothing is public.
 After step 5, the tag is public, so do not move it or tag the version again. Read the failed step in the run's log.
 
 - If the tests fail in step 7, or the version check fails in step 6, nothing is published. Fix the cause on a branch, merge it, and release the next patch version.
-- If the section is missing or empty in step 8, nothing is published. A rerun reads the same tagged `CHANGELOG.md`, so it fails again. Release the next patch version, and check its section when VerBump pauses in step 4.
+- If the section is missing or empty in step 8, nothing is published. A rerun reads the same tagged `CHANGELOG.md`, so it fails again. Release the next patch version, and check its section in the dry run first.
 - If `npm publish` fails in step 10, the GitHub release exists already. The usual causes are a missing or expired `NPM_TOKEN`. Fix the secret, then rerun the failed job from the run's page, or with `gh run rerun <run-id> --failed`. Step 9 leaves the release as it is, and step 10 publishes.
 
 `--no-hooks` skips the test gate in step 2 for one run. Use it only when the gate itself is broken. The workflow still runs the tests in step 7.

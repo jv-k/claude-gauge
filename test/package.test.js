@@ -45,6 +45,8 @@ function packedFiles() {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    // npm is npm.cmd on Windows, which runs only through a shell (#3 plans
+    // CI there).
     shell: process.platform === 'win32',
   });
   return JSON.parse(out)[0].files.map((f) => f.path).sort();
@@ -55,6 +57,6 @@ test('the package ships the built lines, and no sources or tests', () => {
   for (const file of ['dist/statusline.js', 'dist/tokenline.js', 'package.json', 'README.md', 'LICENSE']) {
     assert.ok(files.includes(file), `the package lacks ${file}`);
   }
-  const extra = files.filter((f) => /^(src|test|scripts|\.github|\.ship-it|node_modules)\//.test(f));
+  const extra = files.filter((f) => !f.startsWith('dist/') && !['package.json', 'README.md', 'LICENSE'].includes(f));
   assert.deepEqual(extra, []);
 });

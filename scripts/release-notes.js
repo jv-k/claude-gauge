@@ -16,13 +16,18 @@ const fs = require('node:fs');
 // The section body of `tag` in `changelog`, trimmed, or null when no heading
 // names that version. A tag may carry a leading `v`.
 function releaseNotes(changelog, tag) {
-  const version = String(tag).replace(/^v/, '');
+  const version = versionOf(tag);
   const lines = changelog.split(/\r?\n/);
   const start = lines.findIndex((line) => headingVersion(line) === version);
   if (start < 0) return null;
   const rest = lines.slice(start + 1);
   const end = rest.findIndex((line) => line.startsWith('## '));
   return (end < 0 ? rest : rest.slice(0, end)).join('\n').trim();
+}
+
+// The version a tag names: the tag without its leading `v`.
+function versionOf(tag) {
+  return String(tag).replace(/^v/, '');
 }
 
 // The version a `## ` heading names, or null for any other line.
@@ -46,9 +51,8 @@ function main(argv) {
   }
   const notes = releaseNotes(changelog, tag);
   if (!notes) {
-    const version = tag.replace(/^v/, '');
     const problem = notes === null ? 'has no section for' : 'has an empty section for';
-    process.stderr.write(`${file} ${problem} ${version}. Add the section, then tag again.\n`);
+    process.stderr.write(`${file} ${problem} ${versionOf(tag)}. Do not tag this version again: release the next one with its section. RELEASING.md says how.\n`);
     return 1;
   }
   process.stdout.write(`${notes}\n`);
