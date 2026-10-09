@@ -516,11 +516,14 @@ function linesPart(data: StatusData): string {
   return `${GREEN}+${added ?? 0}${RESET} ${RED}−${removed ?? 0}${RESET}`;
 }
 
+// Text cut to at most chars characters, ending in … when it was cut.
+const cut = (text: string, chars: number) => (text.length <= chars ? text : `${text.slice(0, chars - 1)}…`);
+
 // The session's custom name or AI-generated title, cut to 30 characters.
 function namePart(data: StatusData): string {
   const name = data.session_name;
   if (!name) return '';
-  const shown = name.length > 30 ? `${name.slice(0, 29)}…` : name;
+  const shown = cut(name, 30);
   return `${GRAY}${shown}${RESET}`;
 }
 
@@ -766,7 +769,7 @@ function shortTarget(name: string, target: string, cwd: string): string {
   const relative = path.isAbsolute(target) ? path.relative(cwd, target) : '';
   const shown = relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? relative : target;
   if (shown.length <= TARGET_CHARS) return shown;
-  return FILE_TOOLS.includes(name) ? `…${shown.slice(-(TARGET_CHARS - 1))}` : `${shown.slice(0, TARGET_CHARS - 1)}…`;
+  return FILE_TOOLS.includes(name) ? `…${shown.slice(-(TARGET_CHARS - 1))}` : cut(shown, TARGET_CHARS);
 }
 
 // The tool running now, with its target, then the completed tools used most,
@@ -789,8 +792,6 @@ const AGENTS_SHOWN = 3;
 const AGENT_LINGER_MS = 60_000;
 const DESCRIPTION_CHARS = 30;
 
-const cut = (text: string, chars: number) => (text.length <= chars ? text : `${text.slice(0, chars - 1)}…`);
-
 // One subagent: ◐ Explore (Haiku 4.5) Find the config loader 1m while it
 // runs, ✓ when it finished, ✗ when it failed or was stopped.
 function agentItem(agent: AgentRun, nowMs: number): string {
@@ -805,7 +806,7 @@ function agentItem(agent: AgentRun, nowMs: number): string {
 // The subagents running now, oldest first, then those finished in the last
 // AGENT_LINGER_MS, newest first, up to AGENTS_SHOWN in all.
 function agentsPart(activity: TranscriptActivity, nowMs: number): string {
-  const agents = activity.agents ?? [];
+  const { agents } = activity;
   const running = agents.filter((a) => a.endedAt === undefined);
   const finished = agents
     .filter((a): a is AgentRun & { endedAt: number } => a.endedAt !== undefined && nowMs - a.endedAt < AGENT_LINGER_MS)
@@ -1442,13 +1443,14 @@ interface AgentRun {
 // they started.
 interface TranscriptActivity {
   tools: { running: ToolCall[]; completed: Record<string, number> };
-  agents?: AgentRun[];
+  agents: AgentRun[];
 }
 
 const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [] });
 
 // Activity with every name and target sanitised. Two tool names that differ
 // only in control codes count as one.
+// A reader handed in from JavaScript may leave the agents out.
 function sanitiseActivity({ tools, agents = [] }: TranscriptActivity): TranscriptActivity {
   const running = tools.running.map(({ name, target }) => ({ name: sanitise(name), ...(target ? { target: sanitise(target) } : {}) }));
   const completed: Record<string, number> = {};
@@ -1482,8 +1484,12 @@ interface TranscriptState {
   // The subagents, by the id of the call that started them, in the order
   // they started. One in the background keeps running past its call's
   // result, until its task notification.
-  agents: (AgentRun & { id: string; background?: boolean })[];
+  agents: AgentEntry[];
 }
+
+// A subagent as the reader keeps it: by the id of the call that started it,
+// and whether it runs in the background.
+type AgentEntry = AgentRun & { id: string; background?: boolean };
 
 // The ended calls kept at most, newest first: a call whose result never
 // came must not grow the state for ever. Running calls are all kept, so a
@@ -1540,17 +1546,20 @@ const agentModel = (value: unknown): string | undefined =>
 function startAgent(state: TranscriptState, block: ContentBlock, startedAt: number | undefined): void {
   const input = isObject(block.input) ? block.input : {};
   const model = agentModel(input.model);
+  const description = stringAt(input, 'description');
   state.agents.push({
     id: String(block.id),
     type: stringAt(input, 'subagent_type') ?? 'general-purpose',
-    ...(stringAt(input, 'description') ? { description: stringAt(input, 'description') } : {}),
+    ...(description ? { description } : {}),
     ...(model ? { model } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
   });
 }
 
-// A subagent's end: when it ended, and whether it failed or was stopped.
-function endAgent(agent: TranscriptState['agents'][number], endedAt: number | undefined, failed: boolean): void {
+// A subagent's end: when it ended, and whether it failed or was stopped. An
+// end with no time counts as long ago, so the part drops it rather than
+// shows it as running.
+function endAgent(agent: AgentEntry, endedAt: number | undefined, failed: boolean): void {
   agent.endedAt = endedAt ?? 0;
   if (failed) agent.failed = true;
   else delete agent.failed;
@@ -1558,7 +1567,7 @@ function endAgent(agent: TranscriptState['agents'][number], endedAt: number | un
 
 // The result of an Agent call: the end of a subagent in the foreground, or,
 // for one in the background, only its launch, which names the model.
-function agentResult(agent: TranscriptState['agents'][number], block: ContentBlock, record: TranscriptRecord, at: number | undefined): void {
+function agentResult(agent: AgentEntry, block: ContentBlock, record: TranscriptRecord, at: number | undefined): void {
   const result = isObject(record.toolUseResult) ? record.toolUseResult : {};
   const model = agentModel(result.resolvedModel);
   if (model) agent.model = model;
@@ -1608,17 +1617,23 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   const at = timeOf(record);
   const content = record.message?.content;
   const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
+  // A task notification ends a task in the background, and is no prompt.
   const notified = record.type === 'user' ? taskNotification(record) : undefined;
   if (notified) {
     const agent = state.agents.find((a) => a.id === notified.id);
     if (agent) endAgent(agent, at, notified.status !== 'completed');
-  } else if (record.type === 'user' && !record.isMeta && !blocks.some((b) => b.type === 'tool_result')) {
+    capAgents(state);
+    return;
+  }
+  if (record.type === 'user' && !record.isMeta && !blocks.some((b) => b.type === 'tool_result')) {
     if (typeof content === 'string' || blocks.length) {
       state.pending = state.pending.map((p) => ({ ...p, ended: true })).slice(-ENDED_KEPT);
       for (const agent of state.agents) if (agent.endedAt === undefined && !agent.background) endAgent(agent, at, true);
+      capAgents(state);
     }
+    return;
   }
-  for (const block of notified ? [] : blocks) {
+  for (const block of blocks) {
     if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
       const target = toolTarget(block.input);
       state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}) }];
