@@ -481,10 +481,12 @@ function gitStatus(cwd: string): string | undefined {
   }
 }
 
-// A changed file's last modification time; none for a deleted file.
+// A changed file's last modification time; none for a deleted file. A
+// symbolic link is the change, so its own time counts, not its target's, and
+// a link whose target is gone still has one.
 function fileMtime(file: string): number | undefined {
   try {
-    return fs.statSync(file).mtimeMs;
+    return fs.lstatSync(file).mtimeMs;
   } catch {
     return undefined;
   }

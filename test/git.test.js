@@ -184,6 +184,36 @@ test('render reads the branch, counts and files from the real git', () => {
   }
 });
 
+// A changed symbolic link sorts by its own time, even when its target is
+// gone, and not by its target's.
+test('files reads a changed symbolic link by its own time', { skip: process.platform === 'win32' && 'symbolic links need extra rights on Windows' }, () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const { execFileSync } = require('node:child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-links-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: tmp, stdio: 'pipe' });
+    const at = (minutes) => new Date(Date.UTC(2026, 0, 1, 12, minutes));
+    fs.writeFileSync(path.join(tmp, 'target.txt'), 'one\n');
+    fs.writeFileSync(path.join(tmp, 'plain.txt'), 'one\n');
+    fs.symlinkSync('target.txt', path.join(tmp, 'live-link'));
+    fs.symlinkSync('missing.txt', path.join(tmp, 'dangling-link'));
+    // The target is the newest, and each link is older than plain.txt.
+    fs.utimesSync(path.join(tmp, 'target.txt'), at(9), at(9));
+    fs.utimesSync(path.join(tmp, 'plain.txt'), at(5), at(5));
+    fs.lutimesSync(path.join(tmp, 'live-link'), at(2), at(2));
+    fs.lutimesSync(path.join(tmp, 'dangling-link'), at(1), at(1));
+    const shown = plain(render({ workspace: { current_dir: tmp } }, { config: parseArgs(['--show', 'files']) }));
+    assert.equal(shown, 'target.txt plain.txt live-link');
+    fs.rmSync(path.join(tmp, 'target.txt'));
+    fs.rmSync(path.join(tmp, 'plain.txt'));
+    const links = plain(render({ workspace: { current_dir: tmp } }, { config: parseArgs(['--show', 'files']) }));
+    assert.equal(links, 'live-link dangling-link');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // A git that takes too long, or prints too much, stands in for the real one
 // on PATH. The fallback then reads the branch from HEAD, without git.
 test('a git that times out or prints too much leaves the branch, read from HEAD', { skip: process.platform === 'win32' && 'the stand-in git is a shell script' }, () => {
