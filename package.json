@@ -23,7 +23,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm build && node --test test/",
+    "test": "pnpm build && node scripts/test.js",
     "bump-release": "verbump --push origin"
   },
   "devDependencies": {
