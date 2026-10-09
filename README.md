@@ -1,6 +1,10 @@
 # claude-gauge
 
+![The claude-gauge status line in its default two rows: context, 5-hour and weekly usage bars, above the time, session length, repository, branch, model and effort](docs/media/hero.png)
+
 Two small bars for [Claude Code](https://code.claude.com) that show how much room you have left: in the context window, in your 5-hour usage window, and in your weekly limit.
+
+Install it as a Claude Code plugin or from npm (see [Install](#install)). Coming from claude-hud? See [Coming from claude-hud](#coming-from-claude-hud).
 
 **Status line**, shown under the prompt in the terminal, in two rows by default:
 
@@ -22,6 +26,10 @@ Both are TypeScript modules built to single Node.js files with no dependencies, 
 ```
 
 The terminal CLI shows both bars by itself. In the VS Code extension and the desktop app, Claude can paste them into its replies instead (see [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app)).
+
+Setup asks which bars and parts you want, and redraws the status line after each answer:
+
+![claude-gauge setup in a terminal: it shows the default rows, then redraws them as the answers change the second row, the bar size and the theme, and writes the choices to the settings](docs/media/demo.gif)
 
 ## What the bars show
 
@@ -178,7 +186,7 @@ A part shows no link when its address is not known, for example a `branch` on an
 ## Requirements
 
 - Claude Code
-- Node.js 18 or later
+- Node.js 18 or later, with npm for the npm route
 
 ## Install
 
@@ -203,6 +211,47 @@ The plugin has three commands:
 | `/claude-gauge:uninstall` | Takes claude-gauge out of your settings and puts back the status line it replaced. |
 
 The settings run a small launcher in `~/.claude/claude-gauge/launcher/`, not the plugin's own folder. Claude Code keeps each plugin version in a folder of its own, so the launcher runs the newest installed version each time. A plugin update therefore needs no setup, and once the plugin is uninstalled the launcher prints nothing.
+
+### From npm
+
+In a terminal, run setup with npx:
+
+```sh
+npx claude-gauge setup
+```
+
+Setup asks which bars you want, and whether to keep the defaults or choose the rows, bar size, theme and labels. It redraws the status line after each answer, from your last terminal session's figures or from a sample. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is no.
+
+Setup copies the two scripts into `~/.claude/claude-gauge/runtime/` and points the settings there, so the bars keep working when npm clears its npx cache. To keep the `claude-gauge` command at hand instead of running it through npx, install it globally with `npm install -g claude-gauge`.
+
+The `claude-gauge` command has four commands:
+
+| Command | Effect |
+| --- | --- |
+| `claude-gauge setup` | Adds the status line and the token line. |
+| `claude-gauge configure` | Changes the switches of a bar that setup added, adds the missing one, or takes one out. |
+| `claude-gauge uninstall` | Takes claude-gauge out of your settings and puts back the status line it replaced. |
+| `claude-gauge update` | Copies the scripts of the version you run into `~/.claude/claude-gauge/runtime/`, and keeps your switches. |
+
+`setup` and `configure` ask their questions when you give them no bar switches. With bar switches they ask nothing, which suits scripts and dotfiles:
+
+| Switch | Effect |
+| --- | --- |
+| `--status-line <switches>` | Adds the status line, run with these switches. `""` gives the defaults. |
+| `--no-status-line` | Leaves the status line out, or takes it out. |
+| `--token-line <switches>` | Adds the token line, run with these switches. `""` gives the defaults. |
+| `--no-token-line` | Leaves the token line out, or takes it out. |
+| `--replace` | Replaces a status line that is not claude-gauge's. Without it, a command with bar switches stops rather than replace it. |
+| `--yes` | With `setup` only: adds each bar that the switches above do not name, with the defaults. |
+
+For example, both bars with the defaults, and then 10-cell bars on the status line:
+
+```sh
+npx claude-gauge setup --yes
+npx claude-gauge configure --status-line "--segments 10"
+```
+
+The settings file is `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set. `claude-gauge --help` lists the commands and switches. The bars' own switches are in [Options](#options).
 
 ### With Claude Code
 
@@ -449,6 +498,14 @@ Unknown switches and part names are ignored, so a typo never breaks your status 
 
 As a plugin, claude-gauge updates with `/plugin`, from the **Marketplaces** tab, or with `claude plugin update claude-gauge@claude-gauge` in your shell. The next new session runs the new version, with no setup. Auto-update is off for marketplaces other than Anthropic's, and the **Marketplaces** tab can turn it on.
 
+From npm, run `update` from the newest version:
+
+```sh
+npx claude-gauge@latest update
+```
+
+It copies the new scripts over the old ones in `~/.claude/claude-gauge/runtime/` and keeps your switches, so the next render runs the new version. After a global install, run `npm install -g claude-gauge@latest`, then `claude-gauge update`.
+
 From a clone:
 
 ```sh
@@ -461,22 +518,88 @@ If your settings still name `~/.claude/claude-gauge/statusline.js` or `tokenline
 
 As a plugin, run `/claude-gauge:uninstall`, then `/plugin uninstall claude-gauge@claude-gauge`. To remove the launcher and the saved usage figures too, delete `~/.claude/claude-gauge`.
 
+From npm, run:
+
+```sh
+npx claude-gauge uninstall
+```
+
+It takes the status line, the token line and any `--instruct` hooks out of your settings, and puts back the status line that setup replaced. The scripts stay in `~/.claude/claude-gauge/runtime/`: delete `~/.claude/claude-gauge` to remove them, with the saved usage figures. After a global install, also run `npm uninstall -g claude-gauge`.
+
 From a clone, remove the `statusLine`, `Stop` and `SessionStart` entries that name claude-gauge from `~/.claude/settings.json`. Then delete the folder:
 
 ```sh
 rm -rf ~/.claude/claude-gauge
 ```
 
-## Development
+## Coming from claude-hud
 
-[CONTRIBUTING.md](CONTRIBUTING.md) has the setup, the rules for a change, and the branch and commit conventions.
+claude-gauge has parts for claude-hud's main options, listed in the table below. It also has an npm route, a token line for each turn, theme presets, and an uninstall that puts your old status line back.
 
-```sh
-pnpm install
-pnpm test
+Switch in one step. Install the plugin as in [As a Claude Code plugin](#as-a-claude-code-plugin), then run its setup:
+
+```text
+/claude-gauge:setup
 ```
 
-Both lines are TypeScript modules in `src/`, built by `pnpm build` to the two self-contained Node.js files in `dist/` that the settings entries above run. The `claude-gauge` command in `src/cli.ts`, with `setup`, `configure`, `uninstall` and `update`, builds to `dist/cli.js`; `node dist/cli.js --help` lists its switches. Run with no bar switches, `setup` and `configure` ask which bars and parts you want, and preview the status line after each answer from the payload the last terminal render saved in `~/.claude/claude-gauge/.state/last-payload.json`, or from a sample until one has run. `pnpm test` builds first, then runs the suites against the build with Node's built-in test runner; `pnpm typecheck` checks the sources without building. `dist/` is generated, so never edit it or commit it. After each merge to `main`, the `dist` workflow builds and tests `dist/`, and commits it to `main` as a bot commit marked `[auto]` when the build changed it. A clone of `main` works without a build. [CONTRIBUTING.md](CONTRIBUTING.md) says how to keep `dist/` out of a pull request. [Bun](https://bun.sh) runs the sources directly, with the same output as the build: `bun src/statusline.ts`.
+Or, from a terminal:
+
+```sh
+npx claude-gauge setup
+```
+
+Setup finds claude-hud's status line in your settings, shows it to you, and asks before it replaces it. It saves claude-hud's command, so `/claude-gauge:uninstall` or `claude-gauge uninstall` puts it back. claude-hud's command runs a launcher that prints nothing once the claude-hud plugin is uninstalled, so keep claude-hud installed until you are sure that you will not go back.
+
+Setup does not read claude-hud's `config.json`. claude-gauge has no configuration file: each choice is a part named in `--show`, or a switch, in the bar's `command` in your settings. Each repeated `--show` is one row, and the parts show in the order you name them. This table gives the claude-gauge part or switch for claude-hud's main options, as claude-hud's README listed them on 2026-10-09:
+
+| claude-hud option | claude-gauge |
+| --- | --- |
+| `elementOrder`, `display.mergeGroups` | The parts in each `--show`, in order. Repeat `--show` for more rows. |
+| `lineLayout`: `compact` | All the parts in one `--show`. `--compact` also takes the spaces out round `│` and shortens the labels. |
+| `display.rightAlign` | `--right <parts>` |
+| `display.showModel`, `display.showProvider` | `model`, with the provider after it when requests do not go to the Anthropic API. |
+| `display.showEffortLevel` | `effort` |
+| `display.showProject`, `pathLevels` | `repo` for owner/name, or `dir` for the folder name. |
+| `display.showContextBar`, `display.contextValue` | `ctx`, which shows the percentage, a bar and the token count. `--no-bars` drops every bar. |
+| `display.showUsage`, `display.usageBarEnabled` | `5h` and `7d`. `--no-bars` drops the bars. |
+| `display.usagePace` | The pace marker `┃` on the `5h` and `7d` bars, on by default. `--no-pace` drops it. |
+| `display.showModelScopedUsage` | `models`, and `limit` for a window at 100%. |
+| `display.timeFormat`, `display.showResetLabel` | `5h` shows its reset as a time and `7d` as days. `--no-reset` drops the resets. |
+| `display.hourCycle` | `--12h` for the 12-hour clock. The default is 24-hour. |
+| `gitStatus.enabled`, `gitStatus.showDirty`, `gitStatus.showAheadBehind` | `branch`, which always shows `*` for changes and `↑n ↓n` against its upstream. |
+| `gitStatus.showFileStats` | `git`: `!2 +1 ✘1 ?3` |
+| `gitStatus.showWorktree` | `worktree`. `branch` names the worktree too. |
+| `display.showTools` | `tools` |
+| `display.showAgents` | `agents` |
+| `display.showTodos` | `todos` |
+| `display.showSkills`, `display.showMcp` | `skills`, which shows the skills and then the MCP servers. |
+| `display.showConfigCounts` | `env` |
+| `display.showAuth`, `display.showAuthUser` | `plan` |
+| `display.showCost` | `cost` |
+| `display.showDailyCost` | `today` |
+| `display.showWeeklyCost` | `week`, which counts from Monday rather than from the start of the 7-day window. |
+| `display.showDuration` | `duration` |
+| `display.showSpeed` | `speed` |
+| `display.showSessionName` | `name` |
+| `display.showOutputStyle` | `style` |
+| `display.showLastResponseAt` | `reply` |
+| `display.showCompactions` | `compactions` |
+| `display.showClaudeCodeVersion` | `version` |
+| `display.showMemoryUsage` | `ram` |
+| `display.showPromptCache`, `display.showCacheHitRate` | `cache`: the hit ratio and whether the cache is warm. |
+| `display.customLine` | `text`, with `--text <text>`. |
+| `--extra-cmd` | `command`, with `--command <command>`. See [Memory, text and command](#memory-text-and-command). |
+| `colors.*` | `--theme <name>` for every part at once, and `--color <part>=<colour>` for one part. |
+| `colors.barFilled`, `colors.barEmpty` | `--bar-filled <char>`, `--bar-empty <char>` |
+| `refreshInterval` in `settings.json` | The same, next to claude-gauge's command. See [Keeping time-based parts fresh](#keeping-time-based-parts-fresh). |
+
+These claude-hud options have no claude-gauge equivalent: `language`, `jjStatus.*`, `display.showAddedDirs`, `display.modelOverride`, `display.showAdvisor`, the thresholds that hide a part until it reaches a value (`display.usageThreshold`, `display.sevenDayThreshold`, `display.environmentThreshold`), and the external usage files (`display.externalUsagePath`, `display.externalUsageWritePath`). claude-gauge's parts show whenever a `--show` names them and they have something to report.
+
+## Development
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the setup, the tests, the rules for a change, and the branch and commit conventions.
+
+Both lines are TypeScript modules in `src/`, built to the self-contained Node.js files in `dist/` that the settings entries above run. The `claude-gauge` command in `src/cli.ts` builds to `dist/cli.js`. A clone of `main` works without a build, because the `dist` workflow commits the build to `main` after each merge. [Bun](https://bun.sh) runs the sources directly, with the same output as the build: `bun src/statusline.ts`.
 
 To try the status line by hand, pipe it a sample of the JSON that Claude Code sends:
 
@@ -489,6 +612,10 @@ The full input format is in the [status line docs](https://code.claude.com/docs/
 ### Releases
 
 Releases use [VerBump](https://github.com/jv-k/VerBump), and the tests must pass first. VerBump tags the version, and the `release` workflow then creates the GitHub release from the changelog and publishes the package to npm with provenance. [RELEASING.md](RELEASING.md) gives the steps.
+
+## Star history
+
+[![Star history of jv-k/claude-gauge](https://api.star-history.com/svg?repos=jv-k/claude-gauge&type=Date)](https://star-history.com/#jv-k/claude-gauge&Date)
 
 ## License
 

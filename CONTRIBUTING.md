@@ -37,7 +37,8 @@ pnpm test
 | `dist/` | The built files: the two scripts that users' settings run, the launcher, and the `claude-gauge` command. `pnpm build` writes them. The `dist` workflow commits them to `main`. |
 | `test/` | The suites, one per line, one each for `plan()`, the `claude-gauge` command and its wizard, the plugin suites, which check the plugin route and launcher and the plugin's manifests and commands, and the git suite, which checks the git parts against injected and real git output; the parity suite, which checks the README examples against the build; the README sync suite, which checks the README's status line tables against the registry; the snapshot suite, which checks the status line against the golden snapshots in `test/snapshots/`; the themes suite, which checks the default rows in every theme against the golden snapshots in `test/snapshots/themes/`; and the release suites, which check the release notes script and what npm would publish. |
 | `scripts/release-notes.js` | Prints a version's section of `CHANGELOG.md`, which the `release` workflow uses as the GitHub release notes. It is not part of the package. |
-| `README.md` | The user docs: every part and every switch. |
+| `README.md` | The user docs: every part and every switch, both install routes, and the claude-hud migration table. |
+| `docs/media/` | The README's hero image of the default rows and its demo GIF of the setup wizard. They are not part of the package. |
 | `.claude-plugin/` | The plugin marketplace that `/plugin marketplace add jv-k/claude-gauge` reads, and the plugin's manifest. The repository root is the plugin. |
 | `commands/` | The plugin's slash commands: `/claude-gauge:setup`, `/claude-gauge:configure` and `/claude-gauge:uninstall`. Each has Claude ask its questions, then runs the `claude-gauge` command. |
 | `INSTALL-WITH-CLAUDE.md` | The steps Claude follows when a user asks it to install claude-gauge. |
