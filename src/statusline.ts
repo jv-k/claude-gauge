@@ -110,6 +110,7 @@ const partRegistry = {
   week: { description: "this week's spend across sessions, from the cost ledger", build: (ctx) => spentPart('week', ctx) },
   tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, cwd }) => toolsPart(activity(), cwd) },
   agents: { description: 'running subagents, and those finished in the last minute', build: ({ activity, nowMs }) => agentsPart(activity(), nowMs) },
+  todos: { description: 'the todo in progress, and how many todos are done', build: ({ activity, config }) => todosPart(activity(), config) },
   env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
   plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
   ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, memory }) => ramPart(memory(), config) },
@@ -821,6 +822,20 @@ function agentsPart(activity: TranscriptActivity, nowMs: number): string {
     .join(' ');
 }
 
+// The todo in progress, by the form Claude Code shows while it runs, then
+// how many todos are done: ◐ Writing the tests 1/3. With none in progress,
+// todos 1/3, and ✓ todos 3/3 once all are done.
+function todosPart(activity: TranscriptActivity, config: Config): string {
+  const { todos } = activity;
+  if (!todos.length) return '';
+  const done = todos.filter((t) => t.status === 'completed').length;
+  const count = `${done}/${todos.length}`;
+  const now = todos.find((t) => t.status === 'in_progress');
+  if (now) return `${YELLOW}◐ ${cut(now.activeForm || now.content, DESCRIPTION_CHARS)}${RESET} ${GRAY}${count}${RESET}`;
+  const text = `${GRAY}${labelOf(config, 'todos')}${count}${RESET}`;
+  return done === todos.length ? `${GREEN}✓${RESET} ${text}` : text;
+}
+
 // env and plan: what Claude Code loads into a session, and the account, read
 // from the files it reads them from. Only local files, never the network or
 // the macOS Keychain, and a file that is missing or not JSON counts as empty.
@@ -1442,20 +1457,31 @@ interface AgentRun {
   failed?: boolean;
 }
 
+// A todo of the session's list: what to do, the form Claude Code shows
+// while it is in progress, and its status.
+interface Todo {
+  content: string;
+  activeForm?: string;
+  status: TodoStatus;
+}
+
+type TodoStatus = 'pending' | 'in_progress' | 'completed';
+
 // What a transcript shows: the tool calls still running, oldest first, how
-// many calls of each tool have completed, and the subagents, in the order
-// they started.
+// many calls of each tool have completed, the subagents, in the order they
+// started, and the todo list, in its order.
 interface TranscriptActivity {
   tools: { running: ToolCall[]; completed: Record<string, number> };
   agents: AgentRun[];
+  todos: Todo[];
 }
 
-const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [] });
+const emptyActivity = (): TranscriptActivity => ({ tools: { running: [], completed: {} }, agents: [], todos: [] });
 
 // Activity with every name and target sanitised. Two tool names that differ
 // only in control codes count as one.
-// A reader handed in from JavaScript may leave the agents out.
-function sanitiseActivity({ tools, agents = [] }: TranscriptActivity): TranscriptActivity {
+// A reader handed in from JavaScript may leave the agents and todos out.
+function sanitiseActivity({ tools, agents = [], todos = [] }: TranscriptActivity): TranscriptActivity {
   const running = tools.running.map(({ name, target }) => ({ name: sanitise(name), ...(target ? { target: sanitise(target) } : {}) }));
   const completed: Record<string, number> = {};
   for (const [name, count] of Object.entries(tools.completed)) completed[sanitise(name)] = (completed[sanitise(name)] ?? 0) + count;
@@ -1465,12 +1491,17 @@ function sanitiseActivity({ tools, agents = [] }: TranscriptActivity): Transcrip
     ...(model ? { model: sanitise(model) } : {}),
     ...(description ? { description: sanitise(description) } : {}),
   }));
-  return { tools: { running, completed }, agents: cleanAgents };
+  const cleanTodos = todos.map(({ content, activeForm, status }) => ({
+    content: sanitise(content),
+    ...(activeForm ? { activeForm: sanitise(activeForm) } : {}),
+    status,
+  }));
+  return { tools: { running, completed }, agents: cleanAgents, todos: cleanTodos };
 }
 
 // What the reader keeps between renders. version changes when the shape
 // does, so a state from an older claude-gauge is rebuilt, not misread.
-const TRANSCRIPT_STATE_VERSION = 2;
+const TRANSCRIPT_STATE_VERSION = 3;
 
 interface TranscriptState {
   version: number;
@@ -1489,6 +1520,21 @@ interface TranscriptState {
   // they started. One in the background keeps running past its call's
   // result, until its task notification.
   agents: AgentEntry[];
+  // The todo list, in its order, and the calls to the todo tools with no
+  // result yet: a call changes the list once its result says it worked.
+  todos: TodoEntry[];
+  todoCalls: TodoCall[];
+}
+
+// A todo as the reader keeps it: by the id the task tools gave it, if any.
+type TodoEntry = Todo & { id?: string };
+
+// A call to a todo tool, kept until its result comes: its id, the tool and
+// what it was asked to write.
+interface TodoCall {
+  id: string;
+  name: string;
+  input: unknown;
 }
 
 // A subagent as the reader keeps it: by the id of the call that started it,
@@ -1497,11 +1543,16 @@ type AgentEntry = AgentRun & { id: string; background?: boolean };
 
 // The ended calls kept at most, newest first: a call whose result never
 // came must not grow the state for ever. Running calls are all kept, so a
-// large parallel batch counts in full. Ended subagents are capped the same.
+// large parallel batch counts in full. Ended subagents are capped the same,
+// and so are the todo tools' calls that wait for a result.
 const ENDED_KEPT = 20;
 
 // The tool that starts a subagent: Agent, named Task before Claude Code 2.1.
 const AGENT_TOOLS = ['Agent', 'Task'];
+
+// The tools that write the todo list: TodoWrite replaces it whole, and the
+// task tools that replaced it in Claude Code 2.1 add a task and change one.
+const TODO_TOOLS = ['TodoWrite', 'TaskCreate', 'TaskUpdate'];
 
 // The fs calls the reader makes, so a test can count the bytes it reads.
 type TranscriptFs = Pick<typeof fs, 'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync'>;
@@ -1533,6 +1584,7 @@ interface ContentBlock {
   tool_use_id?: unknown;
   is_error?: unknown;
   text?: unknown;
+  content?: unknown;
 }
 
 // A record's time in ms since the epoch, if it has a valid one.
@@ -1604,6 +1656,70 @@ function taskNotification(record: TranscriptRecord): { id?: string; status?: str
   };
 }
 
+// A status the todo tools write, or undefined for any other value.
+const todoStatus = (value: unknown): TodoStatus | undefined =>
+  value === 'pending' || value === 'in_progress' || value === 'completed' ? value : undefined;
+
+// A field that holds text, not only white space.
+const textAt = (value: unknown, key: string): string | undefined => (stringAt(value, key)?.trim() ? stringAt(value, key) : undefined);
+
+// A field that holds an id, as a string or a number, as a string.
+const idAt = (value: unknown, key: string): string | undefined => {
+  const field = isObject(value) ? value[key] : undefined;
+  return typeof field === 'number' ? String(field) : stringAt(value, key);
+};
+
+// A todo from the fields a todo tool names, or undefined when it has no text.
+function todoOf(content: string | undefined, activeForm: string | undefined, status: TodoStatus, id?: string): TodoEntry | undefined {
+  if (!content) return undefined;
+  return { ...(id ? { id } : {}), content, ...(activeForm ? { activeForm } : {}), status };
+}
+
+// The todos a TodoWrite call writes. One with no text drops out, and one
+// with a status the part does not know counts as pending.
+function writtenTodos(input: JsonObject): TodoEntry[] {
+  const todos = Array.isArray(input.todos) ? input.todos : [];
+  return todos.flatMap((todo) => {
+    const status = (isObject(todo) && todoStatus(todo.status)) || 'pending';
+    return todoOf(textAt(todo, 'content'), textAt(todo, 'activeForm'), status) ?? [];
+  });
+}
+
+// The id of the task a TaskCreate result names: from its data, else from
+// its text, Task #7 created successfully.
+function createdTaskId(block: ContentBlock, record: TranscriptRecord): string | undefined {
+  const task = isObject(record.toolUseResult) ? record.toolUseResult.task : undefined;
+  return idAt(task, 'id') ?? /Task #(\S+) created/.exec(textOf(block.content))?.[1];
+}
+
+// A todo tool's call applied to the list, once its result says it worked:
+// TodoWrite replaces the list, TaskCreate adds a pending task, and
+// TaskUpdate changes one, or drops it when it is deleted.
+function applyTodoCall(state: TranscriptState, todoCall: TodoCall, block: ContentBlock, record: TranscriptRecord): void {
+  if (block.is_error === true || (isObject(record.toolUseResult) && record.toolUseResult.success === false)) return;
+  const input = isObject(todoCall.input) ? todoCall.input : {};
+  if (todoCall.name === 'TodoWrite') {
+    state.todos = writtenTodos(input);
+  } else if (todoCall.name === 'TaskCreate') {
+    const task = todoOf(textAt(input, 'subject'), textAt(input, 'activeForm'), 'pending', createdTaskId(block, record));
+    if (task) state.todos = [...state.todos, task];
+  } else if (todoCall.name === 'TaskUpdate') {
+    const id = idAt(input, 'taskId');
+    const task = id === undefined ? undefined : state.todos.find((t) => t.id === id);
+    if (!task) return;
+    if (input.status === 'deleted') {
+      state.todos = state.todos.filter((t) => t !== task);
+      return;
+    }
+    const status = todoStatus(input.status);
+    if (status) task.status = status;
+    const content = textAt(input, 'subject');
+    if (content) task.content = content;
+    const activeForm = textAt(input, 'activeForm');
+    if (activeForm) task.activeForm = activeForm;
+  }
+}
+
 // The ended subagents past the newest ENDED_KEPT drop out; running ones stay.
 function capAgents(state: TranscriptState): void {
   let ended = 0;
@@ -1644,9 +1760,15 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
       const target = toolTarget(block.input);
       state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}) }];
       if (AGENT_TOOLS.includes(block.name)) startAgent(state, block, at);
+      if (TODO_TOOLS.includes(block.name)) state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
     } else if (record.type === 'user' && block.type === 'tool_result') {
       const agent = state.agents.find((a) => a.id === block.tool_use_id);
       if (agent) agentResult(agent, block, record, at);
+      const todoCall = state.todoCalls.find((c) => c.id === block.tool_use_id);
+      if (todoCall) {
+        state.todoCalls = state.todoCalls.filter((c) => c !== todoCall);
+        applyTodoCall(state, todoCall, block, record);
+      }
       const call = state.pending.find((p) => p.id === block.tool_use_id);
       if (!call) continue;
       state.pending = state.pending.filter((p) => p !== call);
@@ -1698,6 +1820,8 @@ function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptSta
       Number.isInteger(state.offset) &&
       Array.isArray(state.pending) &&
       Array.isArray(state.agents) &&
+      Array.isArray(state.todos) &&
+      Array.isArray(state.todoCalls) &&
       state.completed &&
       typeof state.completed === 'object';
     return valid ? state : undefined;
@@ -1740,7 +1864,7 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
   const state: TranscriptState = unchanged
     ? saved
-    : { version: TRANSCRIPT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0, pending: [], completed: {}, agents: [] };
+    : { version: TRANSCRIPT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0, pending: [], completed: {}, agents: [], todos: [], todoCalls: [] };
 
   if (stat.size > state.offset || !unchanged) {
     state.offset = readLines(io, file, state.offset, stat.size, (line) => {
@@ -1756,7 +1880,8 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   }
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
   const agents = state.agents.map(({ id, background, ...agent }) => agent);
-  return { tools: { running, completed: { ...state.completed } }, agents };
+  const todos = state.todos.map(({ id, ...todo }) => todo);
+  return { tools: { running, completed: { ...state.completed } }, agents, todos };
 }
 
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
@@ -1936,7 +2061,7 @@ export {
   COMMAND_TIMEOUT_MS,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Setup, Memory };
+export type { StatusData, Config, Overrides, Part, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, Setup, Memory };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
