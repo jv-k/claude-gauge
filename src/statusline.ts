@@ -10,9 +10,11 @@
 //
 // Almost everything comes from Claude Code's own payload
 // (https://code.claude.com/docs/en/statusline): `rate_limits` carries the
-// claude.ai 5-hour and 7-day windows. The only side call is
-// `git branch --show-current`. The env and plan parts read Claude Code's own
-// config files, and the model part reads the provider from the environment.
+// claude.ai 5-hour and 7-day windows. The side calls are
+// `git branch --show-current`, `vm_stat` for the ram part on macOS, and the
+// command --command names, for the command part. The env and plan parts read
+// Claude Code's own config files, and the model part reads the provider from
+// the environment.
 //
 // The parts it can show are in PART_REGISTRY and the switches it takes in
 // SWITCHES, both below. README.md documents each in a table, and a test fails
@@ -21,7 +23,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 
 // What a part's builder reads: the payload, the config, the clock, the
 // folder Claude Code runs in, and the git branch reader. render sanitises the
@@ -40,6 +42,11 @@ interface PartContext {
   // What Claude Code loads for the folder, read from the files on disk the
   // first time a part asks.
   setup: () => Setup;
+  // The system's memory in use, read the first time a part asks.
+  memory: () => Memory | undefined;
+  // The first line of output of the command --command names, run the first
+  // time a part asks; not yet sanitised.
+  commandOutput: () => string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -92,6 +99,9 @@ const partRegistry = {
   version: { description: 'Claude Code version', build: ({ data }) => versionPart(data) },
   env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, setup }) => envPart(setup(), config) },
   plan: { description: 'subscription plan and signed-in user', build: ({ setup }) => planPart(setup()) },
+  ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, memory }) => ramPart(memory(), config) },
+  text: { description: 'fixed text, with --text', build: ({ config }) => outsideText(config.text) },
+  command: { description: 'first line of output of a shell command, with --command', build: ({ commandOutput }) => outsideText(commandOutput()) },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -123,6 +133,11 @@ interface Config {
   compact: boolean;
   // The parts --right moves to the end of their row.
   right: Part[];
+  // What the text part prints, as --text gives it: not yet sanitised.
+  text: string;
+  // The shell command the command part runs, as --command gives it; none
+  // when empty.
+  command: string;
 }
 
 // What parseArgs returns and render takes: any subset of the config, with
@@ -139,6 +154,8 @@ const DEFAULTS: Config = {
   hour12: false,
   compact: false,
   right: [],
+  text: '',
+  command: '',
 };
 
 interface Switch {
@@ -176,6 +193,13 @@ const SWITCHES: readonly Switch[] = [
     apply: (config, value) => {
       config.right = [...(config.right ?? []), ...value.split(',').map((p) => p.trim()).filter(isPart)];
     },
+  },
+  { name: '--text', value: '<text>', description: 'the text the text part shows', apply: (config, value) => { config.text = value; } },
+  {
+    name: '--command',
+    value: '<command>',
+    description: 'the shell command the command part runs, with a short timeout',
+    apply: (config, value) => { config.command = value; },
   },
   { name: '--latest', description: "print the calling session's rows from its transcript, as plain text" },
   { name: '--window', value: '<size>', description: 'with --latest: the context window size, such as 200k or 1m' },
@@ -339,14 +363,14 @@ const cellsFor = (pct: number, segments: number) => {
   return '▓'.repeat(filled) + '░'.repeat(segments - filled);
 };
 
+// A program's output, with no input and a one-second timeout. Throws when
+// the program fails.
+const runQuietly = (command: string, args: string[], cwd?: string) =>
+  execFileSync(command, args, { cwd, timeout: 1000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+
 function git(cwd: string, args: string[]): string {
   try {
-    return execFileSync('git', args, {
-      cwd,
-      timeout: 1000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    return runQuietly('git', args, cwd).trim();
   } catch {
     return ''; // not a repository, or git is missing
   }
@@ -625,6 +649,29 @@ function planPart({ plan, user }: Setup): string {
   return shown ? `${GRAY}${shown}${RESET}` : '';
 }
 
+// Bytes in gibibytes, as the OS monitors count them: 0.4G, 10.5G, 120G.
+const gib = (bytes: number) => {
+  const n = bytes / 1024 ** 3;
+  return `${n >= 100 ? Math.round(n) : n.toFixed(1)}G`;
+};
+
+// The memory in use in the ctx part's shape: ram 66% ▓▓▓░░ 10.5G, on the
+// usage colours.
+function ramPart(memory: Memory | undefined, config: Config): string {
+  if (!memory) return '';
+  const pct = (memory.used * 100) / memory.total;
+  const bar = config.bars ? ` ${cellsFor(pct, config.segments)}` : '';
+  return `${levelColor(Math.round(pct))}${labelOf(config, 'ram')}${Math.round(pct)}%${bar} ${gib(memory.used)}${RESET}`;
+}
+
+// The text and command parts: text from --text or from the command's
+// output. Neither comes through render's sanitised payload, so the part
+// sanitises it here.
+function outsideText(raw: string): string {
+  const text = sanitise(raw);
+  return text ? `${GRAY}${text}${RESET}` : '';
+}
+
 const versionPart = (data: StatusData) => (data.version ? `${GRAY}v${data.version}${RESET}` : '');
 
 // env and plan: what Claude Code loads into a session, and the account, read
@@ -787,12 +834,129 @@ function readSetup(
   };
 }
 
+// ram: the system's memory in use, in bytes, read the way each OS's own
+// monitor reads it. Only local figures, from Node, a file or one short
+// command.
+interface Memory {
+  used: number;
+  total: number;
+}
+
+// Where readMemory reads from, for tests to replace: the OS, Node's figures,
+// a file reader and a command runner.
+interface MemorySources {
+  platform?: string;
+  totalmem?: () => number;
+  freemem?: () => number;
+  readFile?: (file: string) => string;
+  run?: (command: string, args: string[]) => string;
+}
+
+// A number after a name in text such as /proc/meminfo or vm_stat's output.
+const figureAfter = (text: string, name: string): number | undefined => {
+  const m = new RegExp(`^${name}:\\s*(\\d+)`, 'm').exec(text);
+  return m ? Number(m[1]) : undefined;
+};
+
+// Memory in use, or undefined when the total is unknown. Linux counts what
+// is not MemAvailable as used, so the page cache the kernel gives back on
+// demand stays out. macOS counts app memory, wired and compressed pages from
+// vm_stat, as Activity Monitor does, because Node's free figure there leaves
+// out the inactive pages and reads close to full. Windows, and any OS or
+// reading that fails, take Node's figures, which on Windows are the
+// available memory already.
+function readMemory({
+  platform = process.platform,
+  totalmem = os.totalmem,
+  freemem = os.freemem,
+  readFile = (file) => fs.readFileSync(file, 'utf8'),
+  run = runQuietly,
+}: MemorySources = {}): Memory | undefined {
+  const attempt = <T>(read: () => T): T | undefined => {
+    try {
+      return read();
+    } catch {
+      return undefined;
+    }
+  };
+  let reading: Memory | undefined;
+  if (platform === 'linux') {
+    const meminfo = attempt(() => readFile('/proc/meminfo')) ?? '';
+    const total = figureAfter(meminfo, 'MemTotal');
+    const available = figureAfter(meminfo, 'MemAvailable');
+    if (total && available != null) reading = { used: (total - available) * 1024, total: total * 1024 };
+  } else if (platform === 'darwin') {
+    const vmStat = attempt(() => run('vm_stat', [])) ?? '';
+    const pageSize = Number(/page size of (\d+) bytes/.exec(vmStat)?.[1]);
+    const anonymous = figureAfter(vmStat, 'Anonymous pages');
+    const wired = figureAfter(vmStat, 'Pages wired down');
+    const compressed = figureAfter(vmStat, 'Pages occupied by compressor') ?? 0;
+    const purgeable = figureAfter(vmStat, 'Pages purgeable') ?? 0;
+    const total = attempt(totalmem) ?? 0;
+    if (pageSize && anonymous != null && wired != null && total) {
+      reading = { used: (Math.max(0, anonymous - purgeable) + wired + compressed) * pageSize, total };
+    }
+  }
+  if (!reading) {
+    const total = attempt(totalmem) ?? 0;
+    const free = attempt(freemem) ?? 0;
+    if (total > 0) reading = { used: total - free, total };
+  }
+  return reading && { used: Math.min(reading.total, Math.max(0, reading.used)), total: reading.total };
+}
+
+// command: the one part that runs a command the user names. It runs only
+// when --command names one and a row shows the part, in the folder Claude
+// Code runs in, with no input. It has COMMAND_TIMEOUT_MS to finish, and is
+// then killed, so a slow or hung command costs the status line that long and
+// no longer. Its output is cut to the first line with text in it, and
+// capped at MAX_COMMAND_OUTPUT bytes; failure, a timeout or empty output
+// shows nothing.
+const COMMAND_TIMEOUT_MS = 500;
+const MAX_COMMAND_OUTPUT = 64 * 1024;
+
+function runCommand(command: string, cwd: string): string {
+  // Outside Windows the shell leads a process group of its own, so that
+  // whatever the command starts can be stopped with it.
+  // Node 18 and Bun take detached in spawnSync, though Node's types list it
+  // for spawn only.
+  const grouped = process.platform !== 'win32';
+  const options: SpawnSyncOptionsWithStringEncoding & { detached: boolean } = {
+    shell: true,
+    detached: grouped,
+    cwd,
+    timeout: COMMAND_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    maxBuffer: MAX_COMMAND_OUTPUT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  };
+  const result = spawnSync(command, options);
+  // The timeout kills the shell alone, and a job it put in the background
+  // outlives it, so stop the whole group, finished or not.
+  if (grouped && result.pid) {
+    try {
+      process.kill(-result.pid, 'SIGKILL');
+    } catch {
+      /* the group has exited already */
+    }
+  }
+  // Failed, timed out, too much output, or no such folder.
+  if (result.error || result.status !== 0) return '';
+  // The first line with text left once sanitised, so a line of control codes
+  // alone does not hide the line after it. The part sanitises what it shows.
+  return result.stdout.split(/\r?\n/).find((line) => sanitise(line).trim())?.trim() ?? '';
+}
+
 interface RenderOptions {
   config?: Overrides;
   nowMs?: number;
   branchOf?: (cwd: string) => string;
   env?: Env;
   setupOf?: (cwd: string) => Setup;
+  memoryOf?: () => Memory | undefined;
+  commandOutputOf?: (command: string, cwd: string) => string;
   // The terminal's width in columns, when it is known.
   columns?: number;
 }
@@ -844,13 +1008,24 @@ function joinRow(shown: ShownPart[], separator: string, right: readonly string[]
 
 function render(
   data: StatusData,
-  { config: overrides = {}, nowMs = Date.now(), branchOf = gitBranch, env = process.env, setupOf, columns }: RenderOptions = {},
+  {
+    config: overrides = {},
+    nowMs = Date.now(),
+    branchOf = gitBranch,
+    env = process.env,
+    setupOf,
+    memoryOf = readMemory,
+    commandOutputOf = runCommand,
+    columns,
+  }: RenderOptions = {},
 ): string {
   const merged = { ...DEFAULTS, ...overrides };
   const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
 
   let setup: Setup | undefined;
+  let memory: { reading: Memory | undefined } | undefined;
+  let commandOutput: string | undefined;
   const input: PartContext = {
     data: sanitiseAll(data),
     config,
@@ -867,6 +1042,9 @@ function render(
       }
       return setup;
     },
+    memory: () => (memory ??= { reading: memoryOf() }).reading,
+    // Nothing runs without a command, and a command runs once per render.
+    commandOutput: () => (commandOutput ??= config.command ? commandOutputOf(config.command, cwd) : ''),
   };
 
   const separator = `${GRAY}${config.compact ? '│' : ' │ '}${RESET}`;
@@ -1084,9 +1262,12 @@ export {
   instruction,
   INSTRUCT_HOSTS,
   readSetup,
+  readMemory,
+  runCommand,
+  COMMAND_TIMEOUT_MS,
 };
 
-export type { StatusData, Config, Overrides, Part, TranscriptRecord, Setup };
+export type { StatusData, Config, Overrides, Part, TranscriptRecord, Setup, Memory };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs
