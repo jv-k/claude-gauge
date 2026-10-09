@@ -17,8 +17,8 @@ const root = path.join(__dirname, '..');
 const hasBun = spawnSync('bun', ['--version'], { encoding: 'utf8' }).status === 0;
 const requireBun = process.env.REQUIRE_BUN === '1';
 const withoutBun = !hasBun && !requireBun && 'bun is not installed';
-const needBun = () => {
-  if (!hasBun) assert.fail('Bun is required (REQUIRE_BUN=1) but bun is not on the PATH');
+const failWithoutBun = () => {
+  if (requireBun && !hasBun) assert.fail('Bun is required (REQUIRE_BUN=1) but bun is not on the PATH');
 };
 
 // The model part names the API provider from the environment, so the suite
@@ -124,21 +124,22 @@ test('the built token line prints the README example as a Stop hook message', ()
 });
 
 test('bun runs the status line from source with the same bytes as the build', { skip: withoutBun }, () => {
-  needBun();
+  failWithoutBun();
   for (const [args, , columns] of statusExamples) {
     assert.equal(bun('statusline', args, payload, columns), node('statusline', args, payload, columns), args.join(' '));
   }
 });
 
 test('bun runs the token line from source with the same bytes as the build', { skip: withoutBun }, () => {
-  needBun();
+  failWithoutBun();
   for (const [args] of tokenExamples) {
     assert.equal(bun('tokenline', args, hook), node('tokenline', args, hook), args.join(' '));
   }
 });
 
 // The suite again in a child process, with only its Bun cases and an empty
-// folder for PATH, so bun is not found. Bun runs the suites with its own
+// folder for PATH and the working folder, so bun is not found: Windows looks
+// in the working folder before PATH. Bun runs the suites with its own
 // runner, which has no --test switch, so these two checks run under Node.
 const underBun = Boolean(process.versions.bun) && "the child run needs Node's test runner";
 const runBunCasesWithoutBun = (extra) => {
@@ -147,7 +148,7 @@ const runBunCasesWithoutBun = (extra) => {
   return spawnSync(
     process.execPath,
     ['--test', '--test-reporter=tap', '--test-name-pattern=^bun runs', __filename],
-    { env: { ...childEnv, ...extra, PATH: empty }, encoding: 'utf8' },
+    { cwd: empty, env: { ...childEnv, ...extra, PATH: empty }, encoding: 'utf8' },
   );
 };
 
