@@ -30,9 +30,11 @@ pnpm test
 | `src/statusline.ts` | The status line. |
 | `src/tokenline.ts` | The token line. |
 | `dist/` | The two built files that users' settings run. `pnpm build` writes them. The `dist` workflow commits them to `main`. |
-| `test/` | The suites, one per line; the parity suite, which checks the README examples against the build; and the README sync suite, which checks the README's status line tables against the registry. |
+| `test/` | The suites, one per line; the parity suite, which checks the README examples against the build; and the README sync suite, which checks the README's status line tables against the registry; and the release suites, which check the release notes script and what npm would publish. |
+| `scripts/release-notes.js` | Prints a version's section of `CHANGELOG.md`, which the `release` workflow uses as the GitHub release notes. It is not part of the package. |
 | `README.md` | The user docs: every part and every switch. |
 | `INSTALL-WITH-CLAUDE.md` | The steps Claude follows when a user asks it to install claude-gauge. |
+| `.github/workflows/` | The `dist` workflow, which commits the build to `main`, and the `release` workflow, which publishes a release from a version tag. |
 | `docs/agents/` | How agent skills use the issue tracker, the triage labels and the domain docs. |
 
 ## Rules for a change
