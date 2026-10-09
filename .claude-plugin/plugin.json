@@ -1,0 +1,12 @@
+{
+  "name": "claude-gauge",
+  "description": "A status line and a token line for Claude Code: context, 5-hour and weekly usage with pace markers. Run /claude-gauge:setup to add them.",
+  "author": {
+    "name": "John Valai",
+    "url": "https://github.com/jv-k"
+  },
+  "homepage": "https://github.com/jv-k/claude-gauge",
+  "repository": "https://github.com/jv-k/claude-gauge",
+  "license": "MIT",
+  "keywords": ["statusline", "status-line", "usage", "context", "tokens"]
+}

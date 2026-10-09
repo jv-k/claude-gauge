@@ -4,14 +4,32 @@
   "description": "A status line and a token line for Claude Code: context, 5-hour and weekly usage with pace markers.",
   "license": "MIT",
   "author": "John Valai",
-  "repository": "github:jv-k/claude-gauge",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jv-k/claude-gauge.git"
+  },
+  "bin": {
+    "claude-gauge": "dist/cli.js",
+    "claude-gauge-statusline": "dist/statusline.js",
+    "claude-gauge-tokenline": "dist/tokenline.js"
+  },
+  "files": [
+    "dist"
+  ],
   "packageManager": "pnpm@10.27.0",
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test test/",
-    "bump-release": "verbump --release --push origin"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint --error-on-warnings",
+    "test": "pnpm build && node scripts/test.js",
+    "bump-release": "verbump --push origin"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "^18.19.130",
+    "typescript": "^5.9.3"
   }
 }

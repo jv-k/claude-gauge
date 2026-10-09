@@ -1,0 +1,129 @@
+# Runs the suite on Node 18, 20 and 22 and on Bun, each on Linux, macOS and
+# Windows, and the typecheck, the linter and a coverage report beside it. Any
+# failing job turns the check red. A new push to a pull request cancels the
+# run it supersedes. Each push to main has a group of its own, so no run on
+# main is cancelled, queued or running.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, integration/1.0]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test on ${{ matrix.runtime == 'bun' && 'Bun' || format('Node {0}', matrix.runtime) }}, ${{ matrix.os }}
+    strategy:
+      # Every leg runs to the end, so one red leg does not hide another.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        runtime: ['18', '20', '22', bun]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      # The Bun leg installs and builds with Node 22 too: pnpm and tsc run on
+      # Node, and the suite then runs under Bun.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.runtime == 'bun' && '22' || matrix.runtime }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build and run the suite under Node
+        if: matrix.runtime != 'bun'
+        run: pnpm test
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.runtime == 'bun'
+        with:
+          # The version the suite was last proven on. Raise it on purpose.
+          bun-version: 1.4.2
+      - name: Build with tsc
+        if: matrix.runtime == 'bun'
+        run: pnpm build
+      # Bun runs the node:test suites with its own runner. The suites spawn
+      # the built lines with process.execPath, so those run under Bun too.
+      # Bun stops a test after 5 seconds and Node's runner never does, so the
+      # timeout is raised for the suites that spawn many commands on Windows.
+      # REQUIRE_BUN=1 makes the parity suite fail its Bun cases where bun is
+      # missing, so a failed Bun install cannot pass as a skip.
+      - name: Run the suite under Bun
+        if: matrix.runtime == 'bun'
+        env:
+          REQUIRE_BUN: '1'
+        run: bun test --timeout 60000 ./test/
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # Coverage counts the built lines the suites load in their own process.
+      # A line run as a child process, as the CLI suites do, is not counted.
+      # bash, named, runs with pipefail, so a failing suite fails the step
+      # through tee.
+      - name: Run the suite with coverage
+        shell: bash
+        run: |
+          mkdir -p coverage
+          node scripts/test.js --experimental-test-coverage --test-coverage-include='dist/**' \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=lcov --test-reporter-destination=coverage/lcov.info \
+            | tee coverage/report.txt
+      - name: Add the coverage table to the job summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo '## Coverage'
+            echo
+            echo '```text'
+            sed -n '/start of coverage report/,/end of coverage report/p' coverage/report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: error
