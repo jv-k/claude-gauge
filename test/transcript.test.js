@@ -177,6 +177,18 @@ test('a result that arrives after a prompt still counts', () => {
   assert.equal(renderTools(file), '✓ Bash ×1');
 });
 
+test('every call in a parallel batch counts, however many run at once', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'session.jsonl');
+  const ids = Array.from({ length: 25 }, (_, i) => `r${i}`);
+  fs.writeFileSync(file, jsonl([...ids.map((id) => toolUse(id, 'Read')), ...ids.map((id) => toolResult(id))]));
+  assert.equal(renderTools(file), '✓ Read ×25');
+  // Calls a prompt ended are kept only up to a cap, oldest dropped first, so
+  // a result that never comes cannot grow the state for ever.
+  fs.writeFileSync(file, jsonl([...ids.map((id) => toolUse(id, 'Bash')), prompt('stop'), ...ids.map((id) => toolResult(id))]));
+  assert.equal(renderTools(file), '✓ Bash ×20');
+});
+
 test('tools shows the five most used tools, and long targets cut to 30 characters', () => {
   const completed = { Read: 1, Edit: 9, Bash: 4, Grep: 4, Glob: 2, Write: 7 };
   const running = [{ name: 'Bash', target: 'pnpm exec tsc --noEmit --pretty false --project tsconfig.json' }];

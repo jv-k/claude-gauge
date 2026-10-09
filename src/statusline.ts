@@ -1204,9 +1204,10 @@ interface TranscriptState {
   completed: Record<string, number>;
 }
 
-// The tool calls kept as running at most: a call whose result never came
-// must not grow the state for ever.
-const PENDING_KEPT = 20;
+// The ended calls kept at most, newest first: a call whose result never
+// came must not grow the state for ever. Running calls are all kept, so a
+// large parallel batch counts in full.
+const ENDED_KEPT = 20;
 
 // The fs calls the reader makes, so a test can count the bytes it reads.
 type TranscriptFs = Pick<typeof fs, 'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync'>;
@@ -1246,13 +1247,13 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   const content = record.message?.content;
   const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
   if (record.type === 'user' && !record.isMeta && !blocks.some((b) => b.type === 'tool_result')) {
-    if (typeof content === 'string' || blocks.length) state.pending = state.pending.map((p) => ({ ...p, ended: true }));
+    if (typeof content === 'string' || blocks.length) state.pending = state.pending.map((p) => ({ ...p, ended: true })).slice(-ENDED_KEPT);
     return;
   }
   for (const block of blocks) {
     if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
       const target = toolTarget(block.input);
-      state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}) }].slice(-PENDING_KEPT);
+      state.pending = [...state.pending, { id: block.id, name: block.name, ...(target ? { target } : {}) }];
     } else if (record.type === 'user' && block.type === 'tool_result') {
       const call = state.pending.find((p) => p.id === block.tool_use_id);
       if (!call) continue;
