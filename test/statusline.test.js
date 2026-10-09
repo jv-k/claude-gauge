@@ -641,11 +641,13 @@ test('every part prints hostile payload text without its control codes', () => {
     agent: { name: h('reviewer') },
     prompt_cache: { warm: true, hit_ratio: 0.5 },
     rate_limits: { five_hour: { used_percentage: 10 }, seven_day: { used_percentage: 20 }, spend_limit: { used_percentage: 30 } },
+    transcript_path: '/home/me/session.jsonl',
   };
+  const activity = { tools: { running: [{ name: h('Edit'), target: h('src/a.ts') }], completed: { [h('Read')]: 2 } } };
   const setup = { claudeMd: 1, rules: 0, mcp: 0, hooks: 0, plan: h('Claude Max 20x'), user: h('me@example.com') };
   // The parts that print text from a switch, and the memory reading.
   const args = ['--text', h('label'), '--command', 'ctx'];
-  const options = { memoryOf: () => ({ used: GIB, total: 2 * GIB }), commandOutputOf: () => h('output') };
+  const options = { memoryOf: () => ({ used: GIB, total: 2 * GIB }), commandOutputOf: () => h('output'), transcript: () => activity };
   for (const part of PARTS) assert.ok(renderClean(data, part, h('main'), setup, args, options), part);
   assert.equal(
     renderClean(data, 'model,effort,style,agent,version,lines,ctx'),

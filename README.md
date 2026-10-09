@@ -83,11 +83,14 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 | `cache` | The prompt cache's hit ratio and state: `cache 91% warm`. Green when most requests hit the cache, red when most miss. | After the session's first response. |
 | `spend` | Your spend against the limit: `$314/$500`, or `spend 63%` until Claude Code has the dollar amounts. | Behind a Claude apps gateway with a spend limit. |
 | `version` | The Claude Code version: `v2.1.90`. | Always. |
+| `tools` | The tool running now and what it works on, then the five tools used most this session, with counts: `◐ Edit src/a.ts ✓ Read ×12 ✓ Bash ×3`. A file inside the project shows relative to it, and a target longer than 30 characters is cut with `…`. Subagents' tools are not counted. | Once the session has called a tool. |
 | `env` | What Claude Code loads into the session: `env 2 md 4 rules 3 mcp 2 hooks`, for CLAUDE.md files, rules, MCP servers and hooks. A kind with none stays out. See [Environment and plan](#environment-and-plan). | When anything is loaded. |
 | `plan` | Your claude.ai plan and the account you are signed in with: `Claude Max 20x (me@example.com)`. | When the config names them. |
 | `ram` | The system's memory in use, as a percentage, a bar and the amount in gigabytes: `ram 66% ▓▓▓░░ 10.5G`. It takes the usage colours. See [Memory, text and command](#memory-text-and-command). | Always. |
 | `text` | Fixed text that you give with `--text`, such as a label for the machine: `work laptop`. | With `--text`. |
 | `command` | The first line of output of a shell command that you give with `--command`: `prod-eu`. See [Memory, text and command](#memory-text-and-command) for the rules it runs under. | With `--command`, when the command succeeds in time. |
+
+**Transcript parts.** `tools` reads the session transcript. claude-gauge reads it only when a `--show` names such a part, and then reads only the lines added since the last render. It keeps its place in each transcript in `~/.claude/claude-gauge/.state/transcripts/`, or under `$CLAUDE_CONFIG_DIR` when that is set. A transcript that shrinks or is replaced is read again from the start.
 
 #### Environment and plan
 
