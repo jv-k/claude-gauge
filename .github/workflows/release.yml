@@ -1,0 +1,67 @@
+# Publishes a release from a version tag. VerBump bumps the version, writes
+# CHANGELOG.md, commits, tags vX.Y.Z and pushes; this workflow does the rest.
+# It tests the tagged commit, creates the GitHub release with the tag's
+# CHANGELOG section as its body, and publishes the package to npm with
+# provenance. RELEASING.md gives the whole flow.
+name: release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+
+# One release per tag at a time, and never cancel a publish part way.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Test, create the GitHub release and publish to npm
+    runs-on: ubuntu-latest
+    permissions:
+      # gh release create needs to write the release.
+      contents: write
+      # npm publish --provenance signs with the workflow's OIDC token.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          # Writes an .npmrc that reads the token from NODE_AUTH_TOKEN.
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - name: Check that the tag matches the version in package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::The tag is ${GITHUB_REF_NAME}, but package.json has version ${version}."
+            exit 1
+          fi
+      # Clear dist/ first, so the package holds only what this build writes.
+      # pnpm test builds dist/, then tests it.
+      - run: rm -rf dist && pnpm test
+      # Fails when CHANGELOG.md has no section for the tag, before anything
+      # is public.
+      - name: Take the release notes from CHANGELOG.md
+        run: node scripts/release-notes.js "${GITHUB_REF_NAME}" CHANGELOG.md > "${RUNNER_TEMP}/notes.md"
+      # A rerun after a failed publish finds the release already there.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "The GitHub release ${GITHUB_REF_NAME} already exists."
+          else
+            gh release create "${GITHUB_REF_NAME}" --verify-tag \
+              --title "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/notes.md"
+          fi
+      - name: Publish to npm with provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
