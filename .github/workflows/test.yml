@@ -51,9 +51,11 @@ jobs:
         run: pnpm build
       # Bun runs the node:test suites with its own runner. The suites spawn
       # the built lines with process.execPath, so those run under Bun too.
+      # Bun stops a test after 5 seconds and Node's runner never does, so the
+      # timeout is raised for the suites that spawn many commands on Windows.
       - name: Run the suite under Bun
         if: matrix.runtime == 'bun'
-        run: bun test ./test/
+        run: bun test --timeout 60000 ./test/
 
   typecheck:
     name: Typecheck
