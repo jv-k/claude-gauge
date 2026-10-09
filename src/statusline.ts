@@ -280,7 +280,6 @@ const THEME_REGISTRY = {
 
 const THEMES = Object.keys(THEME_REGISTRY);
 
-// The preset a --theme names, else the default.
 // A --color value as a colour code: a name such as red or bright-red, a
 // 256-colour number, or a hex colour as #f80 or #ff8800. Anything else is
 // none, so a switch can never print a code of its own.
@@ -313,7 +312,13 @@ const solid = (theme: Theme, color: string): Theme => ({
   info: color,
 });
 
-const themeOf = (name: string): Theme => (Object.hasOwn(THEME_REGISTRY, name) ? (THEME_REGISTRY as Record<string, Theme>)[name] : THEME_REGISTRY.default);
+// A record's own value for a key, never one it inherits, such as
+// constructor: names from switches and the payload reach these lookups.
+const ownValue = <T>(record: Readonly<Record<string, T>>, key: string): T | undefined =>
+  Object.hasOwn(record, key) ? record[key] : undefined;
+
+// The preset a --theme names, else the default.
+const themeOf = (name: string): Theme => ownValue<Theme>(THEME_REGISTRY, name) ?? THEME_REGISTRY.default;
 
 // Terminal escape sequences, whole: CSI (colours, cursor moves, erases), OSC
 // (window titles, hyperlinks, the clipboard), the DCS, SOS, PM and APC
@@ -581,9 +586,10 @@ function namePart(data: StatusData, theme: Theme): string {
   return `${theme.muted}${shown}${RESET}`;
 }
 
-// Model state, in the model's colour, yellow by default. effort is labelled because "high" on
-// its own could mean anything; thinking and fast are their own label and
-// show only when on; style shows only when it is not the default.
+// Model state, in the model's colour, yellow by default. effort is labelled
+// because "high" on its own could mean anything; thinking and fast are their
+// own label and show only when on; style shows only when it is not the
+// default.
 function effortPart(data: StatusData, config: Config, theme: Theme): string {
   const level = data.effort?.level;
   return level ? `${theme.accent}${config.labels ? 'effort ' : ''}${level}${RESET}` : '';
@@ -628,15 +634,17 @@ function worktreePart(data: StatusData, config: Config, theme: Theme): string {
 
 // The branch's open pull request, coloured by its review state. A GitLab
 // merge request takes GitLab's ! prefix instead of #.
-const PR_ROLES: Record<string, 'good' | 'accent' | 'bad' | 'muted'> = { approved: 'good', pending: 'accent', changes_requested: 'bad', draft: 'muted' };
+// The theme's roles that hold one colour.
+type Role = { [K in keyof Theme]: Theme[K] extends string ? K : never }[Exclude<keyof Theme, 'description'>];
+
+const PR_ROLES: Record<string, Role> = { approved: 'good', pending: 'accent', changes_requested: 'bad', draft: 'muted' };
 
 function prPart(data: StatusData, theme: Theme): string {
   const pr = data.pr;
   if (pr?.number == null) return '';
   const number = `${pr.kind === 'mr' ? '!' : '#'}${pr.number}`;
   const state = pr.review_state ? ` ${pr.review_state}` : '';
-  const role = Object.hasOwn(PR_ROLES, pr.review_state ?? '') ? PR_ROLES[pr.review_state ?? ''] : 'muted';
-  return `${theme[role]}${number}${state}${RESET}`;
+  return `${theme[ownValue(PR_ROLES, pr.review_state ?? '') ?? 'muted']}${number}${state}${RESET}`;
 }
 
 function agentPart(data: StatusData, config: Config, theme: Theme): string {
@@ -702,7 +710,7 @@ function render(data: StatusData, { config: overrides = {}, nowMs = Date.now(), 
         // those render as nothing, like every other part with nothing to show.
         .map((part) => {
           if (!isPart(part)) return '';
-          const color = Object.hasOwn(config.colors, part) ? config.colors[part] : undefined;
+          const color = ownValue(config.colors, part);
           return PART_REGISTRY[part].build(color ? { ...input, theme: solid(theme, color) } : input);
         })
         .filter(Boolean)
