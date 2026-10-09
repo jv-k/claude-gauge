@@ -182,6 +182,28 @@ A part shows no link when its address is not known, for example a `branch` on an
 
 ## Install
 
+### As a Claude Code plugin
+
+In Claude Code, add this repository as a plugin marketplace, install the plugin, and run its setup:
+
+```text
+/plugin marketplace add jv-k/claude-gauge
+/plugin install claude-gauge@claude-gauge
+/claude-gauge:setup
+```
+
+Start a new session or run `/reload-plugins` after the install, so the setup command is there. Setup asks which bars you want, and whether to keep the defaults or choose the rows, bar size, theme and token line parts. It then runs `claude-gauge setup` with your answers as switches, which backs up `~/.claude/settings.json` and adds the bars to it. A plugin cannot set the status line itself, which is why setup writes your settings.
+
+The plugin has three commands:
+
+| Command | Effect |
+| --- | --- |
+| `/claude-gauge:setup` | Adds the status line and the token line. If your settings already run another status line, such as claude-hud, it asks before it replaces it, and saves it. |
+| `/claude-gauge:configure` | Changes the switches of a bar, adds the missing one, or takes one out. |
+| `/claude-gauge:uninstall` | Takes claude-gauge out of your settings and puts back the status line it replaced. |
+
+The settings run a small launcher in `~/.claude/claude-gauge/launcher/`, not the plugin's own folder. Claude Code keeps each plugin version in a folder of its own, so the launcher runs the newest installed version each time. A plugin update therefore needs no setup, and once the plugin is uninstalled the launcher prints nothing.
+
 ### With Claude Code
 
 Paste this into a Claude Code session:
@@ -425,6 +447,10 @@ Unknown switches and part names are ignored, so a typo never breaks your status 
 
 ## Update
 
+As a plugin, claude-gauge updates with `/plugin`, from the **Marketplaces** tab, or with `claude plugin update claude-gauge@claude-gauge` in your shell. The next new session runs the new version, with no setup. Auto-update is off for marketplaces other than Anthropic's, and the **Marketplaces** tab can turn it on.
+
+From a clone:
+
 ```sh
 git -C ~/.claude/claude-gauge pull
 ```
@@ -433,7 +459,9 @@ If your settings still name `~/.claude/claude-gauge/statusline.js` or `tokenline
 
 ## Uninstall
 
-Remove the `statusLine`, `Stop` and `SessionStart` entries that name claude-gauge from `~/.claude/settings.json`. Then delete the folder:
+As a plugin, run `/claude-gauge:uninstall`, then `/plugin uninstall claude-gauge@claude-gauge`. To remove the launcher and the saved usage figures too, delete `~/.claude/claude-gauge`.
+
+From a clone, remove the `statusLine`, `Stop` and `SessionStart` entries that name claude-gauge from `~/.claude/settings.json`. Then delete the folder:
 
 ```sh
 rm -rf ~/.claude/claude-gauge

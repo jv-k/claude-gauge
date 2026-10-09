@@ -15,7 +15,8 @@
 //
 // Everything it keeps lives in the state folder, claude-gauge/ in the Claude
 // config folder ($CLAUDE_CONFIG_DIR, else ~/.claude): the copy of the
-// scripts in runtime/, and the status line it replaced in .state/.
+// scripts in runtime/, or, when it runs from the plugin, the launcher in
+// launcher/, and the status line it replaced in .state/.
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -119,13 +120,33 @@ function sameFolder(a: string, b: string): boolean {
   }
 }
 
-// Where the settings' commands point. A git clone in the state folder runs
-// from its own dist/, which `git pull` updates, named by its path in the
-// config folder rather than the resolved one. Any other copy, such as the
-// npx cache, which npm prunes, is copied into the state folder's runtime/.
-function scripts(): { dir: string; copy: boolean } {
-  if (sameFolder(packageRoot, stateDir())) return { dir: path.join(stateDir(), 'dist'), copy: false };
-  return { dir: path.join(stateDir(), 'runtime'), copy: true };
+// The folder that holds the plugin's installed versions, when this command
+// runs from one of them: Claude Code installs a plugin into
+// <plugins>/cache/<marketplace>/<plugin>/<version>/, with its manifest.
+function pluginVersions(): string | undefined {
+  const versions = path.dirname(packageRoot);
+  const cache = path.dirname(path.dirname(versions));
+  if (path.basename(cache) !== 'cache') return undefined;
+  if (!fs.existsSync(path.join(packageRoot, '.claude-plugin', 'plugin.json'))) return undefined;
+  return versions;
+}
+
+// How the settings' commands reach the scripts.
+//   clone:    a git clone in the state folder runs from its own dist/, which
+//             `git pull` updates, named by its path in the config folder
+//             rather than the resolved one.
+//   launcher: the plugin runs from the state folder's launcher/, which runs
+//             the newest installed plugin version, so an update needs no
+//             setup. `versions` is the folder that holds them.
+//   copy:     any other copy, such as the npx cache, which npm prunes, is
+//             copied into the state folder's runtime/.
+type Scripts = { route: 'clone'; dir: string } | { route: 'launcher'; dir: string; versions: string } | { route: 'copy'; dir: string };
+
+function scripts(): Scripts {
+  if (sameFolder(packageRoot, stateDir())) return { route: 'clone', dir: path.join(stateDir(), 'dist') };
+  const versions = pluginVersions();
+  if (versions) return { route: 'launcher', dir: path.join(stateDir(), 'launcher'), versions };
+  return { route: 'copy', dir: path.join(stateDir(), 'runtime') };
 }
 
 const version = (): string => {
@@ -142,8 +163,31 @@ const version = (): string => {
 // package.json further up says.
 function copyRuntime(dir: string): void {
   for (const file of RUNTIME) writeAtomic(path.join(dir, file), fs.readFileSync(path.join(packageRoot, 'dist', file)));
-  const pkg = { name: 'claude-gauge-runtime', version: version(), private: true, type: 'commonjs' };
+  writePackageJson(dir, 'claude-gauge-runtime');
+}
+
+function writePackageJson(dir: string, name: string): void {
+  const pkg = { name, version: version(), private: true, type: 'commonjs' };
   writeAtomic(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+}
+
+// Writes the launcher into `dir`: launch.js, and one entry file per script
+// that runs it from the newest version in `versions`. The entry files keep
+// the scripts' names, so the settings name statusline.js and tokenline.js
+// as on every other route, and claude-gauge knows them as its own.
+function writeLauncher(dir: string, versions: string): void {
+  writeAtomic(path.join(dir, 'launch.js'), fs.readFileSync(path.join(packageRoot, 'dist', 'launcher.js')));
+  for (const file of RUNTIME) {
+    const entry = [
+      '#!/usr/bin/env node',
+      `// Written by claude-gauge setup: runs ${file} from the newest installed`,
+      '// claude-gauge plugin, so a plugin update needs no setup.',
+      `require('./launch.js').launch(${JSON.stringify(versions)}, ${JSON.stringify(file)});`,
+      '',
+    ].join('\n');
+    writeAtomic(path.join(dir, file), entry);
+  }
+  writePackageJson(dir, 'claude-gauge-launcher');
 }
 
 // The status line claude-gauge replaced: undefined when none is saved, null
@@ -183,7 +227,8 @@ type Bars = Pick<Args, 'statusLine' | 'tokenLine'>;
 function apply({ statusLine, tokenLine }: Bars, replace: boolean): void {
   const file = settingsFile();
   const { settings, text } = readSettings(file);
-  const { dir, copy } = scripts();
+  const where = scripts();
+  const { dir } = where;
   const command = (script: string, switches: string | null | undefined) =>
     typeof switches === 'string' ? commandFor(path.join(dir, script), switches) : switches;
   const choices: Choices = {
@@ -206,7 +251,10 @@ function apply({ statusLine, tokenLine }: Bars, replace: boolean): void {
   }
 
   // The scripts go in first, so the settings never name a missing file.
-  if (copy && (typeof choices.statusLine === 'string' || typeof choices.tokenLine === 'string')) copyRuntime(dir);
+  if (typeof choices.statusLine === 'string' || typeof choices.tokenLine === 'string') {
+    if (where.route === 'copy') copyRuntime(dir);
+    if (where.route === 'launcher') writeLauncher(dir, where.versions);
+  }
   // The status line to put back is saved before the settings change, so a
   // failed save leaves nothing to restore wrongly.
   if (next.backup) writeAtomic(savedStatusLineFile(), JSON.stringify(next.backup, null, 2) + '\n');
@@ -272,9 +320,19 @@ function uninstall(): void {
 }
 
 function update(): void {
-  const { dir, copy } = scripts();
-  if (!copy) {
+  const where = scripts();
+  const { dir } = where;
+  if (where.route === 'clone') {
     say(`This claude-gauge is a git clone in ${stateDir()}. Update it with:`, `  git -C ${stateDir()} pull`);
+    return;
+  }
+  if (where.route === 'launcher') {
+    // A launcher from an older release is brought up to date as well.
+    if (fs.existsSync(path.join(dir, 'launch.js'))) writeLauncher(dir, where.versions);
+    say(
+      'This claude-gauge is the Claude Code plugin. Update it with /plugin in Claude Code.',
+      `The settings run ${dir}, which runs the newest installed version, so an update needs no setup.`,
+    );
     return;
   }
   if (!fs.existsSync(path.join(dir, 'statusline.js'))) {
