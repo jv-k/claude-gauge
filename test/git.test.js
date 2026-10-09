@@ -48,12 +48,14 @@ test('git counts staged, modified, deleted and untracked files, and hides when c
     entry('MM', 'both.ts'),
     entry('D.', 'gone.ts'),
     entry('.D', 'missing.ts'),
+    entry('AD', 'short-lived.ts'),
     `2 R. N... 100644 100644 100644 ${OID} ${OID} R100 new name.ts\told name.ts`,
     `u UU N... 100644 100644 100644 100644 ${OID} ${OID} ${OID} conflict.ts`,
     '? notes.txt',
     '? scratch/',
   ];
-  assert.equal(show('git', { statusOf: () => status({ entries }) }), '!3 +4 ✘2 ?2');
+  // A file staged and then deleted counts as staged and as deleted.
+  assert.equal(show('git', { statusOf: () => status({ entries }) }), '!3 +5 ✘3 ?2');
   assert.equal(show('git', { statusOf: () => status({ entries: ['? notes.txt'] }) }), '?1');
   assert.equal(show('git,branch', { statusOf: () => status() }), '⎇ main');
 });
@@ -79,6 +81,12 @@ test('files lists up to 3 changed files, the most recently changed first', () =>
   assert.equal(show('files', { statusOf: () => two, mtimeOf: (f) => (f.endsWith('kept.ts') ? 1 : undefined) }), 'kept.ts gone.ts');
   assert.equal(show('files', { statusOf: () => two, mtimeOf: () => 1 }), 'gone.ts kept.ts');
   assert.equal(show('files', { statusOf: () => status() }), '');
+  // In a huge change set it reads the times of the first 1000 files only.
+  const many = Array.from({ length: 1001 }, (_, i) => `? f${i}.txt`);
+  let reads = 0;
+  const newestLast = (f) => (reads++, Number(/f(\d+)\.txt$/.exec(f)[1]));
+  assert.equal(show('files', { statusOf: () => status({ entries: many }), mtimeOf: newestLast }), 'f999.txt f998.txt f997.txt');
+  assert.equal(reads, 1000);
 });
 
 test('git runs once per render, and only when a git part is shown', () => {
@@ -172,6 +180,46 @@ test('render reads the branch, counts and files from the real git', () => {
     // Outside any repository nothing shows.
     assert.equal(shown(tmp), '');
   } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// A git that takes too long, or prints too much, stands in for the real one
+// on PATH. The fallback then reads the branch from HEAD, without git.
+test('a git that times out or prints too much leaves the branch, read from HEAD', { skip: process.platform === 'win32' && 'the stand-in git is a shell script' }, () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-slow-git-'));
+  const savedPath = process.env.PATH;
+  try {
+    const repo = path.join(tmp, 'repo');
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'sub'));
+    fs.writeFileSync(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/feat/slow\n');
+    // A linked worktree: .git is a file naming the worktree's git folder.
+    const linked = path.join(tmp, 'linked');
+    fs.mkdirSync(path.join(repo, '.git', 'worktrees', 'linked'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.git', 'worktrees', 'linked', 'HEAD'), 'ref: refs/heads/feat/linked\n');
+    fs.mkdirSync(linked);
+    fs.writeFileSync(path.join(linked, '.git'), 'gitdir: ../repo/.git/worktrees/linked\n');
+    const detached = path.join(tmp, 'detached');
+    fs.mkdirSync(path.join(detached, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(detached, '.git', 'HEAD'), `${OID}\n`);
+
+    const shown = (dir) => plain(render({ workspace: { current_dir: dir } }, { config: parseArgs(['--show', 'branch,git,files']) }));
+    for (const [name, script] of [['slow', 'exec sleep 5'], ['loud', 'exec yes']]) {
+      const bin = path.join(tmp, name);
+      fs.mkdirSync(bin);
+      fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+      process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+      const started = Date.now();
+      assert.equal(shown(path.join(repo, 'sub')), '⎇ feat/slow', name);
+      assert.ok(Date.now() - started < 3000, `${name} git is cut off at its timeout`);
+      assert.equal(shown(linked), '⎇ feat/linked', name);
+      assert.equal(shown(detached), '', name);
+    }
+  } finally {
+    process.env.PATH = savedPath;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

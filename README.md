@@ -58,7 +58,7 @@ The default rows hold these parts, in this order. The name in the first column i
 
 For the first 9 minutes of the 5-hour window, and for about the first 50 minutes of the week, the marker uses the bar's own colour, because the projection is not reliable that early.
 
-**Git.** The `branch`, `git` and `files` parts share one `git status` call per render, made only when one of them is shown. If git takes more than a second, or prints more than a status line can use, `branch` shows the branch name alone and `git` and `files` stay out of the row. Outside a git repository, and on a detached HEAD, `branch` stays out too.
+**Git.** The `branch`, `git` and `files` parts share one `git status` call per render, made only when one of them is shown. If git takes more than a second, or prints more than a status line can use, `branch` shows the branch name alone, read from the repository's `HEAD` file without running git again, and `git` and `files` stay out of the row. Outside a git repository, and on a detached HEAD, `branch` stays out too.
 
 **Reset times.** Reset times use the 24-hour clock and are rounded to the nearest minute.
 
@@ -77,8 +77,8 @@ These parts show only when you name them in a `--show`. A part with nothing to r
 | `thinking` | `think`, when extended thinking is on. | Only when on. |
 | `fast` | `fast`, when fast mode is on. | Only when on. |
 | `style` | The output style: `style explanatory`. | When it is not `default`. |
-| `git` | The work tree's changes, as counts: `!2 +1 ✘1 ?3` for modified, staged, deleted and untracked files. A file staged and then changed again counts as both modified and staged. | When the work tree has changes. |
-| `files` | Up to 3 changed files, the most recently changed first: `statusline.ts README.md notes.txt`. A deleted file comes last, because it has no time. | When the work tree has changes. |
+| `git` | The work tree's changes, as counts: `!2 +1 ✘1 ?3` for modified, staged, deleted and untracked files. A file staged and then changed or deleted again counts in both. An untracked folder counts once, as git lists it. | When the work tree has changes. |
+| `files` | Up to 3 changed files, the most recently changed first: `statusline.ts README.md notes.txt`. A deleted file comes last, because it has no time. In a change set of more than 1000 files, it picks from the first 1000 that git lists. | When the work tree has changes. |
 | `worktree` | The linked git worktree: `wt my-feature`. The `branch` part names it too: `⎇ feat-x (wt my-feature)`. | Inside a linked worktree. |
 | `pr` | The branch's open pull request and its review state: `#1234 approved`. Green when approved, yellow when pending, red when changes are requested, grey as a draft. A GitLab merge request reads `!1234`. | While a PR is open. |
 | `agent` | The agent: `agent security-reviewer`. | When Claude Code runs with `--agent`. |

@@ -10,9 +10,9 @@
 //
 // Everything comes from Claude Code's own payload
 // (https://code.claude.com/docs/en/statusline): `rate_limits` carries the
-// claude.ai 5-hour and 7-day windows. The only side call is one
-// `git status`, when a git part is shown, with `git branch --show-current`
-// in its place when the status takes too long.
+// claude.ai 5-hour and 7-day windows. The only side calls are one
+// `git status`, when a git part is shown, and the modification times of the
+// changed files, when the files part is.
 //
 // The parts it can show are in PART_REGISTRY and the switches it takes in
 // SWITCHES, both below. README.md documents each in a table, and a test fails
@@ -21,7 +21,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from 'node:child_process';
 
 // What a part's builder reads: the payload, the config, the clock, the
 // folder Claude Code runs in, and what git says about it. render sanitises
@@ -68,7 +68,7 @@ const partRegistry = {
   thinking: { description: 'extended thinking, when on', build: ({ data }) => thinkingPart(data) },
   fast: { description: 'fast mode, when on', build: ({ data }) => fastPart(data) },
   style: { description: 'output style, when not the default', build: ({ data, config }) => stylePart(data, config) },
-  git: { description: 'staged, modified, deleted and untracked file counts, when any', build: ({ git }) => gitCountsPart(git()) },
+  git: { description: 'modified, staged, deleted and untracked file counts, when any', build: ({ git }) => gitCountsPart(git()) },
   files: { description: 'the most recently changed files', build: ({ git, mtimeOf }) => filesPart(git(), mtimeOf) },
   worktree: { description: 'linked git worktree', build: ({ data, config }) => worktreePart(data, config) },
   pr: { description: "the branch's open pull request and its review state", build: ({ data }) => prPart(data) },
@@ -323,22 +323,39 @@ const cellsFor = (pct: number, segments: number) => {
   return '▓'.repeat(filled) + '░'.repeat(segments - filled);
 };
 
-const GIT_TIMEOUT_MS = 1000;
+// How every git call runs: for at most a second, with its output as text
+// and its errors dropped.
+const GIT_OPTIONS: ExecFileSyncOptionsWithStringEncoding = { timeout: 1000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] };
 
 function git(cwd: string, args: string[]): string {
   try {
-    return execFileSync('git', args, {
-      cwd,
-      timeout: GIT_TIMEOUT_MS,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    return execFileSync('git', args, { ...GIT_OPTIONS, cwd }).trim();
   } catch {
     return ''; // not a repository, or git is missing
   }
 }
 
-const gitBranch = (cwd: string) => git(cwd, ['branch', '--show-current']);
+// The branch HEAD names, read from the repository's files rather than from
+// git: the fallback when git status takes too long, so the render never
+// waits on a second git process. Inside a linked worktree .git is a file
+// that names the worktree's own git folder. '' outside a repository and on
+// a detached HEAD.
+function headBranch(cwd: string): string {
+  try {
+    for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+      const dotGit = path.join(dir, '.git');
+      if (fs.existsSync(dotGit)) {
+        const gitDir = fs.statSync(dotGit).isFile()
+          ? path.resolve(dir, /^gitdir: (.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'))?.[1].trim() ?? '.git')
+          : dotGit;
+        return /^ref: refs\/heads\/(.+)$/m.exec(fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8'))?.[1].trim() ?? '';
+      }
+      if (path.dirname(dir) === dir) return '';
+    }
+  } catch {
+    return '';
+  }
+}
 
 // What `git status --porcelain=v2 --branch` prints for the folder: '' when
 // it is not a repository or git is missing, and undefined when git gave no
@@ -351,7 +368,7 @@ function gitStatus(cwd: string): string | undefined {
     return execFileSync(
       'git',
       ['--no-optional-locks', '-c', 'core.quotePath=false', '-c', 'status.relativePaths=true', 'status', '--porcelain=v2', '--branch'],
-      { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      { ...GIT_OPTIONS, cwd, maxBuffer: 1024 * 1024 },
     );
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
@@ -368,8 +385,8 @@ function fileMtime(file: string): number | undefined {
   }
 }
 
-// The folder's git state. With status only the branch is known, the counts
-// stay at 0 and changed stays empty.
+// The folder's git state. Without a status only the branch is known: the
+// counts stay at 0 and changed stays empty.
 interface GitState {
   branch: string;
   ahead: number;
@@ -420,9 +437,11 @@ function changedFile(printed: string): GitState['changed'][number] {
 // ordinary, renamed or copied, and unmerged.
 const FIELDS_BEFORE_PATH: Record<string, number> = { '1': 8, '2': 9, u: 10 };
 
-// The state in porcelain v2 status output. A file staged and then changed
-// again counts as both staged and modified; a deleted file counts only as
-// deleted, and an unmerged one as modified.
+// The state in porcelain v2 status output. Each side of an entry counts on
+// its own: a deletion on either side as deleted, any other change in the
+// index as staged and in the work tree as modified. So a file staged and
+// then changed or deleted again counts twice. An unmerged file counts as
+// modified.
 function parseStatus(output: string): GitState {
   const state = noChanges('');
   for (const line of output.split(/\r?\n/)) {
@@ -443,18 +462,18 @@ function parseStatus(output: string): GitState {
       state.changed.push(changedFile(fields.slice(FIELDS_BEFORE_PATH[kind]).join(' ').split('\t')[0]));
       const [x, y] = key;
       if (kind === 'u') state.modified++;
-      else if (x === 'D' || y === 'D') state.deleted++;
       else {
-        if (x !== '.') state.staged++;
-        if (y !== '.') state.modified++;
+        if (x === 'D' || y === 'D') state.deleted++;
+        if (x !== '.' && x !== 'D') state.staged++;
+        if (y !== '.' && y !== 'D') state.modified++;
       }
     }
   }
   return state;
 }
 
-// The folder's git state from one status call, or the branch alone when
-// the status took too long.
+// The folder's git state from one status call, or the branch alone, read
+// from HEAD, when the status took too long.
 function readGit(cwd: string, statusOf: (cwd: string) => string | undefined, branchOf: (cwd: string) => string): GitState {
   const output = statusOf(cwd);
   const state = output === undefined ? noChanges(branchOf(cwd)) : parseStatus(output);
@@ -655,11 +674,16 @@ function gitCountsPart(git: GitState): string {
 // The changed files the files part names, at most.
 const RECENT_FILES = 3;
 
-// The most recently changed files, newest first. A deleted file has no time,
-// so it follows the files that have one; files with the same time keep git's
-// order.
+// The changed files whose times the files part reads, at most, so a huge
+// change set costs a bounded number of reads.
+const TIMED_FILES = 1000;
+
+// The most recently changed files, newest first, of the first TIMED_FILES
+// that git lists. A deleted file has no time, so it follows the files that
+// have one; files with the same time keep git's order.
 function filesPart(git: GitState, mtimeOf: (file: string) => number | undefined): string {
   return git.changed
+    .slice(0, TIMED_FILES)
     .map((file) => ({ ...file, time: mtimeOf(file.path) ?? -Infinity }))
     .sort((a, b) => b.time - a.time || 0)
     .slice(0, RECENT_FILES)
@@ -739,8 +763,8 @@ const columnsOf = (value: number | string | undefined): number | undefined => {
 
 // Characters that take exactly one terminal column: printable Latin,
 // Greek and Cyrillic, and the punctuation, arrows, maths signs, box drawing,
-// blocks and the git part's ✘ that claude-gauge draws with. CJK and emoji take two in most
-// terminals and combining marks none, so they are left out.
+// blocks and the git part's ✘ that claude-gauge draws with. CJK and emoji
+// take two in most terminals and combining marks none, so they are left out.
 const ONE_COLUMN = /^[\x20-\x7e\u00a0-\u02ff\u0370-\u0482\u048a-\u052f\u2010-\u2027\u2030-\u205e\u2190-\u22ff\u2387\u2500-\u259f\u2718]*$/;
 
 // The columns a rendered text takes, or undefined when some character in it
@@ -780,7 +804,7 @@ function render(
     config: overrides = {},
     nowMs = Date.now(),
     statusOf = gitStatus,
-    branchOf = gitBranch,
+    branchOf = headBranch,
     mtimeOf = fileMtime,
     columns,
   }: RenderOptions = {},
