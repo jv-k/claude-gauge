@@ -944,7 +944,9 @@ function runCommand(command: string, cwd: string): string {
   }
   // Failed, timed out, too much output, or no such folder.
   if (result.error || result.status !== 0) return '';
-  return result.stdout.split(/\r?\n/).find((line) => line.trim())?.trim() ?? '';
+  // The first line with text left once sanitised, so a line of control codes
+  // alone does not hide the line after it. The part sanitises what it shows.
+  return result.stdout.split(/\r?\n/).find((line) => sanitise(line).trim())?.trim() ?? '';
 }
 
 interface RenderOptions {

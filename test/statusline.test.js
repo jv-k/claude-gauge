@@ -502,6 +502,8 @@ test('the command runner keeps the first line of output, and nothing when the co
   const cwd = require('node:os').tmpdir();
   assert.equal(runCommand(nodeCommand("process.stdout.write('first line\\nsecond line\\n')"), cwd), 'first line');
   assert.equal(runCommand(nodeCommand("process.stdout.write('\\n  padded  \\r\\nnext')"), cwd), 'padded');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('\\x1b[2J\\nvisible')"), cwd), 'visible');
+  assert.equal(runCommand(nodeCommand("process.stdout.write('x'.repeat(64 * 1024 + 1))"), cwd), '');
   assert.equal(runCommand(nodeCommand("process.stdout.write('partial'); process.exit(3)"), cwd), '');
   assert.equal(runCommand(nodeCommand("process.stderr.write('only an error')"), cwd), '');
   assert.equal(runCommand('claude-gauge-no-such-command-anywhere', cwd), '');

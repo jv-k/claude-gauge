@@ -22,7 +22,7 @@ claude-gauge runs inside Claude Code on each render and at the end of each turn.
 
 **It reads private files.** With `--latest`, the lines read the session transcript, which holds the whole conversation. The status line writes one file, `claude-gauge/.state/usage.json` under the Claude config folder, and that file holds only usage figures. Anything that copies transcript content out, writes outside that folder, or reads a file the user did not point it at is in scope.
 
-**It runs few programs.** The status line runs `git` with a one-second timeout, and `vm_stat` with the same timeout on macOS for the `ram` part. It runs the `--command` command only when the user names one and a row shows the `command` part, and stops it after 500 ms. Neither line makes a network request. A path that runs another program, runs the `--command` command without both, lets it run past its timeout, or makes a network request is in scope.
+**It runs few programs.** The status line runs `git` with a one-second timeout, and `vm_stat` with the same timeout on macOS for the `ram` part. It runs the `--command` command only when the user names one and a row shows the `command` part, and stops it after 500 ms. Apart from that command, which can do anything the user wrote it to do, neither line makes a network request. A path that runs another program, runs the `--command` command without both, lets it run past its timeout, or makes a network request of claude-gauge's own is in scope.
 
 ## What is out of scope
 
