@@ -2,7 +2,9 @@
 
 // The built status line and token line, run as programs, print the README
 // examples, and the TypeScript sources run under Bun print the same bytes.
-// The Bun checks skip where Bun is not installed.
+// The Bun checks skip where Bun is not installed. With REQUIRE_BUN=1, as the
+// Bun jobs in CI set, they fail there instead, so a failed Bun install cannot
+// pass as a skip.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -13,7 +15,11 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..');
 const hasBun = spawnSync('bun', ['--version'], { encoding: 'utf8' }).status === 0;
-const withoutBun = !hasBun && 'bun is not installed';
+const requireBun = process.env.REQUIRE_BUN === '1';
+const withoutBun = !hasBun && !requireBun && 'bun is not installed';
+const needBun = () => {
+  if (!hasBun) assert.fail('Bun is required (REQUIRE_BUN=1) but bun is not on the PATH');
+};
 
 // The model part names the API provider from the environment, so the suite
 // runs without the caller's provider variables.
@@ -118,13 +124,44 @@ test('the built token line prints the README example as a Stop hook message', ()
 });
 
 test('bun runs the status line from source with the same bytes as the build', { skip: withoutBun }, () => {
+  needBun();
   for (const [args, , columns] of statusExamples) {
     assert.equal(bun('statusline', args, payload, columns), node('statusline', args, payload, columns), args.join(' '));
   }
 });
 
 test('bun runs the token line from source with the same bytes as the build', { skip: withoutBun }, () => {
+  needBun();
   for (const [args] of tokenExamples) {
     assert.equal(bun('tokenline', args, hook), node('tokenline', args, hook), args.join(' '));
   }
+});
+
+// The suite again in a child process, with only its Bun cases and an empty
+// folder for PATH, so bun is not found. Bun runs the suites with its own
+// runner, which has no --test switch, so these two checks run under Node.
+const underBun = Boolean(process.versions.bun) && "the child run needs Node's test runner";
+const runBunCasesWithoutBun = (extra) => {
+  const empty = fs.mkdtempSync(path.join(tmp, 'path-'));
+  const childEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(PATH|REQUIRE_BUN|NODE_TEST_CONTEXT)$/i.test(name)));
+  return spawnSync(
+    process.execPath,
+    ['--test', '--test-reporter=tap', '--test-name-pattern=^bun runs', __filename],
+    { env: { ...childEnv, ...extra, PATH: empty }, encoding: 'utf8' },
+  );
+};
+
+test('REQUIRE_BUN=1 fails the Bun cases where bun is not on the PATH', { skip: underBun }, () => {
+  const run = runBunCasesWithoutBun({ REQUIRE_BUN: '1' });
+  assert.notEqual(run.status, 0, run.stdout);
+  assert.match(run.stdout, /^not ok \d+ - bun runs the status line/m);
+  assert.match(run.stdout, /^not ok \d+ - bun runs the token line/m);
+  assert.match(run.stdout, /Bun is required \(REQUIRE_BUN=1\) but bun is not on the PATH/);
+});
+
+test('without REQUIRE_BUN, the Bun cases skip where bun is not on the PATH', { skip: underBun }, () => {
+  const run = runBunCasesWithoutBun({});
+  assert.equal(run.status, 0, run.stdout + run.stderr);
+  assert.match(run.stdout, /^ok \d+ - bun runs the status line[^\n]*# SKIP bun is not installed/m);
+  assert.match(run.stdout, /^ok \d+ - bun runs the token line[^\n]*# SKIP bun is not installed/m);
 });

@@ -21,7 +21,7 @@ pnpm test
 
 `pnpm test` builds first, then runs the suites in `test/` against the build with Node's built-in test runner. `pnpm typecheck` checks the sources without a build. `pnpm lint` runs [Biome](https://biomejs.dev)'s linter over the sources, the suites and the scripts. `biome.jsonc` names the rules it turns off, and why.
 
-[Bun](https://bun.sh) is optional. When Bun is installed, the parity suite also runs the TypeScript sources under Bun and checks that they print the same bytes as the build. Without Bun, those checks skip.
+[Bun](https://bun.sh) is optional. When Bun is installed, the parity suite also runs the TypeScript sources under Bun and checks that they print the same bytes as the build. Without Bun, those checks skip. With `REQUIRE_BUN=1` set, they fail instead, with a message that Bun is required but missing. The Bun jobs in the `test` workflow set it.
 
 ## Where things are
 
