@@ -4,7 +4,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { render, parseArgs } = require('../dist/statusline.js');
 
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
+// A render as the terminal shows it: no colour codes, and no OSC 8 link
+// wrappers, which a terminal turns into a link rather than text.
+const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
 
 // The model part names the API provider from the environment, so the suite
 // runs without the caller's provider variables.
@@ -348,8 +350,91 @@ test('pr shows the open PR and its review state, coloured by the state', () => {
   assert.equal(run(pr({}), ['--show', 'pr']), '#1234');
   assert.equal(run(pr({ kind: 'mr', review_state: 'pending' }), ['--show', 'pr']), '!1234 pending');
   const red = render(pr({ review_state: 'changes_requested' }), { config: parseArgs(['--show', 'pr']) });
-  assert.ok(red.startsWith('\x1b[0;31m'));
+  assert.equal(colours(red)[0], '\x1b[0;31m');
   assert.equal(run({}, ['--show', 'pr', '--show', 'model']), '');
+});
+
+// The OSC 8 links in a render, in order: each one's address and the text it
+// wraps, colours stripped.
+const linksIn = (raw) => [...raw.matchAll(/\x1b\]8;;([^\x07]+)\x07(.*?)\x1b\]8;;\x07/g)].map(([, url, text]) => [url, plain(text)]);
+
+// Renders with the given switches and git status, on the host "box", colours
+// and links left in.
+const linked = (data, args, status = onMain()) =>
+  render(data, { nowMs: NOW, statusOf: () => status, hostname: 'box', config: parseArgs(args) });
+
+test('dir and repo link to the folder Claude Code runs in, as a file URL on this host', () => {
+  const data = { workspace: { current_dir: '/home/me/my project', repo: { host: 'github.com', owner: 'jv-k', name: 'claude-gauge' } } };
+  assert.deepEqual(linksIn(linked(data, ['--show', 'dir,repo'])), [
+    ['file://box/home/me/my%20project', 'my project'],
+    ['file://box/home/me/my%20project', 'jv-k/claude-gauge'],
+  ]);
+});
+
+// What git status prints on a branch that tracks one on a remote.
+const tracking = (branch, upstream) => `# branch.head ${branch}\n# branch.upstream ${upstream}\n# branch.ab +0 -0\n`;
+
+test('branch links to its page on GitHub or GitLab, by the name it has on origin', () => {
+  const at = (host, owner, name) => ({ workspace: { current_dir: '/home/me/project', repo: { host, owner, name } } });
+  const github = at('github.com', 'jv-k', 'claude-gauge');
+  assert.deepEqual(linksIn(linked(github, ['--show', 'branch'], tracking('feat/links', 'origin/feat/links'))), [
+    ['https://github.com/jv-k/claude-gauge/tree/feat/links', '⎇ feat/links'],
+  ]);
+  // A local branch that tracks one of another name links to the remote's.
+  assert.deepEqual(linksIn(linked(github, ['--show', 'branch'], tracking('mine', 'origin/fix/#12'))), [
+    ['https://github.com/jv-k/claude-gauge/tree/fix/%2312', '⎇ mine'],
+  ]);
+  assert.deepEqual(linksIn(linked(at('gitlab.com', 'group/sub', 'app'), ['--show', 'branch'], tracking('main', 'origin/main'))), [
+    ['https://gitlab.com/group/sub/app/-/tree/main', '⎇ main'],
+  ]);
+});
+
+test('branch has no link when its page on the remote is not known', () => {
+  const at = (host) => ({ workspace: { current_dir: '/home/me/project', repo: { host, owner: 'jv-k', name: 'claude-gauge' } } });
+  const github = at('github.com');
+  // No upstream, so the branch may not be on the remote at all.
+  assert.deepEqual(linksIn(linked(github, ['--show', 'branch'], onMain())), []);
+  // The upstream is on a remote other than origin, which the repo names.
+  assert.deepEqual(linksIn(linked(github, ['--show', 'branch'], tracking('main', 'fork/main'))), []);
+  // A host that is not GitHub or GitLab, whose page addresses are unknown.
+  assert.deepEqual(linksIn(linked(at('git.example.com'), ['--show', 'branch'], tracking('main', 'origin/main'))), []);
+  // No origin remote.
+  assert.deepEqual(linksIn(linked({ workspace: { current_dir: '/home/me/project' } }, ['--show', 'branch'], tracking('main', 'origin/main'))), []);
+  // git gave no status in time, so only the branch's name is known.
+  const raw = render(github, { nowMs: NOW, statusOf: () => undefined, branchOf: () => 'main', config: parseArgs(['--show', 'branch']) });
+  assert.deepEqual(linksIn(raw), []);
+});
+
+test('pr links to the pull request, on any host, when Claude Code sends its web address', () => {
+  const pr = (url) => ({ pr: { number: 12, review_state: 'approved', ...(url === undefined ? {} : { url }) } });
+  assert.deepEqual(linksIn(linked(pr('https://github.com/jv-k/claude-gauge/pull/12'), ['--show', 'pr'])), [
+    ['https://github.com/jv-k/claude-gauge/pull/12', '#12 approved'],
+  ]);
+  assert.deepEqual(linksIn(linked(pr('https://git.example.com/a/b/-/merge_requests/12'), ['--show', 'pr'])), [
+    ['https://git.example.com/a/b/-/merge_requests/12', '#12 approved'],
+  ]);
+  // Characters outside printable ASCII travel percent-encoded.
+  assert.deepEqual(linksIn(linked(pr('https://example.com/pull/12?é'), ['--show', 'pr'])), [['https://example.com/pull/12?%C3%A9', '#12 approved']]);
+  // No address, or one that is not a web page, gives no link.
+  for (const url of [undefined, '', 'javascript:alert(1)', 'file:///etc/passwd', 'not a url', 42]) {
+    const raw = linked(pr(url), ['--show', 'pr']);
+    assert.deepEqual(linksIn(raw), [], String(url));
+    assert.equal(plain(raw), '#12 approved', String(url));
+  }
+});
+
+test('--no-links drops every link and keeps the text', () => {
+  const data = {
+    workspace: { current_dir: '/home/me/project', repo: { host: 'github.com', owner: 'jv-k', name: 'claude-gauge' } },
+    pr: { number: 12, url: 'https://github.com/jv-k/claude-gauge/pull/12' },
+  };
+  const show = ['--show', 'dir,repo,branch,pr'];
+  const status = tracking('main', 'origin/main');
+  assert.equal(linksIn(linked(data, show, status)).length, 4);
+  const off = linked(data, [...show, '--no-links'], status);
+  assert.doesNotMatch(off, /\x1b\]/);
+  assert.equal(plain(off), plain(linked(data, show, status)));
+  assert.equal(plain(off), 'project │ jv-k/claude-gauge │ ⎇ main │ #12');
 });
 
 test('agent shows the agent name when running with --agent', () => {
@@ -713,8 +798,13 @@ const CONTROL = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069
 // 256-colour levels. HOSTILE's colours are none of these.
 const OWN_COLOURS = /\x1b\[(?:0|0;3\d|0;90|38;5;\d{1,3})m/g;
 
+// claude-gauge's own OSC 8 links, whose addresses hold printable ASCII only.
+// A link whose address holds anything else is left in, and fails the check.
+const OWN_LINKS = /\x1b\]8;;[\x21-\x7e]*\x07/g;
+
 // Renders the parts with the given payload, branch, setup and switches, and
-// checks that the only control codes left are claude-gauge's own colours. The
+// checks that the only control codes left are claude-gauge's own colours and
+// links. The
 // branch comes from git's fallback read, unless options give a statusOf.
 const renderClean = (data, show, branch = 'main', setup = NOTHING_LOADED, args = [], options = {}) => {
   const raw = render(data, {
@@ -725,7 +815,7 @@ const renderClean = (data, show, branch = 'main', setup = NOTHING_LOADED, args =
     config: parseArgs(['--show', show, ...args]),
     ...options,
   });
-  assert.doesNotMatch(raw.replace(OWN_COLOURS, ''), CONTROL, JSON.stringify(raw));
+  assert.doesNotMatch(raw.replace(OWN_COLOURS, '').replace(OWN_LINKS, ''), CONTROL, JSON.stringify(raw));
   return plain(raw);
 };
 
@@ -740,6 +830,13 @@ test('a hostile session name prints without its control codes', () => {
 test('a hostile branch from git, and a hostile worktree name, print without their control codes', () => {
   const data = { workspace: { current_dir: '/home/me/project', git_worktree: `my-${HOSTILE}feature` } };
   assert.equal(renderClean(data, 'branch,worktree', `feat/${HOSTILE}x`), '⎇ feat/x (wt my-feature) │ wt my-feature');
+  // The upstream's name reaches the branch's link only percent-encoded.
+  const hostile = HOSTILE.replace(/[\r\n]/g, '');
+  const statusOf = () => `# branch.head feat/${hostile}x\n# branch.upstream origin/feat/${hostile}x\n`;
+  const github = { workspace: { current_dir: '/home/me/project', repo: { host: 'github.com', owner: 'jv-k', name: 'claude-gauge' } } };
+  const raw = render(github, { statusOf, config: parseArgs(['--show', 'branch']) });
+  assert.equal(linksIn(raw).length, 1);
+  assert.equal(renderClean(github, 'branch', 'main', NOTHING_LOADED, [], { statusOf }), '⎇ feat/x');
 });
 
 test('a hostile repo, from the remote or the folder name, prints without its control codes', () => {
@@ -752,6 +849,7 @@ test('a hostile repo, from the remote or the folder name, prints without its con
 
 test('a hostile pull request prints without its control codes', () => {
   assert.equal(renderClean({ pr: { number: 12, review_state: `appr${HOSTILE}oved` } }, 'pr'), '#12 approved');
+  assert.equal(renderClean({ pr: { number: 12, url: `https://example.com/pull/${HOSTILE}12` } }, 'pr'), '#12');
   // The payload is JSON from outside, so a field meant to be a number may
   // arrive as text.
   assert.equal(renderClean({ pr: { number: `12${HOSTILE}34` } }, 'pr'), '#1234');
@@ -969,6 +1067,13 @@ test('--right moves its parts to the end in row order, and keeps their separator
   assert.equal(runAt(40, data, [...args.slice(0, 2), '--right', 'model,weather', '--right', 'version']), runAt(40, data, args));
 });
 
+test('--right counts a linked part by the text it shows, not its link', () => {
+  const data = { model: { display_name: 'Opus' }, workspace: { current_dir: '/home/me/project' } };
+  const raw = render(data, { nowMs: NOW, statusOf: onMain, hostname: 'box', columns: 20, config: parseArgs(['--show', 'dir,model', '--right', 'model']) });
+  assert.equal(linksIn(raw).length, 1);
+  assert.equal(plain(raw), 'project         Opus');
+});
+
 test('--right leaves rows unchanged when the terminal width is unknown', () => {
   const data = { model: { display_name: 'Opus' } };
   const args = ['--show', 'time,model', '--right', 'model'];
@@ -1005,6 +1110,20 @@ test('--latest shows the per-model windows a terminal render saved, less those t
   const shown = ['--show', 'models,limit', '--no-bars', '--no-reset'];
   assert.equal(statusLine(shown, JSON.stringify({ rate_limits: rateLimits })), '7d Opus 100% │ 7d Sonnet 62% │ limit reached: 7d Opus\n');
   assert.equal(statusLine(['--latest', ...shown]), '7d Opus 100% │ limit reached: 7d Opus\n');
+});
+
+test('--latest prints plain text, with no links, where the terminal render links', () => {
+  const { execFileSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const script = path.join(__dirname, '..', 'dist', 'statusline.js');
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-folder-'));
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-')) };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const statusLine = (args, input = '') => execFileSync(process.execPath, [script, '--show', 'dir', ...args], { cwd, env, input, encoding: 'utf8' });
+  assert.match(statusLine([], JSON.stringify({ workspace: { current_dir: cwd } })), /\x1b\]8;;file:/);
+  assert.equal(statusLine(['--latest']), `${path.basename(cwd)}\n`);
 });
 
 test('the status line program takes the terminal width from COLUMNS', () => {

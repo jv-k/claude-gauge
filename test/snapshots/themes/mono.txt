@@ -1,2 +1,2 @@
 ctx 43% ▓▓░░░ 86.0k\e[0m │ \e[0m5h 9% ░░░┃\e[0m░ → 14:00\e[0m │ \e[0m7d 41% ▓▓░┃\e[0m░ → 3d\e[0m
-12:00\e[0m │ \e[0m1h12m\e[0m │ \e[0mjv-k/claude-gauge\e[0m │ \e[0m⎇ main\e[0m │ \e[0mOpus 5.5\e[0m │ \e[0meffort high\e[0m
+12:00\e[0m │ \e[0m1h12m\e[0m │ \e[0m\e]8;;file://host/home/me/project\ajv-k/claude-gauge\e[0m\e]8;;\a │ \e[0m⎇ main\e[0m │ \e[0mOpus 5.5\e[0m │ \e[0meffort high\e[0m

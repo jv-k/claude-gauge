@@ -3,7 +3,7 @@
 // Golden snapshots: each file in test/snapshots holds cases separated by a
 // blank line. A case's first line is the switches, split on spaces, and the
 // lines after it are the rows the status line prints for the payload below,
-// colours stripped.
+// colours and links stripped.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -11,7 +11,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { render, parseArgs } = require('../dist/statusline.js');
 
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
+// What the terminal shows: no colour codes, and no OSC 8 link wrappers.
+const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
 
 // The model part names the API provider from the environment, so the suite
 // runs without the caller's provider variables.

@@ -36,6 +36,7 @@ import {
   type SpawnSyncOptionsWithStringEncoding,
 } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 
 // What a part's builder reads: the payload, the config, the clock, the cost
@@ -53,6 +54,8 @@ interface PartContext {
   // The folder's path as it is, for git to run in, and its name to print.
   cwd: string;
   folder: string;
+  // The machine's name, for the folder's file URL.
+  hostname: string;
   // The folder's git state, read on first use and kept for the render.
   git: () => GitState;
   // A changed file's last modification time, by its path from the folder.
@@ -93,6 +96,9 @@ interface PartSpec {
   // shows only when a --show names it.
   row?: number;
   build: (ctx: PartContext) => string;
+  // The address the part links to, when one is known. render wraps what the
+  // part printed in an OSC 8 hyperlink to it.
+  link?: (ctx: PartContext) => string | undefined;
 }
 
 // Every status line part, by the name --show takes. The default parts come
@@ -104,11 +110,21 @@ const partRegistry = {
   '7d': { description: 'weekly usage, with pace marker and days to reset', row: 0, build: ({ data, config, theme, nowMs }) => windowPart('7d', data, config, theme, nowMs) },
   time: { description: 'current local time', row: 1, build: ({ config, theme, nowMs }) => timePart(config, theme, nowMs) },
   duration: { description: 'how long the session has run', row: 1, build: ({ data, theme }) => durationPart(data, theme) },
-  repo: { description: 'owner/name from the origin remote, else the folder name', row: 1, build: ({ data, theme, folder }) => repoPart(data, theme, folder) },
-  branch: { description: 'current git branch, dirty marker, ahead and behind, and the linked worktree', row: 1, build: ({ data, config, theme, git }) => branchPart(data, config, theme, git()) },
+  repo: {
+    description: 'owner/name from the origin remote, else the folder name',
+    row: 1,
+    build: ({ data, theme, folder }) => repoPart(data, theme, folder),
+    link: ({ cwd, hostname }) => folderUrl(cwd, hostname),
+  },
+  branch: {
+    description: 'current git branch, dirty marker, ahead and behind, and the linked worktree',
+    row: 1,
+    build: ({ data, config, theme, git }) => branchPart(data, config, theme, git()),
+    link: ({ data, git }) => branchUrl(data.workspace?.repo, git().upstream),
+  },
   model: { description: 'model name, and the API provider when not first-party', row: 1, build: ({ data, theme, processEnv }) => modelPart(data, theme, processEnv) },
   effort: { description: 'reasoning effort', row: 1, build: ({ data, config, theme }) => effortPart(data, config, theme) },
-  dir: { description: 'folder Claude Code runs in', build: ({ theme, folder }) => `${theme.info}${folder}${RESET}` },
+  dir: { description: 'folder Claude Code runs in', build: ({ theme, folder }) => `${theme.info}${folder}${RESET}`, link: ({ cwd, hostname }) => folderUrl(cwd, hostname) },
   cost: { description: 'estimated session cost', build: ({ data, theme }) => costPart(data, theme) },
   lines: { description: 'lines added and removed this session', build: ({ data, theme }) => linesPart(data, theme) },
   name: { description: 'session name or title', build: ({ data, theme }) => namePart(data, theme) },
@@ -118,7 +134,7 @@ const partRegistry = {
   git: { description: 'modified, staged, deleted and untracked file counts, when any', build: ({ theme, git }) => gitCountsPart(git(), theme) },
   files: { description: 'the most recently changed files', build: ({ theme, git, mtimeOf }) => filesPart(git(), theme, mtimeOf) },
   worktree: { description: 'linked git worktree', build: ({ data, config, theme }) => worktreePart(data, config, theme) },
-  pr: { description: "the branch's open pull request and its review state", build: ({ data, theme }) => prPart(data, theme) },
+  pr: { description: "the branch's open pull request and its review state", build: ({ data, theme }) => prPart(data, theme), link: ({ data }) => webUrl(data.pr?.url) },
   agent: { description: 'agent name, with --agent', build: ({ data, config, theme }) => agentPart(data, config, theme) },
   cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config, theme }) => cachePart(data, config, theme) },
   spend: { description: 'spend against a gateway spend limit', build: ({ data, config, theme }) => spendPart(data, config, theme) },
@@ -168,6 +184,8 @@ interface Config {
   reset: boolean;
   hour12: boolean;
   compact: boolean;
+  // Whether dir, repo, branch and pr link to what they name.
+  links: boolean;
   // The parts --right moves to the end of their row.
   right: Part[];
   // What the text part prints, as --text gives it: not yet sanitised.
@@ -198,6 +216,7 @@ const DEFAULTS: Config = {
   reset: true,
   hour12: false,
   compact: false,
+  links: true,
   right: [],
   text: '',
   command: '',
@@ -235,6 +254,7 @@ const SWITCHES: readonly Switch[] = [
   { name: '--no-reset', description: 'drop the reset times', apply: (config) => { config.reset = false; } },
   { name: '--12h', description: '12-hour clock for the time part and reset times', apply: (config) => { config.hour12 = true; } },
   { name: '--compact', description: 'shorter separators and labels, for narrow terminals', apply: (config) => { config.compact = true; } },
+  { name: '--no-links', description: 'drop the links on dir, repo, branch and pr', apply: (config) => { config.links = false; } },
   {
     name: '--right',
     value: '<parts>',
@@ -433,9 +453,9 @@ const CONTROL_CHARACTER = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2
 // text from anywhere else, such as a switch or a command, calls this itself.
 const sanitise = (text: string) => text.replace(ESCAPE_SEQUENCE, '').replace(CONTROL_CHARACTER, '');
 
-// Text without claude-gauge's own colour codes, the only escapes left in a
-// rendered row once its parts are sanitised.
-const stripColours = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, '');
+// Text without claude-gauge's own colour codes and OSC 8 links, the only
+// escapes left in a rendered row once its parts are sanitised.
+const stripOwnCodes = (text: string) => text.replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x07]*\x07/g, '');
 
 // A parsed payload with every string in it sanitised, at any depth.
 function sanitiseAll<T>(value: T): T {
@@ -647,6 +667,9 @@ function fileMtime(file: string): number | undefined {
 // counts stay at 0 and changed stays empty.
 interface GitState {
   branch: string;
+  // The branch's upstream as git names it, such as origin/main; '' when it
+  // has none, or when only the branch is known.
+  upstream: string;
   ahead: number;
   behind: number;
   staged: number;
@@ -658,7 +681,7 @@ interface GitState {
   changed: { path: string; name: string }[];
 }
 
-const noChanges = (branch: string): GitState => ({ branch, ahead: 0, behind: 0, staged: 0, modified: 0, deleted: 0, untracked: 0, changed: [] });
+const noChanges = (branch: string): GitState => ({ branch, upstream: '', ahead: 0, behind: 0, staged: 0, modified: 0, deleted: 0, untracked: 0, changed: [] });
 
 // A path as git prints it, unquoted. Git quotes a path that holds a control
 // character, a double quote or a backslash, C-style, with octal for bytes.
@@ -707,6 +730,7 @@ function parseStatus(output: string): GitState {
     const [kind, key] = fields;
     if (kind === '#') {
       if (key === 'branch.head' && fields[2] !== '(detached)') state.branch = fields.slice(2).join(' ');
+      if (key === 'branch.upstream') state.upstream = fields.slice(2).join(' ');
       if (key === 'branch.ab') {
         state.ahead = Math.abs(Number.parseInt(fields[2], 10)) || 0;
         state.behind = Math.abs(Number.parseInt(fields[3], 10)) || 0;
@@ -934,10 +958,41 @@ function repoPart(data: StatusData, theme: Theme, folder: string): string {
   return `${theme.muted}${shown}${RESET}`;
 }
 
+// The folder as a file URL that names its machine, as the OSC 8 spec asks,
+// so a terminal can tell a folder on a remote machine from a local one.
+function folderUrl(cwd: string, hostname: string): string | undefined {
+  try {
+    return `file://${hostname}${pathToFileURL(cwd).pathname}`;
+  } catch {
+    return undefined;
+  }
+}
+
 // The linked git worktree the session is in, if any. workspace.git_worktree
 // covers every linked worktree; worktree.name only Claude Code's own
 // worktree sessions.
 const worktreeName = (data: StatusData) => data.workspace?.git_worktree || data.worktree?.name || '';
+
+// The path to a branch's page from a repository's page, on each host whose
+// addresses are known.
+const BRANCH_PAGES: Record<string, string> = { 'github.com': '/tree/', 'gitlab.com': '/-/tree/' };
+
+// The branch's page on GitHub or GitLab, by the name its upstream has on
+// origin, the remote the repo comes from. Unknown without an upstream on
+// origin, since the branch may not be on the remote, and on any other host.
+function branchUrl(repo: NonNullable<StatusData['workspace']>['repo'], upstream: string): string | undefined {
+  const { host, owner, name } = repo ?? {};
+  if (typeof host !== 'string' || typeof owner !== 'string' || typeof name !== 'string' || !owner || !name) return undefined;
+  const page = ownValue(BRANCH_PAGES, host.toLowerCase());
+  const branch = /^origin\/(.+)$/.exec(upstream)?.[1];
+  if (!page || !branch) return undefined;
+  const encoded = (text: string) => text.split('/').map(encodeURIComponent).join('/');
+  try {
+    return `https://${host.toLowerCase()}/${encoded(owner)}/${encoded(name)}${page}${encoded(branch)}`;
+  } catch {
+    return undefined; // text that is not valid UTF-16
+  }
+}
 
 // The branch, * when the work tree has changes, ↑n and ↓n for the commits
 // it is ahead of and behind its upstream, and the worktree name inside a
@@ -1005,6 +1060,19 @@ function prPart(data: StatusData, theme: Theme): string {
   const number = `${pr.kind === 'mr' ? '!' : '#'}${pr.number}`;
   const state = pr.review_state ? ` ${pr.review_state}` : '';
   return `${theme[ownValue(PR_ROLES, pr.review_state ?? '') ?? 'muted']}${number}${state}${RESET}`;
+}
+
+// A web page's address as a link can carry it: http or https only, with
+// every character outside ASCII percent-encoded. The payload is JSON from
+// outside, so the address may not be text at all.
+function webUrl(text: unknown): string | undefined {
+  if (typeof text !== 'string') return undefined;
+  try {
+    const url = new URL(text);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function agentPart(data: StatusData, config: Config, theme: Theme): string {
@@ -1614,6 +1682,8 @@ interface RenderOptions {
   commandOutputOf?: (command: string, cwd: string) => string;
   // The terminal's width in columns, when it is known.
   columns?: number;
+  // The machine's name, for the folder's file URL.
+  hostname?: string;
   // Reads what a transcript shows; by default incrementally, with its state
   // in the state folder.
   transcript?: (file: string) => TranscriptActivity;
@@ -1636,9 +1706,17 @@ const ONE_COLUMN = /^[\x20-\x7e\u00a0-\u02ff\u0370-\u0482\u048a-\u052f\u2010-\u2
 // The columns a rendered text takes, or undefined when some character in it
 // may take more or less than one.
 const visibleWidth = (text: string): number | undefined => {
-  const shown = stripColours(text);
+  const shown = stripOwnCodes(text);
   return ONE_COLUMN.test(shown) ? [...shown].length : undefined;
 };
+
+// An address a link can carry: printable ASCII only, as OSC 8 requires, so
+// nothing in it can end the sequence early or reach the terminal as a code.
+const LINKABLE = /^[\x21-\x7e]+$/;
+
+// Text as an OSC 8 hyperlink. BEL ends each sequence, as in the example in
+// Claude Code's status line docs. A terminal without OSC 8 shows the text.
+const hyperlink = (url: string, text: string) => `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
 
 // A part a row shows: its name and what it printed.
 interface ShownPart {
@@ -1679,6 +1757,7 @@ function render(
     transcript = readTranscriptActivity,
     columns,
     ledger,
+    hostname = os.hostname(),
   }: RenderOptions = {},
 ): string {
   const merged = { ...DEFAULTS, ...overrides };
@@ -1711,6 +1790,7 @@ function render(
     ledger: ledgerFrom(ledger),
     cwd,
     folder: sanitise(path.basename(cwd)),
+    hostname,
     git: () => (gitState ??= readGit(cwd, statusOf, branchOf)),
     mtimeOf: (file) => mtimeOf(path.resolve(cwd, file)),
     activity: () => (activity ??= readActivity()),
@@ -1742,7 +1822,10 @@ function render(
           .map((part) => {
             if (!isPart(part)) return { part, text: '' };
             const color = ownValue(config.colors, part);
-            return { part, text: PART_REGISTRY[part].build(color ? { ...input, theme: solid(theme, color) } : input) };
+            const spec = PART_REGISTRY[part];
+            const text = spec.build(color ? { ...input, theme: solid(theme, color) } : input);
+            const url = text && config.links ? spec.link?.(input) : undefined;
+            return { part, text: url && LINKABLE.test(url) ? hyperlink(url, text) : text };
           })
           .filter((p) => p.text),
         separator,
@@ -2752,8 +2835,9 @@ if (isMain) {
     const data = payloadFromTranscript(records, { nowMs, window, usage: loadUsage(nowMs) });
     const cwd = data.workspace?.current_dir;
     if (data.workspace && cwd) Object.assign(data.workspace, gitWorkspace(cwd));
-    // Plain text: it is pasted into a reply, where colour codes show as junk.
-    process.stdout.write(stripColours(render(data, { config, nowMs, ledger: readLedger(ledgerFile()) })) + '\n');
+    // Plain text: it is pasted into a reply, where colour codes and links
+    // show as junk.
+    process.stdout.write(stripOwnCodes(render(data, { config, nowMs, ledger: readLedger(ledgerFile()) })) + '\n');
   } else {
     const chunks: Buffer[] = [];
     process.stdin.on('data', (c: Buffer) => chunks.push(c));
