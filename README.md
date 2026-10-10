@@ -14,16 +14,22 @@
   </p>
 </div>
 
-claude-gauge shows how much room you have left in [Claude Code](https://code.claude.com): in the context window, in the 5-hour usage window and in the weekly limit. It adds two bars to Claude Code.
+claude-gauge is a compact status line and token line for [Claude Code](https://code.claude.com).
 
-The status line shows under the prompt:
+The status line sits under the prompt. It shows how full the context window is, and your 5-hour and weekly usage. A pace marker on each usage bar shows if you will reach the limit before it resets. The second row shows the session: the time, how long it has run, the repository, the git branch, the model and the effort. You choose the rows and the parts, from 40 parts that also cover tools, subagents, todos, git changes, pull requests and cost.
+
+The token line shows what each turn used: the requests, the output and thinking tokens, the prompt cache and the context.
+
+claude-gauge installs as a Claude Code plugin or from npm. Its setup wizard draws the bars again after each choice. It has no runtime dependencies, and it runs on macOS, Linux and Windows, under Node.js 18 or later or Bun.
+
+The status line:
 
 ```text
 ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
 11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main* ↑1 │ Opus 5.5 │ effort high
 ```
 
-The token line shows when each turn ends:
+The token line, at the end of each turn:
 
 ```text
 11:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
