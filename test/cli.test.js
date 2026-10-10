@@ -14,17 +14,10 @@ const path = require('node:path');
 const { commandFor } = require('../dist/settings.js');
 const { colorEnabled } = require('../dist/wordmark.js');
 
-const root = path.join(__dirname, '..');
-const dist = path.join(root, 'dist');
+const { root, dist, plain, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, tempDir } = require('./helpers');
 
-const { plain, configFolder, runCli, settingsOf, tempDir } = require('./helpers');
 const backupsIn = (dir) => fs.readdirSync(dir).filter((f) => /^settings\.json\.claude-gauge-.+\.bak$/.test(f)).sort();
-const runtimeOf = (dir) => path.join(dir, 'claude-gauge', 'runtime');
 const savedStatusLine = (dir) => path.join(dir, 'claude-gauge', '.state', 'previous-statusline.json');
-const ok = (r) => assert.equal(r.status, 0, `exit ${r.status}\n${r.stdout}\n${r.stderr}`);
-
-const cmd = (command) => ({ type: 'command', command });
-const entry = (...commands) => ({ hooks: commands.map(cmd) });
 const CLAUDE_HUD = "bash -c 'exec node ~/.claude/plugins/cache/claude-hud/claude-hud/0.1.0/dist/index.js'";
 
 test('setup --yes on a fresh config folder installs both bars from a copy of the runtime', () => {
@@ -56,7 +49,7 @@ test('setup --yes on a fresh config folder installs both bars from a copy of the
     encoding: 'utf8',
   });
   assert.equal(line.status, 0);
-  assert.match(line.stdout.replace(/\x1b\[[0-9;]*m/g, ''), /ctx 25%/);
+  assert.match(plain(line.stdout), /ctx 25%/);
 });
 
 test('setup writes the chosen switches, keeps every other key and refreshInterval, and backs up', () => {
@@ -363,11 +356,7 @@ test('uninstall stops at a saved status line it cannot read, and keeps the setti
 // The wizard, driven through the process with answers piped on stdin. PATH
 // holds only `bin`, so gh is there only when a test puts a fake one in.
 const ask = (dir, args, answers, { bin = emptyBin(), env = {} } = {}) =>
-  spawnSync(process.execPath, [path.join(dist, 'cli.js'), ...args], {
-    env: { ...process.env, CLAUDE_CONFIG_DIR: dir, PATH: bin, Path: bin, ...env },
-    input: answers.map((a) => `${a}\n`).join(''),
-    encoding: 'utf8',
-  });
+  runCli(dir, args, { env: { PATH: bin, Path: bin, ...env }, input: answers.map((a) => `${a}\n`).join('') });
 
 const emptyBin = () => tempDir('claude-gauge-bin-');
 

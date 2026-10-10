@@ -3,6 +3,7 @@
 // The helpers the suites share. This file holds no tests: scripts/test.js and
 // the Bun job run only the test/*.test.js files, so it never shows in a run.
 
+const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -34,17 +35,27 @@ function configFolder(settings) {
   return dir;
 }
 
-// Runs the CLI against the config folder `dir`, with `env` added. The build's
-// CLI unless `cli` names another, such as a copy in a plugin version folder.
-// The colour variables are only as `env` sets them, so a NO_COLOR or
-// FORCE_COLOR in the shell that runs the suite changes nothing.
-function runCli(dir, args, { cli = path.join(dist, 'cli.js'), env = {} } = {}) {
+// Runs the CLI against the config folder `dir`, with `env` added and `input`
+// on stdin. The build's CLI unless `cli` names another, such as a copy in a
+// plugin version folder. The colour variables are only as `env` sets them, so
+// a NO_COLOR or FORCE_COLOR in the shell that runs the suite changes nothing.
+function runCli(dir, args, { cli = path.join(dist, 'cli.js'), env = {}, input } = {}) {
   const base = { ...process.env, CLAUDE_CONFIG_DIR: dir };
   for (const name of ['NO_COLOR', 'FORCE_COLOR', 'CLICOLOR_FORCE']) delete base[name];
-  return spawnSync(process.execPath, [cli, ...args], { env: { ...base, ...env }, encoding: 'utf8' });
+  return spawnSync(process.execPath, [cli, ...args], { env: { ...base, ...env }, input, encoding: 'utf8' });
 }
 
+// Passes when the CLI exited 0, else fails with what it printed.
+const ok = (r) => assert.equal(r.status, 0, `exit ${r.status}\n${r.stdout}\n${r.stderr}`);
+
+// Where setup copies the two scripts to, under the config folder `dir`.
+const runtimeOf = (dir) => path.join(dir, 'claude-gauge', 'runtime');
+
 const settingsOf = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+
+// A command entry as settings.json holds one, and a hook entry of commands.
+const cmd = (command) => ({ type: 'command', command });
+const entry = (...commands) => ({ hooks: commands.map(cmd) });
 
 // The CLI's source, which holds the USAGE text that `claude-gauge --help`
 // prints. The suites read the source because dist/ exports no USAGE.
@@ -68,4 +79,4 @@ function usageSwitches(source) {
   return [...usage[1].matchAll(new RegExp(`^ +(?:-[a-z0-9], +)?(${SWITCH})`, 'gm'))].map((m) => m[1]);
 }
 
-module.exports = { plain, tempDir, configFolder, runCli, settingsOf, cliSource, switchesIn, switchAt, usageSwitches };
+module.exports = { root, dist, plain, tempDir, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, cliSource, switchesIn, switchAt, usageSwitches };

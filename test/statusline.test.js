@@ -3,9 +3,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { render, parseArgs } = require('../dist/statusline.js');
-
-// A render as the terminal shows it: no colour codes, and no OSC 8 link
-// wrappers, which a terminal turns into a link rather than text.
 const { plain } = require('./helpers');
 
 // The model part names the API provider from the environment, so the suite

@@ -7,14 +7,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { plan } = require('../dist/settings.js');
+const { cmd, entry } = require('./helpers');
 
 const SL = 'node /home/u/.claude/claude-gauge/runtime/statusline.js';
 const SL2 = 'node /home/u/.claude/claude-gauge/runtime/statusline.js --segments 10';
 const TL = 'node /home/u/.claude/claude-gauge/runtime/tokenline.js';
 const TL2 = 'node /home/u/.claude/claude-gauge/runtime/tokenline.js --window 1m';
-
-const cmd = (command) => ({ type: 'command', command });
-const entry = (...commands) => ({ hooks: commands.map(cmd) });
 
 const CLAUDE_HUD =
   "bash -c 'plugin_dir=$(ls -td \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"/plugins/cache/claude-hud/claude-hud/*/ 2>/dev/null | head -1); exec node \"${plugin_dir}dist/index.js\"'";

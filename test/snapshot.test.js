@@ -10,8 +10,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { render, parseArgs } = require('../dist/statusline.js');
-
-// What the terminal shows: no colour codes, and no OSC 8 link wrappers.
 const { plain } = require('./helpers');
 
 // The model part names the API provider from the environment, so the suite

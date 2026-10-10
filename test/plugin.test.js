@@ -13,10 +13,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { commandFor } = require('../dist/settings.js');
-const { configFolder, runCli, settingsOf } = require('./helpers');
-
-const root = path.join(__dirname, '..');
-const dist = path.join(root, 'dist');
+const { root, dist, plain, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry } = require('./helpers');
 
 const versionsOf = (dir) => path.join(dir, 'plugins', 'cache', 'claude-gauge', 'claude-gauge');
 
@@ -53,10 +50,6 @@ const runLauncher = (dir, script, args = [], input = '') =>
   spawnSync(process.execPath, [path.join(launcherOf(dir), script), ...args], { env: { ...process.env, CLAUDE_CONFIG_DIR: dir }, input, encoding: 'utf8' });
 
 const launcherOf = (dir) => path.join(dir, 'claude-gauge', 'launcher');
-const runtimeOf = (dir) => path.join(dir, 'claude-gauge', 'runtime');
-const ok = (r) => assert.equal(r.status, 0, `exit ${r.status}\n${r.stdout}\n${r.stderr}`);
-const cmd = (command) => ({ type: 'command', command });
-const entry = (...commands) => ({ hooks: commands.map(cmd) });
 
 test('setup run from the plugin cache points the settings at the launcher, never at a version folder', () => {
   const dir = configFolder({ model: 'opus' });
@@ -103,7 +96,7 @@ test('the launcher runs the installed status line with the switches and input Cl
   const payload = JSON.stringify({ model: { display_name: 'Opus' }, context_window: { used_percentage: 25 } });
   const line = runLauncher(dir, 'statusline.js', ['--show', 'ctx,model'], payload);
   assert.equal(line.status, 0, line.stderr);
-  assert.match(line.stdout.replace(/\x1b\[[0-9;]*m/g, ''), /ctx 25%.*Opus/);
+  assert.match(plain(line.stdout), /ctx 25%.*Opus/);
   const direct = spawnSync(process.execPath, [path.join(plugin, 'dist', 'statusline.js'), '--show', 'ctx,model'], {
     env: { ...process.env, CLAUDE_CONFIG_DIR: dir },
     input: payload,
