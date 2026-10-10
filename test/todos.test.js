@@ -6,12 +6,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { render, parseArgs, readTranscriptActivity } = require('../dist/statusline.js');
 
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+const { plain, tempDir } = require('./helpers');
 
 // Renders the todos part over the activity a reader returns.
 const renderTodos = (todos, args = ['--show', 'todos']) =>
@@ -85,7 +83,7 @@ const jsonl = (records) => records.map((r) => `${JSON.stringify(r)}\n`).join('')
 
 // What the reader finds in a transcript of these records, with its state in
 // a folder of its own.
-function todosIn(records, { dir = tmpDir(), append = [] } = {}) {
+function todosIn(records, { dir = tempDir(), append = [] } = {}) {
   const file = path.join(dir, 'session.jsonl');
   const stateDir = path.join(dir, 'state');
   fs.writeFileSync(file, jsonl(records));
@@ -180,7 +178,7 @@ test("the reader takes a new task's id from the result text when the result has 
 });
 
 test('the program shows the todo in progress from a transcript', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   fs.writeFileSync(file, jsonl([...taskCreate('1', { subject: 'Read the reader', activeForm: 'Reading the reader' }), ...taskUpdate('1', { status: 'in_progress' })]));
   const out = require('node:child_process').execFileSync(
@@ -196,7 +194,7 @@ test('the program shows the todo in progress from a transcript', () => {
 });
 
 test('a transcript state from before the todos part is read again from the start', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const stateDir = path.join(dir, 'state');
   fs.writeFileSync(file, jsonl(todoWrite([{ content: 'Write the tests', status: 'pending' }])));

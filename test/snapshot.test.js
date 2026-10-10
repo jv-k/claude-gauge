@@ -12,7 +12,7 @@ const path = require('node:path');
 const { render, parseArgs } = require('../dist/statusline.js');
 
 // What the terminal shows: no colour codes, and no OSC 8 link wrappers.
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
+const { plain } = require('./helpers');
 
 // The model part names the API provider from the environment, so the suite
 // runs without the caller's provider variables.

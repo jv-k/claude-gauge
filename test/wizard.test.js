@@ -12,7 +12,7 @@ const path = require('node:path');
 const { runWizard, offerStar, EndOfAnswers, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
 const { DEFAULT_ROWS } = require('../dist/statusline.js');
 
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
+const { plain } = require('./helpers');
 
 // An io that answers each question with the next scripted answer, then with
 // the end of input, and keeps the questions and everything written.

@@ -34,7 +34,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
 const env = { ...process.env, CLAUDE_CONFIG_DIR: tmp };
 delete env.COLUMNS;
 // What the terminal shows: no colour codes, and no OSC 8 link wrappers.
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
+const { plain } = require('./helpers');
 
 const envFor = (columns) => (columns ? { ...env, COLUMNS: String(columns) } : env);
 const node = (script, args, input, columns) =>

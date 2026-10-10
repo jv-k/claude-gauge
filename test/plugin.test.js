@@ -11,24 +11,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { commandFor } = require('../dist/settings.js');
+const { configFolder, runCli, settingsOf } = require('./helpers');
 
 const root = path.join(__dirname, '..');
 const dist = path.join(root, 'dist');
-
-const made = [];
-test.after(() => {
-  for (const dir of made) fs.rmSync(dir, { recursive: true, force: true });
-});
-
-function configFolder(settings) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-plugin-'));
-  made.push(dir);
-  if (settings !== undefined) fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings, null, 2) + '\n');
-  return dir;
-}
 
 const versionsOf = (dir) => path.join(dir, 'plugins', 'cache', 'claude-gauge', 'claude-gauge');
 
@@ -61,12 +49,9 @@ function fakeVersion(dir, version) {
   return folder;
 }
 
-const run = (dir, cli, args) =>
-  spawnSync(process.execPath, [cli, ...args], { env: { ...process.env, CLAUDE_CONFIG_DIR: dir }, encoding: 'utf8' });
 const runLauncher = (dir, script, args = [], input = '') =>
   spawnSync(process.execPath, [path.join(launcherOf(dir), script), ...args], { env: { ...process.env, CLAUDE_CONFIG_DIR: dir }, input, encoding: 'utf8' });
 
-const settingsOf = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
 const launcherOf = (dir) => path.join(dir, 'claude-gauge', 'launcher');
 const runtimeOf = (dir) => path.join(dir, 'claude-gauge', 'runtime');
 const ok = (r) => assert.equal(r.status, 0, `exit ${r.status}\n${r.stdout}\n${r.stderr}`);
@@ -76,7 +61,7 @@ const entry = (...commands) => ({ hooks: commands.map(cmd) });
 test('setup run from the plugin cache points the settings at the launcher, never at a version folder', () => {
   const dir = configFolder({ model: 'opus' });
   const plugin = installVersion(dir, '1.0.0');
-  ok(run(dir, path.join(plugin, 'dist', 'cli.js'), ['setup', '--status-line', '--show ctx,5h,7d --segments 10', '--token-line', '--window 1m']));
+  ok(runCli(dir, ['setup', '--status-line', '--show ctx,5h,7d --segments 10', '--token-line', '--window 1m'], { cli: path.join(plugin, 'dist', 'cli.js') }));
 
   const launcher = launcherOf(dir);
   assert.deepEqual(settingsOf(dir), {
@@ -102,8 +87,8 @@ test('the three commands write the same settings on the plugin route as on the t
     const viaPlugin = configFolder(before);
     const pluginCli = path.join(installVersion(viaPlugin, '1.0.0'), 'dist', 'cli.js');
     for (const args of commands) {
-      ok(run(npm, path.join(dist, 'cli.js'), args));
-      ok(run(viaPlugin, pluginCli, args));
+      ok(runCli(npm, args));
+      ok(runCli(viaPlugin, args, { cli: pluginCli }));
       const asLauncher = JSON.stringify(settingsOf(npm)).split(runtimeOf(npm).replace(/\\/g, '/')).join(launcherOf(viaPlugin).replace(/\\/g, '/'));
       assert.deepEqual(settingsOf(viaPlugin), JSON.parse(asLauncher), args.join(' '));
     }
@@ -113,7 +98,7 @@ test('the three commands write the same settings on the plugin route as on the t
 test('the launcher runs the installed status line with the switches and input Claude Code gives it', () => {
   const dir = configFolder();
   const plugin = installVersion(dir, '1.0.0');
-  ok(run(dir, path.join(plugin, 'dist', 'cli.js'), ['setup', '--yes']));
+  ok(runCli(dir, ['setup', '--yes'], { cli: path.join(plugin, 'dist', 'cli.js') }));
 
   const payload = JSON.stringify({ model: { display_name: 'Opus' }, context_window: { used_percentage: 25 } });
   const line = runLauncher(dir, 'statusline.js', ['--show', 'ctx,model'], payload);
@@ -130,7 +115,7 @@ test('the launcher runs the installed status line with the switches and input Cl
 test('the launcher picks the newest installed version, by version number, then by install time', () => {
   const dir = configFolder();
   const plugin = installVersion(dir, '1.0.0');
-  ok(run(dir, path.join(plugin, 'dist', 'cli.js'), ['setup', '--yes']));
+  ok(runCli(dir, ['setup', '--yes'], { cli: path.join(plugin, 'dist', 'cli.js') }));
   fakeVersion(dir, '1.9.0');
   fakeVersion(dir, '1.10.0');
 
@@ -149,7 +134,7 @@ test('the launcher picks the newest installed version, by version number, then b
   // A plugin with no version in its manifest is installed under a commit
   // SHA, which says nothing about order: the newest folder wins.
   const empty = configFolder();
-  ok(run(empty, path.join(installVersion(empty, '0123456789ab'), 'dist', 'cli.js'), ['setup', '--yes']));
+  ok(runCli(empty, ['setup', '--yes'], { cli: path.join(installVersion(empty, '0123456789ab'), 'dist', 'cli.js') }));
   const older = fakeVersion(empty, 'aaaaaaaaaaaa');
   const newer = fakeVersion(empty, 'ffffffffffff');
   const time = (s) => new Date(Date.UTC(2026, 0, 1) + s * 1000);
@@ -162,7 +147,7 @@ test('the launcher picks the newest installed version, by version number, then b
 test('the launcher prints nothing and exits 0 when no version is installed', () => {
   const dir = configFolder();
   const plugin = installVersion(dir, '1.0.0');
-  ok(run(dir, path.join(plugin, 'dist', 'cli.js'), ['setup', '--yes']));
+  ok(runCli(dir, ['setup', '--yes'], { cli: path.join(plugin, 'dist', 'cli.js') }));
   fs.rmSync(path.join(dir, 'plugins'), { recursive: true, force: true });
   for (const script of ['statusline.js', 'tokenline.js']) {
     const r = runLauncher(dir, script, [], '{}');
@@ -188,18 +173,18 @@ test('configure and uninstall from the plugin cache keep the launcher and restor
   const before = { statusLine: cmd('~/bin/my-status.sh'), hooks: { Stop: [entry('afplay done.aiff')] } };
   const dir = configFolder(before);
   const cli = path.join(installVersion(dir, '1.0.0'), 'dist', 'cli.js');
-  ok(run(dir, cli, ['setup', '--yes', '--replace']));
-  ok(run(dir, cli, ['configure', '--status-line', '--segments 10']));
+  ok(runCli(dir, ['setup', '--yes', '--replace'], { cli }));
+  ok(runCli(dir, ['configure', '--status-line', '--segments 10'], { cli }));
   assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(launcherOf(dir), 'statusline.js'), '--segments 10'));
-  ok(run(dir, cli, ['uninstall']));
+  ok(runCli(dir, ['uninstall'], { cli }));
   assert.deepEqual(settingsOf(dir), before);
 });
 
 test('update from the plugin cache says the plugin updates itself', () => {
   const dir = configFolder();
   const cli = path.join(installVersion(dir, '1.0.0'), 'dist', 'cli.js');
-  ok(run(dir, cli, ['setup', '--yes']));
-  const r = run(dir, cli, ['update']);
+  ok(runCli(dir, ['setup', '--yes'], { cli }));
+  const r = runCli(dir, ['update'], { cli });
   ok(r);
   assert.match(r.stdout, /\/plugin/);
   assert.match(r.stdout, /newest/);
