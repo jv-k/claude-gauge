@@ -43,26 +43,26 @@ interface Options {
 
 interface Switch {
   name: string;
-  // The value the switch takes, as the comment at the top writes it; none for a flag.
-  value?: string;
+  // Whether the switch takes a value: the next word, or the one after `=`.
+  takesValue?: boolean;
   // What the switch sets in the options.
   apply: (opts: Options, value: string) => void;
 }
 
 // Every switch parseArgs reads, one row each: readSwitches takes a value for
-// a row that names one, and parseArgs runs the row's apply. --instruct is
+// a row that says so, and parseArgs runs the row's apply. --instruct is
 // not here, because the program reads it from argv itself, below.
 const SWITCHES: readonly Switch[] = [
   {
     name: '--show',
-    value: '<parts>',
+    takesValue: true,
     apply: (opts, value) => {
       const parts = value.split(',').map((p) => p.trim()).filter(isPart);
       if (parts.length) opts.show = parts;
     },
   },
-  { name: '--segments', value: '<5|10>', apply: (opts, value) => { opts.segments = value; } },
-  { name: '--window', value: '<tokens>', apply: (opts, value) => { opts.window = value; } },
+  { name: '--segments', takesValue: true, apply: (opts, value) => { opts.segments = value; } },
+  { name: '--window', takesValue: true, apply: (opts, value) => { opts.window = value; } },
   { name: '--latest', apply: (opts) => { opts.latest = true; } },
 ];
 
@@ -85,7 +85,7 @@ function readSwitches(argv: readonly string[]): ReadSwitch[] {
   for (let i = 0; i < argv.length; i++) {
     const start = i;
     const [name, inline] = argv[i].split(/=(.*)/s);
-    const value = switchNamed(name)?.value ? (inline ?? argv[++i] ?? '') : '';
+    const value = switchNamed(name)?.takesValue ? (inline ?? argv[++i] ?? '') : '';
     read.push({ name, value, words: argv.slice(start, i + 1) });
   }
   return read;
