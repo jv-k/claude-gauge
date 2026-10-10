@@ -12,27 +12,37 @@
     <a href="https://github.com/jv-k/claude-gauge/actions/workflows/test.yml"><img src="https://github.com/jv-k/claude-gauge/actions/workflows/test.yml/badge.svg" alt="Test status"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-blue.svg" alt="MIT licence"></a>
   </p>
+  <p>
+    <a href="#how-it-looks"><b>How it looks</b></a> &nbsp;◦&nbsp;
+    <a href="#getting-started"><b>Getting started</b></a> &nbsp;◦&nbsp;
+    <a href="https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md"><b>Full reference</b></a> &nbsp;◦&nbsp;
+    <a href="#upgrading-from-claude-hud"><b>Upgrading from claude-hud</b></a>
+  </p>
 </div>
 
-claude-gauge is a compact status line and token line for [Claude Code](https://code.claude.com).
+**claude-gauge** is a compact status line and token line for [Claude Code](https://code.claude.com), in the terminal, the VS Code extension and the desktop app.
 
-The status line sits under the prompt. It shows how full the context window is, and your 5-hour and weekly usage. A pace marker on each usage bar shows if you will reach the limit before it resets. The second row shows the session: the time, how long it has run, the repository, the git branch, the model and the effort. You choose the rows and the parts, from 40 parts that also cover tools, subagents, todos, git changes, pull requests and cost.
+## How it looks
 
-The token line shows what each turn used: the requests, the output and thinking tokens, the prompt cache and the context.
-
-claude-gauge installs as a Claude Code plugin or from npm. Its setup wizard draws the bars again after each choice. It has no runtime dependencies, and it runs on macOS, Linux and Windows, under Node.js 18 or later or Bun.
-
-The status line:
+In the terminal, the status line sits under the prompt:
 
 ```text
 ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
 11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main* ↑1 │ Opus 5.5 │ effort high
 ```
 
-The token line, at the end of each turn:
+The token line shows at the end of each turn:
 
 ```text
 11:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
+```
+
+In VS Code and the desktop app, Claude ends each reply with the same bars:
+
+```text
+ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
+11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main* ↑1 │ Opus 5.5 │ effort high
+4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
 ```
 
 ## Getting started
@@ -98,15 +108,7 @@ Then tell me to start a new session.
 
 #### The result
 
-Each reply then ends with the bars:
-
-```text
-ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
-11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main* ↑1 │ Opus 5.5 │ effort high
-4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
-```
-
-The token line leaves out its time there, because the status line shows it. To change a bar in the replies, put its switches after `--instruct`, for example `--show 5h,7d`. On a 1M-context model, add `--window 1m` to both hooks. Each reply needs one or two more short tool calls. Uninstall also removes these hooks.
+Each reply then ends with the bars, as in [How it looks](#how-it-looks). The token line leaves out its time there, because the status line shows it. To change a bar in the replies, put its switches after `--instruct`, for example `--show 5h,7d`. On a 1M-context model, add `--window 1m` to both hooks. Each reply needs one or two more short tool calls. Uninstall also removes these hooks.
 
 ### Change, update or remove the bars
 
@@ -140,7 +142,10 @@ The status line shows these parts by default:
 
 The pace marker `┃` shows how much of the window has passed. Its colour shows where your usage goes at the current pace. Green stays well under the limit. Red and purple go over it.
 
-Other parts show the tools and subagents in use, todos, git changes, pull requests, the cost per day and week, memory use and more. The [reference](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#more-status-line-parts) lists all of them.
+Other parts show the tools and subagents in use, todos, git changes, pull requests, the cost per day and week, memory use and more.
+
+> [!TIP]
+> The reference describes [all 40 parts](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#what-the-bars-show), with what each one shows and when.
 
 ## Customise
 
@@ -160,7 +165,20 @@ jv-k/claude-gauge │ ⎇ main │ #12 approved │ +156 −23
 Opus 5.5 │ effort high │ $1.23 │ cache 91% warm
 ```
 
-Each `--show` is one row. The reference lists every [part, switch and theme](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#options).
+Each `--show` is one row.
+
+> [!TIP]
+> The reference lists [every switch](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#options), the four [themes](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#themes) and [more examples](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#examples).
+
+## Full reference
+
+[docs/reference.md](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md) has everything this page leaves out:
+
+- [Every status line part](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#what-the-bars-show), and the [token line's parts](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#token-line)
+- [Every switch](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#options), the [themes](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#themes), [colours and bar characters](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#colours-and-bar-characters), and [examples](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#examples)
+- [Other ways to install](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#install): with a Claude prompt, or by hand from a clone
+- [Update](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#update) and [uninstall](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#uninstall) for each install route
+- [The claude-hud option map](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#upgrading-from-claude-hud)
 
 ## Contributing
 
