@@ -8,6 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
@@ -38,19 +39,24 @@ test('bump-release leaves the GitHub release to the release workflow', () => {
   assert.match(pkg.scripts['bump-release'], /--push origin/);
 });
 
-// What npm publish would upload, from npm's own file list. dist/ is in
-// .gitignore on integration/1.0, so this proves the files field wins.
-function packedFiles() {
-  const out = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
-    cwd: root,
+// Runs npm or npx in `cwd` and returns its output. They are npm.cmd and
+// npx.cmd on Windows, which run only through a shell (#3 plans CI there). The
+// shell would split a path with a space in it, so paths go in through `env`
+// as npm config, never as arguments.
+const runNpm = (command, args, { cwd = root, env = {} } = {}) =>
+  execFileSync(command, args, {
+    cwd,
+    env: { ...process.env, ...env },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    // npm is npm.cmd on Windows, which runs only through a shell (#3 plans
-    // CI there).
     shell: process.platform === 'win32',
   });
-  return JSON.parse(out)[0].files.map((f) => f.path).sort();
-}
+
+// What npm publish would upload, from npm's own report. dist/ is in
+// .gitignore on integration/1.0, so this proves the files field wins.
+const packed = () => JSON.parse(runNpm('npm', ['pack', '--dry-run', '--json', '--ignore-scripts']))[0];
+
+const packedFiles = () => packed().files.map((f) => f.path).sort();
 
 test('the package ships the built lines, and no sources or tests', () => {
   const files = packedFiles();
@@ -59,4 +65,89 @@ test('the package ships the built lines, and no sources or tests', () => {
   }
   const extra = files.filter((f) => !f.startsWith('dist/') && !['package.json', 'README.md', 'LICENSE'].includes(f));
   assert.deepEqual(extra, []);
+});
+
+// npm refuses the unscoped name claude-gauge with a 403, so the package is
+// published under the owner's scope (#92). Only the npm name changes.
+const NPM_NAME = '@jv-k/claude-gauge';
+
+test('the package is published as @jv-k/claude-gauge, with public access', () => {
+  assert.equal(pkg.name, NPM_NAME);
+  assert.deepEqual(pkg.publishConfig, { access: 'public' });
+  assert.equal(packed().name, NPM_NAME);
+});
+
+test('the bin names stay claude-gauge, claude-gauge-statusline and claude-gauge-tokenline', () => {
+  assert.deepEqual(Object.keys(pkg.bin).sort(), ['claude-gauge', 'claude-gauge-statusline', 'claude-gauge-tokenline']);
+});
+
+// With several bins, npm exec runs the one named as the package without its
+// scope. This packs the package and runs it as a user would, with npx and no
+// command name, offline and with a cache of its own.
+test('npx of the packed package runs the claude-gauge command', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-pack-'));
+  try {
+    const env = { npm_config_pack_destination: dir, npm_config_cache: path.join(dir, 'cache') };
+    const tarball = JSON.parse(runNpm('npm', ['pack', '--json', '--ignore-scripts'], { env }))[0].filename;
+    const help = runNpm('npx', ['--yes', '--offline', `./${tarball}`, '--help'], { cwd: dir, env });
+    assert.match(help, /^Usage: claude-gauge <setup \| configure \| uninstall \| update>/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// An npm or npx command that names the package without its scope. The plugin
+// name claude-gauge@claude-gauge and the bin name claude-gauge are not npm
+// package names, so they do not count. An npm command stops at the end of its
+// code span, so a bin command later on the same line does not count either.
+const UNSCOPED = [
+  /\bnpx\s+(?:--?[\w-]+\s+)*claude-gauge\b/,
+  /\bnpm\s+(?:install|i|add|uninstall|un|remove|rm|update|up|exec|view|info|deprecate|dist-tag|access)\b[^`\n]*(?<![\w/@-])claude-gauge\b/,
+  /(?<![\w/@-])claude-gauge@(?:\d|latest|next\b)/,
+  /npmjs\.com\/package\/claude-gauge\b/,
+];
+
+const unscoped = (text) => text.split('\n').filter((line) => UNSCOPED.some((re) => re.test(line)));
+
+test('the unscoped check finds npm commands without the scope, and passes scoped ones, the plugin and the bin', () => {
+  for (const line of [
+    'npx claude-gauge setup',
+    'npx --yes claude-gauge setup',
+    'npx claude-gauge@latest update',
+    'run `npm install -g claude-gauge`.',
+    'npm install -g claude-gauge@latest',
+    'npm uninstall -g claude-gauge',
+    'publish a placeholder version, `claude-gauge@0.0.1`, so',
+    'npm deprecate @jv-k/claude-gauge@0.0.1 "Install claude-gauge 1.0.0 or later."',
+    'on [npm](https://www.npmjs.com/package/claude-gauge).',
+  ]) {
+    assert.deepEqual(unscoped(line), [line]);
+  }
+  for (const line of [
+    'npx @jv-k/claude-gauge setup',
+    'npx @jv-k/claude-gauge@latest update',
+    'npm install -g @jv-k/claude-gauge@latest',
+    'npm deprecate @jv-k/claude-gauge@0.0.1 "Install @jv-k/claude-gauge 1.0.0 or later."',
+    '/plugin install claude-gauge@claude-gauge',
+    'claude plugin update claude-gauge@claude-gauge',
+    'then `claude-gauge update`.',
+    'run `npm install -g @jv-k/claude-gauge@latest`, then `claude-gauge update`.',
+    'https://www.npmjs.com/package/@jv-k/claude-gauge',
+  ]) {
+    assert.deepEqual(unscoped(line), []);
+  }
+});
+
+// Every tracked doc, the issue templates and workflows, and the CLI source
+// whose text the CLI prints. The changelog keeps the history as it was. The
+// built dist/ holds only .js files, so the pathspecs leave it out.
+test('no doc tells a user to run npm or npx with the unscoped name', () => {
+  const files = execFileSync('git', ['ls-files', '-z', '--', '*.md', '.github/*.yml', 'src/*.ts'], { cwd: root, encoding: 'utf8' })
+    .split('\0')
+    .filter((f) => f && f !== 'CHANGELOG.md');
+  for (const file of ['README.md', '.github/ISSUE_TEMPLATE/bug.yml', 'src/cli.ts']) {
+    assert.ok(files.includes(file), `git ls-files did not list ${file}`);
+  }
+  const found = files.flatMap((f) => unscoped(fs.readFileSync(path.join(root, f), 'utf8')).map((line) => `${f}: ${line.trim()}`));
+  assert.deepEqual(found, []);
 });

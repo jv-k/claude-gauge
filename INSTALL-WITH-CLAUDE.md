@@ -102,9 +102,9 @@ The `claude-gauge` command from npm does the fetch and the settings merge itself
 4. **Run setup with the answers as switches.** It asks nothing when it gets bar switches:
 
    ```sh
-   npx claude-gauge setup --status-line "<status line switches>" --token-line "<token line switches>"
+   npx @jv-k/claude-gauge setup --status-line "<status line switches>" --token-line "<token line switches>"
    ```
 
-   Give `""` for a bar with no switches, and `--no-token-line` or `--no-status-line` in place of a bar the user does not want. If setup stops because the settings run another status line, show that command to the user, and run again with `--replace` only with their consent. Setup saves the status line it replaces, and `npx claude-gauge uninstall` puts it back. Done when setup prints the commands it set up.
+   Give `""` for a bar with no switches, and `--no-token-line` or `--no-status-line` in place of a bar the user does not want. If setup stops because the settings run another status line, show that command to the user, and run again with `--replace` only with their consent. Setup saves the status line it replaces, and `npx @jv-k/claude-gauge uninstall` puts it back. Done when setup prints the commands it set up.
 5. **Add the SessionStart hooks (if chosen),** as in step 7, with commands that name `~/.claude/claude-gauge/runtime/` in place of `~/.claude/claude-gauge/dist/`. Done when settings.json holds one SessionStart entry per chosen bar, or the user has the JSON to merge.
-6. **Report,** as in step 8, with the backup path if setup printed one. It makes no backup when there was no settings file. The update command is `npx claude-gauge@latest update`, which keeps the user's switches.
+6. **Report,** as in step 8, with the backup path if setup printed one. It makes no backup when there was no settings file. The update command is `npx @jv-k/claude-gauge@latest update`, which keeps the user's switches.

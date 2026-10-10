@@ -15,7 +15,7 @@ Detection would cost more than it saves:
 The switch keeps the user in control and keeps the status line free of terminal guesswork.
 
 ```sh
-npx claude-gauge configure --status-line "--no-links"
+npx @jv-k/claude-gauge configure --status-line "--no-links"
 ```
 
 ## Prior requests

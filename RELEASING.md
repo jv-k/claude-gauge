@@ -9,12 +9,31 @@ Installs that clone `main` update with `git pull`, so those users get a change w
 
 ## Set up once
 
-The owner of jv-k/claude-gauge does this before the first release.
+The package is `@jv-k/claude-gauge`, under the owner's npm scope. npm refuses to publish the unscoped name `claude-gauge` with `403 Forbidden`, although no package has that name, and only npm support can say why. The scope changes only the npm name: the commands, the plugin, the repository and `~/.claude/claude-gauge/` keep the name `claude-gauge`.
 
-1. On [npmjs.com](https://www.npmjs.com), create a granular access token with read and write access to packages, and turn on its option to bypass two-factor authentication, because a workflow cannot answer a two-factor prompt. Before the first release, the package does not exist yet, so the token cannot name it. After the first release, limit the token to `claude-gauge`. npm sets an expiry date on a token that can write, so put the date in your calendar.
-2. In the repository, go to **Settings**, then **Secrets and variables**, then **Actions**. Add a repository secret named `NPM_TOKEN` with the token as its value.
+The workflow publishes to npm through a [trusted publisher](https://docs.npmjs.com/trusted-publishers). On npmjs.com, the package `@jv-k/claude-gauge` names the `release` workflow of jv-k/claude-gauge as its trusted publisher. For each run, npm then takes the workflow's OIDC (OpenID Connect) token from GitHub in place of an npm token. So the project stores no npm token, and the repository has no `NPM_TOKEN` secret. The workflow's own `GITHUB_TOKEN` creates the GitHub release, so that step needs no secret either.
 
-The workflow gives the token to `npm publish` and to nothing else. When the token expires, make a new one and replace the secret. The workflow's own `GITHUB_TOKEN` creates the GitHub release, so that step needs no secret.
+npm adds a trusted publisher only to a package that already exists, and a new trusted publisher expires if it does not publish within 2 days. So the owner of jv-k/claude-gauge does these steps in this order for the first release:
+
+1. From your terminal, publish a placeholder version, `@jv-k/claude-gauge@0.0.1`, so that the package exists on npm. Commit and push nothing for it: `package.json` on `main` stays at `0.0.0` until VerBump sets `1.0.0`. The owner published this placeholder on 2026-10-10, so this step is done.
+2. Just before you cut 1.0.0, open the **Settings** page of `@jv-k/claude-gauge` on [npmjs.com](https://www.npmjs.com/package/@jv-k/claude-gauge), and add a trusted publisher for GitHub Actions with these four fields. All of them are case-sensitive and must be exact. npm does not check them when you save, so a mistake shows only when the workflow publishes.
+
+   | Field | Value |
+   | --- | --- |
+   | Organization or user | `jv-k` |
+   | Repository | `claude-gauge` |
+   | Workflow filename | `release.yml` |
+   | Environment name | Leave it empty. |
+
+3. Under the allowed actions, tick **npm publish**. The workflow runs a direct `npm publish`, and a trusted publisher added after 3 September 2026 allows only `npm stage publish` until you tick it.
+4. Cut 1.0.0 (see [Cut a release](#cut-a-release)) within 2 days. If the first publish does not succeed within 2 days, the trusted publisher expires. Then delete it, add it again, and publish within 2 days.
+5. When 1.0.0 is on npm, deprecate the placeholder:
+
+   ```sh
+   npm deprecate @jv-k/claude-gauge@0.0.1 "A placeholder. Install @jv-k/claude-gauge 1.0.0 or later."
+   ```
+
+After the first release, the trusted publisher stays in place, and later releases need no setup.
 
 ## Before you start
 
@@ -56,13 +75,13 @@ pnpm bump-release
 
 VerBump does not create the GitHub release. The tag starts the `release` workflow, which goes through these steps:
 
-6. It checks that the tag is `v` followed by the version in `package.json`.
+6. It checks that npm is 11.5.1 or later, which trusted publishing needs, and that the tag is `v` followed by the version in `package.json`.
 7. It runs `pnpm test` on the tagged commit, with a fresh build of `dist/`.
 8. It takes the section for the version from `CHANGELOG.md`. The section starts at the `## X.Y.Z` heading and stops at the next `##` heading. If the section is missing or empty, the workflow fails here.
 9. It creates the GitHub release `vX.Y.Z` with the section as its body. If the release already exists, it leaves the release as it is.
-10. It runs `npm publish --provenance`. npm publishes `dist/`, `README.md`, `LICENSE` and `package.json`, and links the package to the workflow run that built it.
+10. It runs `npm publish --provenance`. npm accepts the publish through the trusted publisher, publishes `dist/`, `README.md`, `LICENSE` and `package.json`, and links the package to the workflow run that built it.
 
-Watch the run in the **Actions** tab, or with `gh run watch`. When it passes, the release is on the [releases page](https://github.com/jv-k/claude-gauge/releases) and on [npm](https://www.npmjs.com/package/claude-gauge).
+Watch the run in the **Actions** tab, or with `gh run watch`. When it passes, the release is on the [releases page](https://github.com/jv-k/claude-gauge/releases) and on [npm](https://www.npmjs.com/package/@jv-k/claude-gauge).
 
 To set the version yourself, add `-v` to `pnpm bump-release`. For the first release, which goes from `0.0.0` to `1.0.0`:
 
@@ -84,8 +103,13 @@ Before step 5, nothing is public.
 
 After step 5, the tag is public, so do not move it or tag the version again. Read the failed step in the run's log.
 
-- If the tests fail in step 7, or the version check fails in step 6, nothing is published. Fix the cause on a branch, merge it, and release the next patch version.
+- If the tests fail in step 7, or a check fails in step 6, nothing is published. Fix the cause on a branch, merge it, and release the next patch version. If the npm check fails, the Node version in `.github/workflows/release.yml` bundles an npm older than 11.5.1, so raise the Node version there.
 - If the section is missing or empty in step 8, nothing is published. A rerun reads the same tagged `CHANGELOG.md`, so it fails again. Release the next patch version, and check its section in the dry run first.
-- If `npm publish` fails in step 10, the GitHub release exists already. The usual causes are a missing or expired `NPM_TOKEN`. Fix the secret, then rerun the failed job from the run's page, or with `gh run rerun <run-id> --failed`. Step 9 leaves the release as it is, and step 10 publishes.
+- If `npm publish` fails in step 10, the GitHub release exists already. The usual causes are in the trusted publisher on npmjs.com:
+  - A field does not match the repository or the workflow exactly. npm then cannot sign in, and fails with `ENEEDAUTH` ("Unable to authenticate"), `E401` or `E404`. Check the four fields in [Set up once](#set-up-once), and check that `repository.url` in `package.json` names jv-k/claude-gauge.
+  - The trusted publisher expired, because its first publish did not succeed within 2 days. Delete it and add it again.
+  - **npm publish** is not ticked under the allowed actions.
+
+  The job also needs npm 11.5.1 or later, the `id-token: write` permission and a GitHub-hosted runner. Step 6 checks npm, and the workflow sets the other two. Fix the cause, then rerun the failed job from the run's page, or with `gh run rerun <run-id> --failed`. Step 9 leaves the release as it is, and step 10 publishes.
 
 `--no-hooks` skips the test gate in step 2 for one run. Use it only when the gate itself is broken. The workflow still runs the tests in step 7.

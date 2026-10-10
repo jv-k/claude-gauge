@@ -2,7 +2,9 @@
 # CHANGELOG.md, commits, tags vX.Y.Z and pushes; this workflow does the rest.
 # It tests the tagged commit, creates the GitHub release with the tag's
 # CHANGELOG section as its body, and publishes the package to npm with
-# provenance. RELEASING.md gives the whole flow.
+# provenance. npm accepts the publish through its trusted publisher for this
+# workflow, so no npm token is stored anywhere. RELEASING.md gives the whole
+# flow and the trusted publisher setup.
 name: release
 
 on:
@@ -24,17 +26,37 @@ jobs:
     permissions:
       # gh release create needs to write the release.
       contents: write
-      # npm publish --provenance signs with the workflow's OIDC token.
+      # npm publish trades the workflow's OIDC token for a short-lived npm
+      # token through the trusted publisher. The provenance is signed with
+      # the same OIDC identity.
       id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+      # Trusted publishing needs npm 11.5.1 or later. Recent Node 24 releases
+      # bundle it, and npm's own example workflow uses Node 24, so the job
+      # uses Node 24 rather than upgrading npm in place on Node 22, whose
+      # bundled npm is 10. The next step checks the npm that Node 24 brings.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
-          # Writes an .npmrc that reads the token from NODE_AUTH_TOKEN.
+          # Writes an .npmrc for the public registry, with a token line that
+          # setup-node fills with a placeholder. The workflow passes no npm
+          # token. npm tries the trusted publisher first, and signs in there.
           registry-url: https://registry.npmjs.org
+      # Fails before anything is public when the bundled npm is too old for
+      # trusted publishing.
+      - name: Check that npm is 11.5.1 or later
+        env:
+          MINIMUM_NPM: 11.5.1
+        run: |
+          npm_version=$(npm --version)
+          echo "npm ${npm_version}"
+          if ! printf '%s\n' "${MINIMUM_NPM}" "${npm_version}" | sort -V -C; then
+            echo "::error::Trusted publishing needs npm ${MINIMUM_NPM} or later, but the job has npm ${npm_version}."
+            exit 1
+          fi
       - run: pnpm install --frozen-lockfile
       - name: Check that the tag matches the version in package.json
         run: |
@@ -61,7 +83,8 @@ jobs:
             gh release create "${GITHUB_REF_NAME}" --verify-tag \
               --title "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/notes.md"
           fi
+      # A direct publish, not npm stage publish. Trusted publishing adds
+      # provenance by itself. --provenance stays, so that the command says
+      # that it publishes with provenance.
       - name: Publish to npm with provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --access public
