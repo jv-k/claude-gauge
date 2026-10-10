@@ -217,12 +217,12 @@ The settings run a small launcher in `~/.claude/claude-gauge/launcher/`, not the
 In a terminal, run setup with npx:
 
 ```sh
-npx claude-gauge setup
+npx @jv-k/claude-gauge setup
 ```
 
 Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, then whether to add the token line, and if so, which parts it shows. It redraws the status line after each answer, from your last terminal session's figures or from a sample. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is no.
 
-Setup copies the two scripts into `~/.claude/claude-gauge/runtime/` (under `$CLAUDE_CONFIG_DIR` when that is set) and points the settings there, so the bars keep working when npm clears its npx cache. To keep the `claude-gauge` command at hand instead of running it through npx, install it globally with `npm install -g claude-gauge`.
+Setup copies the two scripts into `~/.claude/claude-gauge/runtime/` (under `$CLAUDE_CONFIG_DIR` when that is set) and points the settings there, so the bars keep working when npm clears its npx cache. To keep the `claude-gauge` command at hand instead of running it through npx, install it globally with `npm install -g @jv-k/claude-gauge`.
 
 The `claude-gauge` command has four commands:
 
@@ -249,8 +249,8 @@ The `claude-gauge` command has four commands:
 For example, both bars with the defaults, and then 10-cell bars on the status line:
 
 ```sh
-npx claude-gauge setup --yes
-npx claude-gauge configure --status-line "--segments 10"
+npx @jv-k/claude-gauge setup --yes
+npx @jv-k/claude-gauge configure --status-line "--segments 10"
 ```
 
 The settings file is `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set. `claude-gauge --help` lists the commands and switches. The bars' own switches are in [Options](#options).
@@ -503,10 +503,10 @@ As a plugin, claude-gauge updates with `/plugin`, from the **Marketplaces** tab,
 From npm, run `update` from the newest version:
 
 ```sh
-npx claude-gauge@latest update
+npx @jv-k/claude-gauge@latest update
 ```
 
-It copies the new scripts over the old ones in `~/.claude/claude-gauge/runtime/` and keeps your switches, so the next render runs the new version. After a global install, run `npm install -g claude-gauge@latest`, then `claude-gauge update`.
+It copies the new scripts over the old ones in `~/.claude/claude-gauge/runtime/` and keeps your switches, so the next render runs the new version. After a global install, run `npm install -g @jv-k/claude-gauge@latest`, then `claude-gauge update`.
 
 From a clone:
 
@@ -523,10 +523,10 @@ As a plugin, run `/claude-gauge:uninstall`, then `/plugin uninstall claude-gauge
 From npm, run:
 
 ```sh
-npx claude-gauge uninstall
+npx @jv-k/claude-gauge uninstall
 ```
 
-It takes the status line, the token line and any `--instruct` hooks out of your settings, and puts back the status line that setup replaced. The scripts stay in `~/.claude/claude-gauge/runtime/`: delete `~/.claude/claude-gauge` to remove them, with the saved usage figures. After a global install, also run `npm uninstall -g claude-gauge`.
+It takes the status line, the token line and any `--instruct` hooks out of your settings, and puts back the status line that setup replaced. The scripts stay in `~/.claude/claude-gauge/runtime/`: delete `~/.claude/claude-gauge` to remove them, with the saved usage figures. After a global install, also run `npm uninstall -g @jv-k/claude-gauge`.
 
 From a clone, remove the `statusLine`, `Stop` and `SessionStart` entries that name claude-gauge from `~/.claude/settings.json`. Then delete the folder:
 
@@ -547,7 +547,7 @@ One setup command makes the switch. Install the plugin as in [As a Claude Code p
 Or, from a terminal:
 
 ```sh
-npx claude-gauge setup
+npx @jv-k/claude-gauge setup
 ```
 
 Setup finds claude-hud's status line in your settings, shows it to you, and asks before it replaces it. It saves claude-hud's command, so `/claude-gauge:uninstall` or `claude-gauge uninstall` puts it back. claude-hud's command runs a launcher that prints nothing once the claude-hud plugin is uninstalled, so keep claude-hud installed until you are sure that you will not go back.
