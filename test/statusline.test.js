@@ -1168,8 +1168,8 @@ test('--right leaves a row unchanged when it holds text of uncertain width', () 
   }
 });
 
-test("the README's compact and --right example rows are what the status line prints", () => {
-  const readme = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'README.md'), 'utf8');
+test("the reference's compact and --right example rows are what the status line prints", () => {
+  const reference = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'docs', 'reference.md'), 'utf8');
   const data = {
     model: { display_name: 'Opus 5.5' },
     effort: { level: 'high' },
@@ -1180,9 +1180,9 @@ test("the README's compact and --right example rows are what the status line pri
   assert.equal(compact, 'jv-k/claude-gauge│⎇ main│Opus 5.5│eff high');
   const right = runAt(72, data, [...show, '--right', 'model,effort']);
   assert.equal(right, 'jv-k/claude-gauge │ ⎇ main                        Opus 5.5 │ effort high');
-  assert.ok(readme.includes(`\n${compact}\n`), compact);
-  assert.ok(readme.includes(`a 72-column terminal`));
-  assert.ok(readme.includes(`\n${right}\n`), right);
+  assert.ok(reference.includes(`\n${compact}\n`), compact);
+  assert.ok(reference.includes(`a 72-column terminal`));
+  assert.ok(reference.includes(`\n${right}\n`), right);
 });
 
 test('each terminal render saves its payload to the state folder, overwriting the last, for the wizard to preview', () => {

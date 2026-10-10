@@ -77,11 +77,11 @@ test('setup and configure ask their questions with AskUserQuestion, then pass th
 
 test('the commands name only switches the CLI and the two bars take', () => {
   const usage = fs.readFileSync(path.join(root, 'src', 'cli.ts'), 'utf8');
-  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  const reference = fs.readFileSync(path.join(root, 'docs', 'reference.md'), 'utf8');
   for (const name of ['setup', 'configure', 'uninstall']) {
     const { body } = command(name);
     for (const [flag] of body.matchAll(/--[a-z0-9][a-z0-9-]*/g)) {
-      assert.ok(usage.includes(`'${flag}'`) || readme.includes(`| \`${flag}`), `${name}.md names ${flag}, which neither the CLI nor the README documents`);
+      assert.ok(usage.includes(`'${flag}'`) || reference.includes(`| \`${flag}`), `${name}.md names ${flag}, which neither the CLI nor docs/reference.md documents`);
     }
   }
 });

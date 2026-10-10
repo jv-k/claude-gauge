@@ -97,7 +97,7 @@ Tell the user, in a few lines:
 The `claude-gauge` command from npm does the fetch and the settings merge itself. It copies the scripts into `~/.claude/claude-gauge/runtime/` (under `$CLAUDE_CONFIG_DIR` when that is set) and backs up `~/.claude/settings.json` before it changes it.
 
 1. **Check the prerequisites.** Run `node --version` and `npm --version`. Done when Node.js is 18 or later and npm is present. If not, stop and tell the user claude-gauge needs Node.js 18 or later, with npm.
-2. **Learn the switches.** Read the **Options** section of the README, at `https://raw.githubusercontent.com/jv-k/claude-gauge/main/README.md`. Done when you can name the parts `--show` accepts for each line.
+2. **Learn the switches.** Read the **Options** section of the reference, at `https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/reference.md`. Done when you can name the parts `--show` accepts for each line.
 3. **Ask the user what to install,** as in step 4. Done when every question that applies has an answer.
 4. **Run setup with the answers as switches.** It asks nothing when it gets bar switches:
 
