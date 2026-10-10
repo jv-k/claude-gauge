@@ -103,7 +103,7 @@ interface PartSpec {
 
 // Every status line part, by the name --show takes. The default parts come
 // first, in the order their rows show them; the order of the rest is the
-// README's.
+// reference's (docs/reference.md).
 const partRegistry = {
   ctx: { description: 'context window in use: percentage, bar and token count', row: 0, build: ({ data, config, theme }) => contextPart(data, config, theme) },
   '5h': { description: '5-hour usage, with pace marker and reset time', row: 0, build: ({ data, config, theme, nowMs }) => windowPart('5h', data, config, theme, nowMs) },
@@ -228,7 +228,7 @@ const DEFAULTS: Config = {
 
 interface Switch {
   name: string;
-  // The value the switch takes, as the README writes it; none for a flag.
+  // The value the switch takes, as docs/reference.md writes it; none for a flag.
   value?: string;
   description: string;
   // What the switch sets in the config. A switch without one acts in the
