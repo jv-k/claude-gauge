@@ -41,8 +41,32 @@ interface Options {
   window?: string;
 }
 
-// The switches that take a value. parseArgs reads each of them.
-const TAKES_VALUE = ['--show', '--segments', '--window'];
+interface Switch {
+  name: string;
+  // The value the switch takes, as the comment at the top writes it; none for a flag.
+  value?: string;
+  // What the switch sets in the options.
+  apply: (opts: Options, value: string) => void;
+}
+
+// Every switch parseArgs reads, one row each: readSwitches takes a value for
+// a row that names one, and parseArgs runs the row's apply. --instruct is
+// not here, because the program reads it from argv itself, below.
+const SWITCHES: readonly Switch[] = [
+  {
+    name: '--show',
+    value: '<parts>',
+    apply: (opts, value) => {
+      const parts = value.split(',').map((p) => p.trim()).filter(isPart);
+      if (parts.length) opts.show = parts;
+    },
+  },
+  { name: '--segments', value: '<5|10>', apply: (opts, value) => { opts.segments = value; } },
+  { name: '--window', value: '<tokens>', apply: (opts, value) => { opts.window = value; } },
+  { name: '--latest', apply: (opts) => { opts.latest = true; } },
+];
+
+const switchNamed = (name: string) => SWITCHES.find((s) => s.name === name);
 
 // One switch as readSwitches reads it: its name, its value, and the words it
 // was read from. The status line has its own copy of this reader, because
@@ -61,7 +85,7 @@ function readSwitches(argv: readonly string[]): ReadSwitch[] {
   for (let i = 0; i < argv.length; i++) {
     const start = i;
     const [name, inline] = argv[i].split(/=(.*)/s);
-    const value = TAKES_VALUE.includes(name) ? (inline ?? argv[++i] ?? '') : '';
+    const value = switchNamed(name)?.value ? (inline ?? argv[++i] ?? '') : '';
     read.push({ name, value, words: argv.slice(start, i + 1) });
   }
   return read;
@@ -71,19 +95,7 @@ function readSwitches(argv: readonly string[]): ReadSwitch[] {
 // ignored, so a hook never fails over a typo.
 function parseArgs(argv: readonly string[]): Options {
   const opts: Options = { latest: false };
-  for (const { name, value } of readSwitches(argv)) {
-    switch (name) {
-      case '--show': {
-        const parts = value.split(',').map((p) => p.trim()).filter(isPart);
-        if (parts.length) opts.show = parts;
-        break;
-      }
-      case '--segments': opts.segments = value; break;
-      case '--window': opts.window = value; break;
-      case '--latest': opts.latest = true; break;
-      default: break;
-    }
-  }
+  for (const { name, value } of readSwitches(argv)) switchNamed(name)?.apply(opts, value);
   return opts;
 }
 
