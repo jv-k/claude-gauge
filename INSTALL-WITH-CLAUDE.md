@@ -69,7 +69,7 @@ Done when settings.json parses and holds the entries the user chose, or the user
 
 ## 7. Add the SessionStart hooks (if chosen)
 
-For each bar the user wants in VS Code and the desktop app, append `{ "hooks": [ { "type": "command", "command": "<command>" } ] }` to the `hooks.SessionStart` array of `~/.claude/settings.json`, creating `hooks` and `SessionStart` as needed. The command is the bar's step 5 command with `--instruct` added, for example `node ~/.claude/claude-gauge/dist/statusline.js --instruct --window 1m`. If an entry already runs that script with `--instruct`, at either the old or the `dist/` path, update it instead of adding a second one. Keep the user's other hooks, and confirm the file parses as in step 6.
+For each bar the user wants in VS Code and the desktop app, append `{ "hooks": [ { "type": "command", "command": "<command>" } ] }` to the `hooks.SessionStart` array of `~/.claude/settings.json`, creating `hooks` and `SessionStart` as needed. The command is the bar's step 5 command with `--instruct` added, for example `node ~/.claude/claude-gauge/dist/statusline.js --instruct --window 1m`. For the token line, use a `--show` without `time`, such as `--show req,out,cache,ctx`, when the status line hook shows the time already. If an entry already runs that script with `--instruct`, at either the old or the `dist/` path, update it instead of adding a second one. Keep the user's other hooks, and confirm the file parses as in step 6.
 
 Check each hook:
 

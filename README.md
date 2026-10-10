@@ -73,6 +73,7 @@ Find the statusLine command that runs claude-gauge's statusline.js, and the Stop
 Add two entries to hooks.SessionStart and keep every entry that is there already:
 one runs the same statusline.js with --instruct, and one runs the same tokenline.js with --instruct.
 Put each bar's existing switches after --instruct.
+The status line already shows the time, so give the token line hook a --show without time, such as --show req,out,cache,ctx.
 Test each new command with CLAUDE_CODE_ENTRYPOINT=claude-vscode. It must print an instruction.
 Then tell me to start a new session.
 ```
@@ -84,7 +85,7 @@ Then tell me to start a new session.
 
    ```json
    { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/runtime/statusline.js --instruct" } ] },
-   { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/runtime/tokenline.js --instruct" } ] }
+   { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/runtime/tokenline.js --instruct --show req,out,cache,ctx" } ] }
    ```
 
 3. Start a new session.
@@ -96,10 +97,10 @@ Each reply then ends with the bars:
 ```text
 ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
 11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main* ↑1 │ Opus 5.5 │ effort high
-11:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
+4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
 ```
 
-To change a bar in the replies, put its switches after `--instruct`, for example `--show 5h,7d`. On a 1M-context model, add `--window 1m` to both hooks. Each reply needs one or two more short tool calls. Uninstall also removes these hooks.
+The token line leaves out its time there, because the status line shows it. To change a bar in the replies, put its switches after `--instruct`, for example `--show 5h,7d`. On a 1M-context model, add `--window 1m` to both hooks. Each reply needs one or two more short tool calls. Uninstall also removes these hooks.
 
 ### Change, update or remove the bars
 
