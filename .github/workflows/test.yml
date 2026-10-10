@@ -1,8 +1,8 @@
-# Runs the suite on Node 18, 20 and 22 and on Bun, each on Linux, macOS and
-# Windows, and the typecheck, the linter and a coverage report beside it. Any
-# failing job turns the check red. A new push to a pull request cancels the
-# run it supersedes. Each push to main has a group of its own, so no run on
-# main is cancelled, queued or running.
+# Runs the suite on Node 18, 20, 22 and 24 and on Bun, each on Linux, macOS
+# and Windows, and the typecheck, the linter and a coverage report beside it.
+# Any failing job turns the check red. A new push to a pull request cancels
+# the run it supersedes. Each push to main has a group of its own, so no run
+# on main is cancelled, queued or running.
 name: test
 
 on:
@@ -26,7 +26,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        runtime: ['18', '20', '22', bun]
+        runtime: ['18', '20', '22', '24', bun]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
