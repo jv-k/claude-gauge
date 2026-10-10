@@ -49,7 +49,7 @@ const node_crypto_1 = require("node:crypto");
 const node_url_1 = require("node:url");
 // Every status line part, by the name --show takes. The default parts come
 // first, in the order their rows show them; the order of the rest is the
-// README's.
+// reference's (docs/reference.md).
 const partRegistry = {
     ctx: { description: 'context window in use: percentage, bar and token count', row: 0, build: ({ data, config, theme }) => contextPart(data, config, theme) },
     '5h': { description: '5-hour usage, with pace marker and reset time', row: 0, build: ({ data, config, theme, nowMs }) => windowPart('5h', data, config, theme, nowMs) },

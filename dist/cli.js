@@ -30,6 +30,7 @@ const settings_1 = require("./settings");
 const settings_file_1 = require("./settings-file");
 const wizard_1 = require("./wizard");
 const statusline_1 = require("./statusline");
+const wordmark_1 = require("./wordmark");
 const USAGE = `Usage: claude-gauge <setup | configure | uninstall | update> [switches]
 
   setup        add the status line and the token line to Claude Code's settings
@@ -51,6 +52,12 @@ parts you want, and show the status line after each answer.
 The bars' switches are in README.md, under Options. The settings file is
 $CLAUDE_CONFIG_DIR/settings.json, else ~/.claude/settings.json.
 `;
+// The wordmark and a blank line, in colour when `stream` takes colour. The
+// usage and the questions start with it. Scripts and the plugin's slash
+// commands run the commands with switches, and those print no wordmark.
+const banner = (stream) => `${(0, wordmark_1.wordmark)((0, wordmark_1.colorEnabled)(stream))}\n`;
+// The usage, under the wordmark, for `stream`.
+const usage = (stream) => banner(stream) + USAGE;
 // A mistake in the command line: exit 2, with the usage.
 class UsageError extends Error {
 }
@@ -281,6 +288,7 @@ const starWithGh = () => (0, node_child_process_1.spawnSync)('gh', ['api', '--me
 async function interactive(command, replace) {
     const io = terminalIo();
     try {
+        io.write(banner(process.stdout));
         const file = settingsFile();
         const { settings } = (0, settings_file_1.readSettings)(file);
         const current = settings.statusLine;
@@ -358,9 +366,14 @@ function update() {
 }
 async function main(argv) {
     try {
+        // A bare claude-gauge gets the usage alone, as a mistake: exit 2.
+        if (!argv.length) {
+            process.stderr.write(usage(process.stderr));
+            return 2;
+        }
         const args = parseArgs(argv);
         if (args.help) {
-            process.stdout.write(USAGE);
+            process.stdout.write(usage(process.stdout));
             return 0;
         }
         if (!args.command)
@@ -383,7 +396,7 @@ async function main(argv) {
     }
     catch (err) {
         if (err instanceof UsageError) {
-            process.stderr.write(`claude-gauge: ${err.message}\n\n${USAGE}`);
+            process.stderr.write(`claude-gauge: ${err.message}\n\n${usage(process.stderr)}`);
             return 2;
         }
         process.stderr.write(`claude-gauge: ${err.message}\n`);
