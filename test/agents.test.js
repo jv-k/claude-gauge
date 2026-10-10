@@ -6,12 +6,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { render, parseArgs, readTranscriptActivity } = require('../dist/statusline.js');
 
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+const { plain, tempDir } = require('./helpers');
 
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const at = (secondsAgo) => NOW - secondsAgo * 1000;
@@ -102,7 +100,7 @@ const jsonl = (records) => records.map((r) => `${JSON.stringify(r)}\n`).join('')
 
 // What the reader finds in a transcript of these records, with its state in
 // a folder of its own.
-function agentsIn(records, { dir = tmpDir(), append = [] } = {}) {
+function agentsIn(records, { dir = tempDir(), append = [] } = {}) {
   const file = path.join(dir, 'session.jsonl');
   const stateDir = path.join(dir, 'state');
   fs.writeFileSync(file, jsonl(records));
@@ -157,7 +155,7 @@ test('the reader takes the Task name and the model switch, defaults the type, an
 });
 
 test('the program shows the subagents a transcript names', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const started = Date.now() - 5000;
   fs.writeFileSync(file, jsonl([agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader', model: 'haiku' }, started)]));
@@ -174,7 +172,7 @@ test('the program shows the subagents a transcript names', () => {
 });
 
 test('a transcript state from before the agents part is read again from the start', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const stateDir = path.join(dir, 'state');
   fs.writeFileSync(file, jsonl([agentCall('t1', { subagent_type: 'Explore', description: 'Map it' }, at(30))]));

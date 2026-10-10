@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { PARTS, DEFAULT_ROWS, SWITCHES, THEMES } = require('../dist/statusline.js');
+const { cliSource, switchAt, usageSwitches } = require('./helpers');
 
 const reference = fs.readFileSync(path.join(__dirname, '..', 'docs', 'reference.md'), 'utf8');
 const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
@@ -75,7 +76,7 @@ function drift(text, { parts, defaultRows, switches, themes, usage }) {
     const problems = [];
     for (const row of rows) {
       for (const [, span] of (row[1] ?? '').matchAll(/`([^`]+)`/g)) {
-        const flag = /^--[a-z0-9][a-z0-9-]*/.exec(span)?.[0];
+        const flag = switchAt(span);
         if (flag && !switches.includes(flag)) problems.push(`${column} names the switch ${flag}, which the registry lacks`);
         if (!flag && /^[\w-]+$/.test(span) && !parts.includes(span)) problems.push(`${column} names the part ${span}, which the registry lacks`);
       }
@@ -97,16 +98,7 @@ function drift(text, { parts, defaultRows, switches, themes, usage }) {
   ];
 }
 
-// The switches in the CLI's USAGE text, which `claude-gauge --help` prints:
-// each line of it that starts with a switch, such as `  --replace   ...`, or
-// with a short name and then the switch, such as `  -y, --yes   ...`.
-function usageSwitches(source) {
-  const usage = /const USAGE = `([^`]*)`/.exec(source);
-  if (!usage) throw new Error('src/cli.ts has no USAGE text');
-  return [...usage[1].matchAll(/^ +(?:-[a-z0-9], +)?(--[a-z0-9][a-z0-9-]*)/gm)].map((m) => m[1]);
-}
-
-const cli = fs.readFileSync(path.join(__dirname, '..', 'src', 'cli.ts'), 'utf8');
+const cli = cliSource();
 
 const registry = {
   parts: [...PARTS],

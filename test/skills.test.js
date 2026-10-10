@@ -7,12 +7,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { render, parseArgs, readTranscriptActivity } = require('../dist/statusline.js');
 
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+const { plain, tempDir } = require('./helpers');
 
 // Renders the skills part over the activity a reader returns.
 const renderSkills = ({ skills = [], mcp = [] }, args = ['--show', 'skills']) =>
@@ -88,7 +86,7 @@ const jsonl = (records) => records.map((r) => `${JSON.stringify(r)}\n`).join('')
 
 // What the reader finds in a transcript of these records, with its state in
 // a folder of its own.
-function activityIn(records, { dir = tmpDir(), append = [] } = {}) {
+function activityIn(records, { dir = tempDir(), append = [] } = {}) {
   const file = path.join(dir, 'session.jsonl');
   const stateDir = path.join(dir, 'state');
   fs.writeFileSync(file, jsonl(records));
@@ -163,7 +161,7 @@ test("a subagent's skills and MCP calls are left out", () => {
 });
 
 test('the program shows the skills and servers from a transcript', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   fs.writeFileSync(file, jsonl([...skill('tdd'), ...mcpCall('mcp__linear__list_issues', failed), ...mcpCall('mcp__github__get_issue')]));
   const out = require('node:child_process').execFileSync(
@@ -179,7 +177,7 @@ test('the program shows the skills and servers from a transcript', () => {
 });
 
 test('a transcript state from before the skills part is read again from the start', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const stateDir = path.join(dir, 'state');
   fs.writeFileSync(file, jsonl(skill('tdd')));

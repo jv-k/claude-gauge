@@ -10,50 +10,19 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { commandFor } = require('../dist/settings.js');
 const { colorEnabled } = require('../dist/wordmark.js');
 
-const root = path.join(__dirname, '..');
-const dist = path.join(root, 'dist');
+const { root, dist, plain, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, tempDir } = require('./helpers');
 
-const made = [];
-test.after(() => {
-  for (const dir of made) fs.rmSync(dir, { recursive: true, force: true });
-});
-
-// A Claude config folder of its own, with settings.json holding `settings`
-// when given.
-function configFolder(settings) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-cli-'));
-  made.push(dir);
-  if (settings !== undefined) fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings, null, 2) + '\n');
-  return dir;
-}
-
-// Runs the CLI with `env` added. The colour variables are only as `env` sets
-// them, so a NO_COLOR or FORCE_COLOR in the shell that runs the suite changes
-// nothing.
-function run(dir, args, { cli = path.join(dist, 'cli.js'), env = {} } = {}) {
-  const base = { ...process.env, CLAUDE_CONFIG_DIR: dir };
-  for (const name of ['NO_COLOR', 'FORCE_COLOR', 'CLICOLOR_FORCE']) delete base[name];
-  return spawnSync(process.execPath, [cli, ...args], { env: { ...base, ...env }, encoding: 'utf8' });
-}
-
-const settingsOf = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
 const backupsIn = (dir) => fs.readdirSync(dir).filter((f) => /^settings\.json\.claude-gauge-.+\.bak$/.test(f)).sort();
-const runtimeOf = (dir) => path.join(dir, 'claude-gauge', 'runtime');
 const savedStatusLine = (dir) => path.join(dir, 'claude-gauge', '.state', 'previous-statusline.json');
-const ok = (r) => assert.equal(r.status, 0, `exit ${r.status}\n${r.stdout}\n${r.stderr}`);
-
-const cmd = (command) => ({ type: 'command', command });
-const entry = (...commands) => ({ hooks: commands.map(cmd) });
 const CLAUDE_HUD = "bash -c 'exec node ~/.claude/plugins/cache/claude-hud/claude-hud/0.1.0/dist/index.js'";
 
 test('setup --yes on a fresh config folder installs both bars from a copy of the runtime', () => {
   const dir = configFolder();
-  const r = run(dir, ['setup', '--yes']);
+  const r = runCli(dir, ['setup', '--yes']);
   ok(r);
 
   const runtime = runtimeOf(dir);
@@ -80,7 +49,7 @@ test('setup --yes on a fresh config folder installs both bars from a copy of the
     encoding: 'utf8',
   });
   assert.equal(line.status, 0);
-  assert.match(line.stdout.replace(/\x1b\[[0-9;]*m/g, ''), /ctx 25%/);
+  assert.match(plain(line.stdout), /ctx 25%/);
 });
 
 test('setup writes the chosen switches, keeps every other key and refreshInterval, and backs up', () => {
@@ -91,7 +60,7 @@ test('setup writes the chosen switches, keeps every other key and refreshInterva
   };
   const dir = configFolder(before);
   const original = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
-  ok(run(dir, ['setup', '--status-line', '--show ctx,5h,7d --show time,model --segments 10', '--token-line=--window 1m']));
+  ok(runCli(dir, ['setup', '--status-line', '--show ctx,5h,7d --show time,model --segments 10', '--token-line=--window 1m']));
 
   const runtime = runtimeOf(dir);
   assert.deepEqual(settingsOf(dir), {
@@ -114,7 +83,7 @@ test('setup writes the chosen switches, keeps every other key and refreshInterva
 
 test('switches that hold shell syntax are quoted, so they cannot run a second command', () => {
   const dir = configFolder();
-  ok(run(dir, ['setup', '--status-line', '--show ctx;touch pwned', '--no-token-line']));
+  ok(runCli(dir, ['setup', '--status-line', '--show ctx;touch pwned', '--no-token-line']));
   assert.match(settingsOf(dir).statusLine.command, / --show "ctx;touch" pwned$/);
   assert.equal(settingsOf(dir).hooks, undefined);
 });
@@ -123,7 +92,7 @@ test('a status line that is not claude-gauge is replaced only with --replace, an
   const mine = { type: 'command', command: '~/bin/my-status.sh', padding: 0 };
   const dir = configFolder({ statusLine: mine });
   const original = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
-  const refused = run(dir, ['setup', '--yes']);
+  const refused = runCli(dir, ['setup', '--yes']);
   assert.equal(refused.status, 1);
   assert.match(refused.stderr, /~\/bin\/my-status\.sh/);
   assert.match(refused.stderr, /--replace/);
@@ -131,10 +100,10 @@ test('a status line that is not claude-gauge is replaced only with --replace, an
   assert.deepEqual(backupsIn(dir), []);
 
   const hud = configFolder({ statusLine: cmd(CLAUDE_HUD) });
-  const hudRefused = run(hud, ['setup', '--yes']);
+  const hudRefused = runCli(hud, ['setup', '--yes']);
   assert.equal(hudRefused.status, 1);
   assert.match(hudRefused.stderr, /claude-hud/);
-  ok(run(hud, ['setup', '--yes', '--replace']));
+  ok(runCli(hud, ['setup', '--yes', '--replace']));
   assert.match(settingsOf(hud).statusLine.command, /runtime\/statusline\.js$/);
   assert.deepEqual(JSON.parse(fs.readFileSync(savedStatusLine(hud), 'utf8')), { statusLine: cmd(CLAUDE_HUD) });
 });
@@ -142,9 +111,9 @@ test('a status line that is not claude-gauge is replaced only with --replace, an
 test('re-running setup changes nothing and keeps the status line saved the first time', () => {
   const mine = cmd('~/bin/my-status.sh');
   const dir = configFolder({ statusLine: mine });
-  ok(run(dir, ['setup', '--yes', '--replace']));
+  ok(runCli(dir, ['setup', '--yes', '--replace']));
   const first = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
-  const again = run(dir, ['setup', '--yes']);
+  const again = runCli(dir, ['setup', '--yes']);
   ok(again);
   assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), first);
   assert.equal(backupsIn(dir).length, 1, 'an unchanged file gets no new backup');
@@ -158,14 +127,14 @@ test('uninstall restores the previous status line and removes only claude-gauge 
     hooks: { Stop: [entry('afplay done.aiff')] },
   };
   const dir = configFolder(before);
-  ok(run(dir, ['setup', '--yes', '--replace']));
-  const r = run(dir, ['uninstall']);
+  ok(runCli(dir, ['setup', '--yes', '--replace']));
+  const r = runCli(dir, ['uninstall']);
   ok(r);
   assert.deepEqual(settingsOf(dir), before);
   assert.ok(!fs.existsSync(savedStatusLine(dir)), 'the saved status line is spent');
   assert.equal(backupsIn(dir).length, 2);
 
-  const nothing = run(dir, ['uninstall']);
+  const nothing = runCli(dir, ['uninstall']);
   ok(nothing);
   assert.match(nothing.stdout, /not in .*settings\.json/);
   assert.deepEqual(settingsOf(dir), before);
@@ -173,13 +142,13 @@ test('uninstall restores the previous status line and removes only claude-gauge 
 
 test('configure changes one bar in place and needs claude-gauge set up first', () => {
   const dir = configFolder({ hooks: { Stop: [entry('afplay done.aiff')] } });
-  const early = run(dir, ['configure', '--token-line', '--window 1m']);
+  const early = runCli(dir, ['configure', '--token-line', '--window 1m']);
   assert.equal(early.status, 1);
   assert.match(early.stderr, /claude-gauge setup/);
 
-  ok(run(dir, ['setup', '--yes']));
+  ok(runCli(dir, ['setup', '--yes']));
   const runtime = runtimeOf(dir);
-  ok(run(dir, ['configure', '--token-line', '--window 1m --show req,ctx']));
+  ok(runCli(dir, ['configure', '--token-line', '--window 1m --show req,ctx']));
   let settings = settingsOf(dir);
   assert.deepEqual(settings.hooks.Stop, [
     entry('afplay done.aiff'),
@@ -187,7 +156,7 @@ test('configure changes one bar in place and needs claude-gauge set up first', (
   ]);
   assert.equal(settings.statusLine.command, commandFor(path.join(runtime, 'statusline.js')));
 
-  ok(run(dir, ['configure', '--no-token-line']));
+  ok(runCli(dir, ['configure', '--no-token-line']));
   settings = settingsOf(dir);
   assert.deepEqual(settings.hooks.Stop, [entry('afplay done.aiff')]);
   assert.equal(settings.statusLine.command, commandFor(path.join(runtime, 'statusline.js')));
@@ -195,14 +164,14 @@ test('configure changes one bar in place and needs claude-gauge set up first', (
 
 test('update refreshes the runtime copy', () => {
   const dir = configFolder();
-  const missing = run(dir, ['update']);
+  const missing = runCli(dir, ['update']);
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /claude-gauge setup/);
 
-  ok(run(dir, ['setup', '--yes']));
+  ok(runCli(dir, ['setup', '--yes']));
   const copy = path.join(runtimeOf(dir), 'statusline.js');
   fs.writeFileSync(copy, '// an older release\n');
-  ok(run(dir, ['update']));
+  ok(runCli(dir, ['update']));
   assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(path.join(dist, 'statusline.js'), 'utf8'));
 });
 
@@ -214,10 +183,10 @@ test('a git clone in the state folder runs from its own dist/, with no copy', ()
   fs.copyFileSync(path.join(root, 'package.json'), path.join(clone, 'package.json'));
   const cli = path.join(clone, 'dist', 'cli.js');
 
-  ok(run(dir, ['setup', '--yes'], { cli }));
+  ok(runCli(dir, ['setup', '--yes'], { cli }));
   assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(clone, 'dist', 'statusline.js')));
   assert.ok(!fs.existsSync(runtimeOf(dir)));
-  const update = run(dir, ['update'], { cli });
+  const update = runCli(dir, ['update'], { cli });
   ok(update);
   assert.match(update.stdout, /git -C .* pull/);
 });
@@ -233,7 +202,7 @@ test('writes go through a symlinked settings.json to its target', (t) => {
     t.skip(`this OS made no symlink: ${err.code}`);
     return;
   }
-  ok(run(dir, ['setup', '--yes']));
+  ok(runCli(dir, ['setup', '--yes']));
   assert.ok(fs.lstatSync(path.join(dir, 'settings.json')).isSymbolicLink(), 'the link is still a link');
   const written = JSON.parse(fs.readFileSync(target, 'utf8'));
   assert.equal(written.model, 'opus');
@@ -245,7 +214,7 @@ test('writes go through a symlinked settings.json to its target', (t) => {
 test('settings.json that is not JSON is left alone', () => {
   const dir = configFolder();
   fs.writeFileSync(path.join(dir, 'settings.json'), '{ "model": "opus", }');
-  const r = run(dir, ['setup', '--yes']);
+  const r = runCli(dir, ['setup', '--yes']);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /settings\.json/);
   assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), '{ "model": "opus", }');
@@ -253,13 +222,13 @@ test('settings.json that is not JSON is left alone', () => {
 
 test('usage errors exit 2 and say what to run', () => {
   const dir = configFolder();
-  const bare = run(dir, []);
+  const bare = runCli(dir, []);
   assert.equal(bare.status, 2);
   assert.match(bare.stderr, /setup \| configure \| uninstall \| update/);
-  assert.equal(run(dir, ['setup', '--colour']).status, 2);
-  assert.equal(run(dir, ['launch']).status, 2);
-  assert.equal(run(dir, ['setup', '--status-line']).status, 2, 'a switch that needs a value');
-  ok(run(dir, ['--help']));
+  assert.equal(runCli(dir, ['setup', '--colour']).status, 2);
+  assert.equal(runCli(dir, ['launch']).status, 2);
+  assert.equal(runCli(dir, ['setup', '--status-line']).status, 2, 'a switch that needs a value');
+  ok(runCli(dir, ['--help']));
   assert.ok(!fs.existsSync(path.join(dir, 'settings.json')));
 });
 
@@ -272,7 +241,7 @@ const WORDMARK = [
 ];
 
 test('--help starts with the wordmark, then a blank line, then the usage', () => {
-  const r = run(configFolder(), ['--help'], { env: { NO_COLOR: '1' } });
+  const r = runCli(configFolder(), ['--help'], { env: { NO_COLOR: '1' } });
   ok(r);
   assert.ok(r.stdout.startsWith(`${WORDMARK.join('\n')}\n\nUsage: claude-gauge <setup | configure`), r.stdout);
 });
@@ -284,20 +253,20 @@ const RAINBOW = WORDMARK.map((row) => row.match(/.{3}/g).map((chunk, i) => `\x1b
 
 test('FORCE_COLOR or CLICOLOR_FORCE draws the wordmark a colour a letter, the hyphen grey, with a reset at each row end', () => {
   for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
-    const r = run(configFolder(), ['--help'], { env: colour });
+    const r = runCli(configFolder(), ['--help'], { env: colour });
     ok(r);
     assert.ok(r.stdout.startsWith(`${RAINBOW.join('\n')}\n\nUsage: claude-gauge `), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
   }
 });
 
 test('the wordmark is plain text off a terminal, with a FORCE_COLOR of 0, or with NO_COLOR, which beats FORCE_COLOR', () => {
-  const plain = `${WORDMARK.join('\n')}\n\nUsage: claude-gauge `;
+  const usage = `${WORDMARK.join('\n')}\n\nUsage: claude-gauge `;
   for (const colour of [{}, { FORCE_COLOR: '0' }, { CLICOLOR_FORCE: '0' }, { NO_COLOR: '1', FORCE_COLOR: '1' }]) {
-    const r = run(configFolder(), ['--help'], { env: colour });
+    const r = runCli(configFolder(), ['--help'], { env: colour });
     ok(r);
-    assert.ok(r.stdout.startsWith(plain), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
+    assert.ok(r.stdout.startsWith(usage), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
   }
-  const empty = run(configFolder(), ['--help'], { env: { NO_COLOR: '', FORCE_COLOR: '1' } });
+  const empty = runCli(configFolder(), ['--help'], { env: { NO_COLOR: '', FORCE_COLOR: '1' } });
   assert.ok(empty.stdout.startsWith(RAINBOW[0]), 'an empty NO_COLOR is no NO_COLOR');
 });
 
@@ -319,17 +288,17 @@ test('the colour gate colours a terminal, unless NO_COLOR is set, and a pipe onl
 });
 
 test('a bare claude-gauge prints the wordmark and the usage, on stderr, and exits 2', () => {
-  const bare = run(configFolder(), [], { env: { NO_COLOR: '1' } });
+  const bare = runCli(configFolder(), [], { env: { NO_COLOR: '1' } });
   assert.equal(bare.status, 2);
   assert.ok(bare.stderr.startsWith(`${WORDMARK.join('\n')}\n\nUsage: claude-gauge <setup | configure`), bare.stderr);
   assert.equal(bare.stdout, '');
 });
 
 test('the usage after a mistake starts with the wordmark, coloured by the gate on stderr', () => {
-  const noCommand = run(configFolder(), ['--replace'], { env: { NO_COLOR: '1' } });
+  const noCommand = runCli(configFolder(), ['--replace'], { env: { NO_COLOR: '1' } });
   assert.equal(noCommand.status, 2);
   assert.ok(noCommand.stderr.startsWith(`claude-gauge: Name a command.\n\n${WORDMARK.join('\n')}\n\nUsage: claude-gauge `), noCommand.stderr);
-  const unknown = run(configFolder(), ['launch'], { env: { FORCE_COLOR: '1' } });
+  const unknown = runCli(configFolder(), ['launch'], { env: { FORCE_COLOR: '1' } });
   assert.equal(unknown.status, 2);
   assert.ok(unknown.stderr.startsWith(`claude-gauge: Unknown command: launch\n\n${RAINBOW.join('\n')}\n\nUsage: claude-gauge `), JSON.stringify(unknown.stderr.slice(0, 400)));
   assert.equal(unknown.stdout, '');
@@ -338,7 +307,7 @@ test('the usage after a mistake starts with the wordmark, coloured by the gate o
 test('a hand-formatted settings.json keeps its tab indent and CRLF line ends', () => {
   const dir = configFolder();
   fs.writeFileSync(path.join(dir, 'settings.json'), '{\r\n\t"model": "opus"\r\n}\r\n');
-  ok(run(dir, ['setup', '--yes']));
+  ok(runCli(dir, ['setup', '--yes']));
   const text = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
   assert.match(text, /^\{\r\n\t"model": "opus",\r\n\t"statusLine": \{\r\n\t\t"type": "command",/);
   assert.ok(!/[^\r]\n/.test(text), 'every line ends in CRLF');
@@ -346,7 +315,7 @@ test('a hand-formatted settings.json keeps its tab indent and CRLF line ends', (
 
 test('configure stops at hooks it cannot read, with a message, not a crash', () => {
   const dir = configFolder({ statusLine: cmd('node ~/.claude/claude-gauge/dist/statusline.js'), hooks: { Stop: { hooks: [] } } });
-  const r = run(dir, ['configure', '--token-line', '']);
+  const r = runCli(dir, ['configure', '--token-line', '']);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /hooks\.Stop .*Fix it by hand/);
 });
@@ -359,25 +328,25 @@ test('a failed uninstall keeps the saved status line for the next try', (t) => {
   const dir = configFolder();
   const dotfiles = configFolder({ statusLine: cmd('~/bin/my-status.sh') });
   fs.symlinkSync(path.join(dotfiles, 'settings.json'), path.join(dir, 'settings.json'));
-  ok(run(dir, ['setup', '--yes', '--replace']));
+  ok(runCli(dir, ['setup', '--yes', '--replace']));
   fs.chmodSync(dotfiles, 0o555);
   try {
-    const r = run(dir, ['uninstall']);
+    const r = runCli(dir, ['uninstall']);
     assert.equal(r.status, 1);
   } finally {
     fs.chmodSync(dotfiles, 0o755);
   }
   assert.deepEqual(JSON.parse(fs.readFileSync(savedStatusLine(dir), 'utf8')), { statusLine: cmd('~/bin/my-status.sh') });
-  ok(run(dir, ['uninstall']));
+  ok(runCli(dir, ['uninstall']));
   assert.deepEqual(settingsOf(dir), { statusLine: cmd('~/bin/my-status.sh') });
 });
 
 test('uninstall stops at a saved status line it cannot read, and keeps the settings and the file', () => {
   const dir = configFolder({ statusLine: cmd('~/bin/my-status.sh') });
-  ok(run(dir, ['setup', '--yes', '--replace']));
+  ok(runCli(dir, ['setup', '--yes', '--replace']));
   const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
   fs.writeFileSync(savedStatusLine(dir), '{ "statusLine": ');
-  const r = run(dir, ['uninstall']);
+  const r = runCli(dir, ['uninstall']);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /previous-statusline\.json .*Fix or delete it by hand/);
   assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
@@ -387,17 +356,9 @@ test('uninstall stops at a saved status line it cannot read, and keeps the setti
 // The wizard, driven through the process with answers piped on stdin. PATH
 // holds only `bin`, so gh is there only when a test puts a fake one in.
 const ask = (dir, args, answers, { bin = emptyBin(), env = {} } = {}) =>
-  spawnSync(process.execPath, [path.join(dist, 'cli.js'), ...args], {
-    env: { ...process.env, CLAUDE_CONFIG_DIR: dir, PATH: bin, Path: bin, ...env },
-    input: answers.map((a) => `${a}\n`).join(''),
-    encoding: 'utf8',
-  });
+  runCli(dir, args, { env: { PATH: bin, Path: bin, ...env }, input: answers.map((a) => `${a}\n`).join('') });
 
-function emptyBin() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-bin-'));
-  made.push(dir);
-  return dir;
-}
+const emptyBin = () => tempDir('claude-gauge-bin-');
 
 // A folder holding a fake gh that logs each call's arguments, one call a line.
 function fakeGh() {
@@ -406,8 +367,6 @@ function fakeGh() {
   fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\necho "$*" >> '${log}'\n`, { mode: 0o755 });
   return { bin, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []) };
 }
-
-const plainText = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
 
 test('setup with no switches asks, and one yes installs both bars as --yes does', () => {
   const dir = configFolder();
@@ -418,7 +377,7 @@ test('setup with no switches asks, and one yes installs both bars as --yes does'
     statusLine: cmd(commandFor(path.join(runtime, 'statusline.js'))),
     hooks: { Stop: [entry(commandFor(path.join(runtime, 'tokenline.js')))] },
   });
-  const out = plainText(r.stdout);
+  const out = plain(r.stdout);
   assert.match(out, /ctx 43% /, 'a preview from the sample payload');
   assert.match(out, /Use the defaults/);
   assert.match(out, /new Claude Code session/);
@@ -441,9 +400,9 @@ test('the setup and configure questions start with the wordmark and a blank line
 test('the commands run with switches print no wordmark, so scripts and the slash commands get short output', () => {
   const dir = configFolder();
   for (const args of [['setup', '--yes'], ['configure', '--status-line', '--segments 10'], ['configure', '--no-token-line'], ['update'], ['uninstall']]) {
-    const r = run(dir, args, { env: { FORCE_COLOR: '1' } });
+    const r = runCli(dir, args, { env: { FORCE_COLOR: '1' } });
     ok(r);
-    const out = plainText(r.stdout + r.stderr);
+    const out = plain(r.stdout + r.stderr);
     assert.ok(WORDMARK.every((row) => !out.includes(row.trimEnd())), `${args.join(' ')} printed the wordmark:\n${out}`);
   }
 });
@@ -455,7 +414,7 @@ test('the wizard previews the payload the status line saved', () => {
   fs.writeFileSync(path.join(dir, 'claude-gauge', '.state', 'last-payload.json'), JSON.stringify(saved));
   const r = ask(dir, ['setup'], ['n', '1', 'model,ctx', '', 'mono', 'n', '', '', '']);
   ok(r);
-  const out = plainText(r.stdout);
+  const out = plain(r.stdout);
   assert.match(out, /Saved Model/);
   assert.match(out, /  Saved Model │ 77% /, 'the preview redrawn without labels');
 });
@@ -482,7 +441,7 @@ test('the token line parts the wizard is given go into the Stop hook command, an
   assert.equal(tokenLine(fewer), commandFor(script(fewer), '--show req,out,ctx'));
 
   // configure starts from that --show and keeps the --window set up.
-  ok(run(fewer, ['configure', '--token-line', '--show req,out,ctx --window 1m']));
+  ok(runCli(fewer, ['configure', '--token-line', '--show req,out,ctx --window 1m']));
   const again = ask(fewer, ['configure'], ['n', '', '', '', '', '', '', '', 'ctx', 'y']);
   ok(again);
   assert.match(again.stdout, /Token line parts.*\[req,out,ctx\]/);
@@ -519,7 +478,7 @@ test('the wizard asks before it replaces a status line that is not claude-gauge'
 test('configure with no switches runs the wizard on a set-up config, and offers no star', () => {
   const dir = configFolder();
   assert.equal(ask(dir, ['configure'], ['y']).status, 1, 'not set up yet');
-  ok(run(dir, ['setup', '--yes']));
+  ok(runCli(dir, ['setup', '--yes']));
   const gh = fakeGh();
   const r = ask(dir, ['configure'], ['n', '1', 'ctx', '', '', '', '', '', 'y'], { bin: gh.bin });
   ok(r);
@@ -530,7 +489,7 @@ test('configure with no switches runs the wizard on a set-up config, and offers 
 
 test('configure starts from the bars set up: a yes keeps the status line and adds no token line', () => {
   const dir = configFolder();
-  ok(run(dir, ['setup', '--status-line', '--segments 10 --theme mono', '--no-token-line']));
+  ok(runCli(dir, ['setup', '--status-line', '--segments 10 --theme mono', '--no-token-line']));
   const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
   const r = ask(dir, ['configure'], ['y']);
   ok(r);
@@ -555,7 +514,7 @@ test('configure keeps a quoted value and a switch it does not know, whichever pa
   const dir = configFolder();
   const script = (name) => path.join(runtimeOf(dir), name);
   const status = ['--show', 'text,ctx', '--text', 'my label', '--frobnicate'];
-  ok(run(dir, ['setup', '--yes']));
+  ok(runCli(dir, ['setup', '--yes']));
   const settings = settingsOf(dir);
   settings.statusLine.command = commandFor(script('statusline.js'), status);
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings, null, 2) + '\n');

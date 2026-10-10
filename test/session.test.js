@@ -7,12 +7,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { render, parseArgs, readTranscriptActivity } = require('../dist/statusline.js');
 
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+const { plain, tempDir } = require('./helpers');
 
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const ago = (seconds) => NOW - seconds * 1000;
@@ -98,7 +96,7 @@ const jsonl = (records) => records.map((r) => `${JSON.stringify(r)}\n`).join('')
 // What the reader finds in a transcript of these records, with its state in
 // a folder of its own; each batch in append is added and read in turn.
 function activityIn(records, { append = [] } = {}) {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const stateDir = path.join(dir, 'state');
   fs.writeFileSync(file, jsonl(records));
@@ -155,7 +153,7 @@ test("a subagent's replies are left out", () => {
 });
 
 test('the program shows the session counters from a transcript', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const now = Date.now();
   fs.writeFileSync(file, jsonl([prompt(now - 600_000), compacted(now - 500_000), prompt(now - 130_000), text(now - 125_000, 'msg_1', 400)]));
@@ -172,7 +170,7 @@ test('the program shows the session counters from a transcript', () => {
 });
 
 test('a transcript state from before the session counters is read again from the start', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const stateDir = path.join(dir, 'state');
   fs.writeFileSync(file, jsonl([prompt(ago(600)), compacted(ago(500))]));
