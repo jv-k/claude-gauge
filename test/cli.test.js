@@ -13,6 +13,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { commandFor } = require('../dist/settings.js');
+const { colorEnabled } = require('../dist/wordmark.js');
 
 const root = path.join(__dirname, '..');
 const dist = path.join(root, 'dist');
@@ -256,6 +257,79 @@ test('usage errors exit 2 and say what to run', () => {
   assert.ok(!fs.existsSync(path.join(dir, 'settings.json')));
 });
 
+// The claude-gauge wordmark: figlet's "future" font, three rows of one 3-cell
+// chunk per character. The middle row ends in a space.
+const WORDMARK = [
+  '┏━╸╻  ┏━┓╻ ╻╺┳┓┏━╸   ┏━╸┏━┓╻ ╻┏━╸┏━╸',
+  '┃  ┃  ┣━┫┃ ┃ ┃┃┣╸ ╺━╸┃╺┓┣━┫┃ ┃┃╺┓┣╸ ',
+  '┗━╸┗━╸╹ ╹┗━┛╺┻┛┗━╸   ┗━┛╹ ╹┗━┛┗━┛┗━╸',
+];
+
+// Runs the CLI with the colour variables only as `colour` sets them, so a
+// NO_COLOR or FORCE_COLOR in the shell that runs the suite changes nothing.
+function runColour(dir, args, colour = {}) {
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: dir };
+  for (const name of ['NO_COLOR', 'FORCE_COLOR', 'CLICOLOR_FORCE']) delete env[name];
+  return spawnSync(process.execPath, [path.join(dist, 'cli.js'), ...args], { env: { ...env, ...colour }, encoding: 'utf8' });
+}
+
+test('--help starts with the wordmark, then a blank line, then the usage', () => {
+  const r = runColour(configFolder(), ['--help'], { NO_COLOR: '1' });
+  ok(r);
+  assert.ok(r.stdout.startsWith(`${WORDMARK.join('\n')}\n\nUsage: claude-gauge <setup | configure`), r.stdout);
+});
+
+// The wordmark in colour: one 256-colour code in front of each chunk, the 11
+// letters in rainbow order and the hyphen grey, and a reset at each row's end.
+const COLOURS = [196, 202, 208, 214, 226, 118, 244, 82, 39, 27, 93, 163];
+const RAINBOW = WORDMARK.map((row) => row.match(/.{3}/g).map((chunk, i) => `\x1b[38;5;${COLOURS[i]}m${chunk}`).join('') + '\x1b[0m');
+
+test('FORCE_COLOR or CLICOLOR_FORCE draws the wordmark a colour a letter, the hyphen grey, with a reset at each row end', () => {
+  for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
+    const r = runColour(configFolder(), ['--help'], colour);
+    ok(r);
+    assert.ok(r.stdout.startsWith(`${RAINBOW.join('\n')}\n\nUsage: claude-gauge `), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
+  }
+});
+
+test('the wordmark is plain text off a terminal, with a FORCE_COLOR of 0, or with NO_COLOR, which beats FORCE_COLOR', () => {
+  const plain = `${WORDMARK.join('\n')}\n\nUsage: claude-gauge `;
+  for (const colour of [{}, { FORCE_COLOR: '0' }, { CLICOLOR_FORCE: '0' }, { NO_COLOR: '1', FORCE_COLOR: '1' }]) {
+    const r = runColour(configFolder(), ['--help'], colour);
+    ok(r);
+    assert.ok(r.stdout.startsWith(plain), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
+  }
+  const empty = runColour(configFolder(), ['--help'], { NO_COLOR: '', FORCE_COLOR: '1' });
+  assert.ok(empty.stdout.startsWith(RAINBOW[0]), 'an empty NO_COLOR is no NO_COLOR');
+});
+
+// A spawned CLI never writes to a terminal, so the gate's terminal cases are
+// checked on the gate itself, with a stand-in stream.
+test('the colour gate colours a terminal, unless NO_COLOR is set, and a pipe only when forced', () => {
+  const terminal = { isTTY: true };
+  const pipe = { isTTY: false };
+  assert.equal(colorEnabled(terminal, {}), true);
+  assert.equal(colorEnabled(terminal, { NO_COLOR: '1' }), false);
+  assert.equal(colorEnabled(terminal, { NO_COLOR: '1', FORCE_COLOR: '1' }), false);
+  assert.equal(colorEnabled(terminal, { NO_COLOR: '' }), true);
+  assert.equal(colorEnabled(pipe, {}), false);
+  assert.equal(colorEnabled({}, {}), false, 'a stream with no isTTY');
+  assert.equal(colorEnabled(pipe, { FORCE_COLOR: '1' }), true);
+  assert.equal(colorEnabled(pipe, { CLICOLOR_FORCE: '1' }), true);
+  assert.equal(colorEnabled(pipe, { FORCE_COLOR: '0' }), false);
+  assert.equal(colorEnabled(pipe, { FORCE_COLOR: '' }), false);
+});
+
+test('the usage after a mistake, a missing command included, starts with the wordmark, coloured by the gate on stderr', () => {
+  const bare = runColour(configFolder(), [], { NO_COLOR: '1' });
+  assert.equal(bare.status, 2);
+  assert.ok(bare.stderr.startsWith(`claude-gauge: Name a command.\n\n${WORDMARK.join('\n')}\n\nUsage: claude-gauge `), bare.stderr);
+  const unknown = runColour(configFolder(), ['launch'], { FORCE_COLOR: '1' });
+  assert.equal(unknown.status, 2);
+  assert.ok(unknown.stderr.startsWith(`claude-gauge: Unknown command: launch\n\n${RAINBOW.join('\n')}\n\nUsage: claude-gauge `), JSON.stringify(unknown.stderr.slice(0, 400)));
+  assert.equal(unknown.stdout, '');
+});
+
 test('a hand-formatted settings.json keeps its tab indent and CRLF line ends', () => {
   const dir = configFolder();
   fs.writeFileSync(path.join(dir, 'settings.json'), '{\r\n\t"model": "opus"\r\n}\r\n');
@@ -344,6 +418,29 @@ test('setup with no switches asks, and one yes installs both bars as --yes does'
   assert.match(out, /Use the defaults/);
   assert.match(out, /new Claude Code session/);
   assert.doesNotMatch(out, /Star /, 'no gh, no star offer');
+});
+
+test('the setup and configure questions start with the wordmark and a blank line', () => {
+  const dir = configFolder();
+  const setup = ask(dir, ['setup'], ['y'], { env: { NO_COLOR: '1' } });
+  ok(setup);
+  assert.ok(setup.stdout.startsWith(`${WORDMARK.join('\n')}\n\nThe status line with the defaults:\n`), setup.stdout);
+  const configure = ask(dir, ['configure'], ['y'], { env: { NO_COLOR: '1' } });
+  ok(configure);
+  assert.ok(configure.stdout.startsWith(`${WORDMARK.join('\n')}\n\nThe status line as set up now:\n`), configure.stdout);
+  const coloured = ask(dir, ['configure'], ['y'], { env: { NO_COLOR: '', FORCE_COLOR: '1' } });
+  ok(coloured);
+  assert.ok(coloured.stdout.startsWith(`${RAINBOW.join('\n')}\n\nThe status line as set up now:\n`), JSON.stringify(coloured.stdout.slice(0, 400)));
+});
+
+test('the commands run with switches print no wordmark, so scripts and the slash commands get short output', () => {
+  const dir = configFolder();
+  for (const args of [['setup', '--yes'], ['configure', '--status-line', '--segments 10'], ['configure', '--no-token-line'], ['update'], ['uninstall']]) {
+    const r = runColour(dir, args, { FORCE_COLOR: '1' });
+    ok(r);
+    const out = plainText(r.stdout + r.stderr);
+    assert.ok(WORDMARK.every((row) => !out.includes(row.trimEnd())), `${args.join(' ')} printed the wordmark:\n${out}`);
+  }
 });
 
 test('the wizard previews the payload the status line saved', () => {

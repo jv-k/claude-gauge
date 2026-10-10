@@ -90,7 +90,8 @@ test('npx of the packed package runs the claude-gauge command', () => {
     const env = { npm_config_pack_destination: dir, npm_config_cache: path.join(dir, 'cache') };
     const tarball = JSON.parse(runNpm('npm', ['pack', '--json', '--ignore-scripts'], { env }))[0].filename;
     const help = runNpm('npx', ['--yes', '--offline', `./${tarball}`, '--help'], { cwd: dir, env });
-    assert.match(help, /^Usage: claude-gauge <setup \| configure \| uninstall \| update>/);
+    // The usage follows the wordmark, so it starts a line, not the output.
+    assert.match(help, /^Usage: claude-gauge <setup \| configure \| uninstall \| update>/m);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -31,6 +31,7 @@ import type { Choices, StatusLineSetting } from './settings';
 import { readSettings, writeSettings, writeAtomic } from './settings-file';
 import { runWizard, offerStar, confirm, loadPayload, previewer } from './wizard';
 import { payloadFile } from './statusline';
+import { wordmark, colorEnabled } from './wordmark';
 import type { WizardIo } from './wizard';
 
 const USAGE = `Usage: claude-gauge <setup | configure | uninstall | update> [switches]
@@ -54,6 +55,11 @@ parts you want, and show the status line after each answer.
 The bars' switches are in README.md, under Options. The settings file is
 $CLAUDE_CONFIG_DIR/settings.json, else ~/.claude/settings.json.
 `;
+
+// The wordmark and a blank line, in colour when `stream` takes colour. The
+// usage and the questions start with it. The commands run with switches,
+// which scripts and the plugin's slash commands run, print none.
+const banner = (stream: NodeJS.WriteStream) => `${wordmark(colorEnabled(stream))}\n`;
 
 // A mistake in the command line: exit 2, with the usage.
 class UsageError extends Error {}
@@ -317,6 +323,7 @@ const starWithGh = () => spawnSync('gh', ['api', '--method', 'PUT', 'user/starre
 async function interactive(command: 'setup' | 'configure', replace: boolean): Promise<void> {
   const io = terminalIo();
   try {
+    io.write(banner(process.stdout));
     const file = settingsFile();
     const { settings } = readSettings(file);
     const current = settings.statusLine as StatusLineSetting | undefined;
@@ -406,7 +413,7 @@ async function main(argv: string[]): Promise<number> {
   try {
     const args = parseArgs(argv);
     if (args.help) {
-      process.stdout.write(USAGE);
+      process.stdout.write(banner(process.stdout) + USAGE);
       return 0;
     }
     if (!args.command) throw new UsageError('Name a command.');
@@ -419,7 +426,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   } catch (err) {
     if (err instanceof UsageError) {
-      process.stderr.write(`claude-gauge: ${err.message}\n\n${USAGE}`);
+      process.stderr.write(`claude-gauge: ${err.message}\n\n${banner(process.stderr)}${USAGE}`);
       return 2;
     }
     process.stderr.write(`claude-gauge: ${(err as Error).message}\n`);
