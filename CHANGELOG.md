@@ -1,3 +1,16 @@
+## 1.1.0 (2026-10-10)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.0.0 -> 1.1.0
+- chore(dist): build dist from fd0def9 [auto]
+- Merge pull request #95 from jv-k/docs/short-readme
+- Merge pull request #97 from jv-k/feat/cli-wordmark-94
+- docs: open the README with one line and How it looks, and link the reference
+- docs: open the README with what claude-gauge is
+- docs: leave the time out of the token line in replies
+- docs: show the same time in the status line and token line samples
+- fix: show the wordmark and the usage alone for a bare claude-gauge
+- docs: shorten the README to a getting started guide, with the full reference in docs/reference.md
+- feat: print the claude-gauge wordmark above the usage and at the start of the wizard
+
 ## 1.0.0 (2026-10-10)
 - chore: updated package.json, created CHANGELOG.md, bumped 0.0.0 -> 1.0.0
 - Merge integration/1.0: trusted publishing and the @jv-k/claude-gauge npm name (#42, #92)
