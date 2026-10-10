@@ -47,7 +47,7 @@ After the first release, the trusted publisher stays in place, and later release
 
   VerBump needs git and jq.
 - Make sure that you can push to jv-k/claude-gauge, because VerBump pushes the commit and the tag.
-- Release from `main`. While 1.0 is in progress, the work is on `integration/1.0`, so merge that branch into `main` first.
+- Release from `main`. When the work for the release is on an integration branch, merge that branch into `main` first.
 - Pull `main`, and make sure the working tree is clean.
 - Run `pnpm install`, then `pnpm build`, then `git status`. The build must leave `dist/` unchanged. The `dist` workflow commits the build to `main` after each merge, so a change in `dist/` means that its run for the last merge has not finished or has failed. Wait for the run, or fix it and run it again, then pull `main`.
 

@@ -45,12 +45,12 @@ pnpm test
 | `.claude-plugin/` | The plugin marketplace that `/plugin marketplace add jv-k/claude-gauge` reads, and the plugin's manifest. The repository root is the plugin. |
 | `commands/` | The plugin's slash commands: `/claude-gauge:setup`, `/claude-gauge:configure` and `/claude-gauge:uninstall`. Each has Claude ask its questions, then runs the `claude-gauge` command. |
 | `INSTALL-WITH-CLAUDE.md` | The steps Claude follows when a user asks it to install claude-gauge. |
-| `.github/workflows/` | The `dist` workflow, which commits the build to `main`; the `test` workflow, which runs the suites on Node 18, 20 and 22 and on Bun, each on Linux, macOS and Windows, with the typecheck, the linter and a coverage report, on each pull request into `integration/1.0` or `main` and each push to `main`; and the `release` workflow, which publishes a release from a version tag. |
+| `.github/workflows/` | The `dist` workflow, which commits the build to `main`; the `test` workflow, which runs the suites on Node 18, 20 and 22 and on Bun, each on Linux, macOS and Windows, with the typecheck, the linter and a coverage report, on each pull request into `main` or an `integration/` branch and each push to `main`; and the `release` workflow, which publishes a release from a version tag. |
 | `docs/agents/` | How agent skills use the issue tracker, the triage labels and the domain docs. |
 
 ## Rules for a change
 
-- **Leave `dist/` out of the commit.** `dist/` is generated. Commit the change to `src/` only. A branch cut from `integration/1.0` ignores `dist/`. `main` tracks it, so a branch cut from `main` tracks it too, and `pnpm build` or `pnpm test` changes it there: run `git restore dist/` before you commit. A check fails a pull request that adds or changes files in `dist/`. After each merge to `main`, the `dist` workflow builds and tests `dist/`, and commits it to `main` as a bot commit marked `[auto]`.
+- **Leave `dist/` out of the commit.** `dist/` is generated. Commit the change to `src/` only. `main` tracks it, so a branch cut from `main` tracks it too, an integration branch included, and `pnpm build` or `pnpm test` changes it there: run `git restore dist/` before you commit. A check fails a pull request that adds or changes files in `dist/`. After each merge to `main`, the `dist` workflow builds and tests `dist/`, and commits it to `main` as a bot commit marked `[auto]`.
 - **Keep the runtime free of dependencies.** The two scripts use only Node.js built-ins. A status line that fails to load leaves the footer blank.
 - **Keep Node.js 18.** Use no API that Node.js 18 does not have. The `@types/node` version in `package.json` makes `pnpm typecheck` catch most of these.
 - **Ignore what is unknown.** An unknown switch or part name is ignored, so that a typo never breaks a user's status line or turn. New parsing in the two lines keeps that rule. The `claude-gauge` command is the exception: it writes the user's settings, so it refuses an unknown command or switch.
@@ -61,7 +61,7 @@ pnpm test
 
 ## Branches
 
-While 1.0 is in progress, branch from `integration/1.0` and open the pull request against `integration/1.0`. That branch collects the 1.0 work, and it merges into `main` when 1.0 is ready.
+Branch from `main`, and open the pull request against `main`. Work that ships together, such as the sub-issues of one epic, can collect on an integration branch, `integration/<epic>-<topic>`, cut from `main`. Then branch from the integration branch and open the pull request against it. The integration branch merges into `main` when the work is ready.
 
 `main` is what users run. Installs clone `main` and update with `git pull`, so a merge into `main` reaches those users on their next pull, whether or not a release follows. npm users get a change when a release publishes it.
 

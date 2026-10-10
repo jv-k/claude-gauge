@@ -1,8 +1,8 @@
 # Installs clone main and run dist/ without a build, so main must carry the
 # built files. This workflow is the only writer of dist/ on main. Pull
-# requests carry source only: .gitignore keeps dist/ untracked on branches
-# cut from integration/1.0, and the source-only job below fails a pull
-# request that adds or changes files in dist/ from any branch.
+# requests carry source only: the source-only job below fails a pull request
+# that adds or changes files in dist/ from any branch. A branch cut from main
+# tracks dist/, an integration branch included, so a build there changes it.
 name: dist
 
 on:
