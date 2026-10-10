@@ -2,6 +2,36 @@
 
 This page lists every part, switch, theme and install route. The [README](../README.md) has the short version.
 
+## Contents
+
+- [What the bars show](#what-the-bars-show)
+  - [Status line](#status-line)
+  - [More status line parts](#more-status-line-parts)
+    - [Per-model windows](#per-model-windows)
+    - [Environment and plan](#environment-and-plan)
+    - [Memory, text and command](#memory-text-and-command)
+    - [Links](#links)
+  - [Token line](#token-line)
+- [Requirements](#requirements)
+- [Install](#install)
+  - [As a Claude Code plugin](#as-a-claude-code-plugin)
+  - [From npm](#from-npm)
+  - [With Claude Code](#with-claude-code)
+  - [By hand](#by-hand)
+  - [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app)
+- [Options](#options)
+  - [Status line options](#status-line-options)
+    - [Themes](#themes)
+    - [Colours and bar characters](#colours-and-bar-characters)
+    - [Examples](#examples)
+    - [Keeping time-based parts fresh](#keeping-time-based-parts-fresh)
+  - [Token line options](#token-line-options)
+- [Update](#update)
+- [Uninstall](#uninstall)
+- [Upgrading from claude-hud](#upgrading-from-claude-hud)
+- [Development](#development)
+  - [Releases](#releases)
+
 ## What the bars show
 
 ### Status line
