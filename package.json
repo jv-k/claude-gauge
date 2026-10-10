@@ -1,5 +1,5 @@
 {
-  "name": "claude-gauge",
+  "name": "@jv-k/claude-gauge",
   "version": "0.0.0",
   "description": "A status line and a token line for Claude Code: context, 5-hour and weekly usage with pace markers.",
   "license": "MIT",
@@ -16,6 +16,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "packageManager": "pnpm@10.27.0",
   "engines": {
     "node": ">=18"

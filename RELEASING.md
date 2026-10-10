@@ -9,12 +9,14 @@ Installs that clone `main` update with `git pull`, so those users get a change w
 
 ## Set up once
 
-The workflow publishes to npm through a [trusted publisher](https://docs.npmjs.com/trusted-publishers). On npmjs.com, the package names the `release` workflow of jv-k/claude-gauge as its trusted publisher. For each run, npm then takes the workflow's OIDC (OpenID Connect) token from GitHub in place of an npm token. So the project stores no npm token, and the repository has no `NPM_TOKEN` secret. The workflow's own `GITHUB_TOKEN` creates the GitHub release, so that step needs no secret either.
+The package is `@jv-k/claude-gauge`, under the owner's npm scope. npm refuses to publish the unscoped name `claude-gauge` with `403 Forbidden`, although no package has that name, and only npm support can say why. The scope changes only the npm name: the commands, the plugin, the repository and `~/.claude/claude-gauge/` keep the name `claude-gauge`.
+
+The workflow publishes to npm through a [trusted publisher](https://docs.npmjs.com/trusted-publishers). On npmjs.com, the package `@jv-k/claude-gauge` names the `release` workflow of jv-k/claude-gauge as its trusted publisher. For each run, npm then takes the workflow's OIDC (OpenID Connect) token from GitHub in place of an npm token. So the project stores no npm token, and the repository has no `NPM_TOKEN` secret. The workflow's own `GITHUB_TOKEN` creates the GitHub release, so that step needs no secret either.
 
 npm adds a trusted publisher only to a package that already exists, and a new trusted publisher expires if it does not publish within 2 days. So the owner of jv-k/claude-gauge does these steps in this order for the first release:
 
-1. From your terminal, publish a placeholder version, `claude-gauge@0.0.1`, so that the package exists on npm. Commit and push nothing for it: `package.json` on `main` stays at `0.0.0` until VerBump sets `1.0.0`.
-2. Just before you cut 1.0.0, open the package's **Settings** page on [npmjs.com](https://www.npmjs.com), and add a trusted publisher for GitHub Actions with these four fields. All of them are case-sensitive and must be exact. npm does not check them when you save, so a mistake shows only when the workflow publishes.
+1. From your terminal, publish a placeholder version, `@jv-k/claude-gauge@0.0.1`, so that the package exists on npm. Commit and push nothing for it: `package.json` on `main` stays at `0.0.0` until VerBump sets `1.0.0`. The owner published this placeholder on 2026-10-10, so this step is done.
+2. Just before you cut 1.0.0, open the **Settings** page of `@jv-k/claude-gauge` on [npmjs.com](https://www.npmjs.com/package/@jv-k/claude-gauge), and add a trusted publisher for GitHub Actions with these four fields. All of them are case-sensitive and must be exact. npm does not check them when you save, so a mistake shows only when the workflow publishes.
 
    | Field | Value |
    | --- | --- |
@@ -28,7 +30,7 @@ npm adds a trusted publisher only to a package that already exists, and a new tr
 5. When 1.0.0 is on npm, deprecate the placeholder:
 
    ```sh
-   npm deprecate claude-gauge@0.0.1 "A placeholder. Install claude-gauge 1.0.0 or later."
+   npm deprecate @jv-k/claude-gauge@0.0.1 "A placeholder. Install @jv-k/claude-gauge 1.0.0 or later."
    ```
 
 After the first release, the trusted publisher stays in place, and later releases need no setup.
@@ -79,7 +81,7 @@ VerBump does not create the GitHub release. The tag starts the `release` workflo
 9. It creates the GitHub release `vX.Y.Z` with the section as its body. If the release already exists, it leaves the release as it is.
 10. It runs `npm publish --provenance`. npm accepts the publish through the trusted publisher, publishes `dist/`, `README.md`, `LICENSE` and `package.json`, and links the package to the workflow run that built it.
 
-Watch the run in the **Actions** tab, or with `gh run watch`. When it passes, the release is on the [releases page](https://github.com/jv-k/claude-gauge/releases) and on [npm](https://www.npmjs.com/package/claude-gauge).
+Watch the run in the **Actions** tab, or with `gh run watch`. When it passes, the release is on the [releases page](https://github.com/jv-k/claude-gauge/releases) and on [npm](https://www.npmjs.com/package/@jv-k/claude-gauge).
 
 To set the version yourself, add `-v` to `pnpm bump-release`. For the first release, which goes from `0.0.0` to `1.0.0`:
 
