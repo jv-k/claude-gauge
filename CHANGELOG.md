@@ -1,0 +1,132 @@
+## 1.0.0 (2026-10-10)
+- chore: updated package.json, created CHANGELOG.md, bumped 0.0.0 -> 1.0.0
+- Merge integration/1.0: trusted publishing and the @jv-k/claude-gauge npm name (#42, #92)
+- Merge pull request #93 from jv-k/feat/npm-scope-92
+- test: pass npm paths through config, and guard the issue templates too
+- feat: publish the npm package as @jv-k/claude-gauge
+- Merge pull request #90 from jv-k/ci/npm-trusted-publishing-42
+- chore: say exactly how the release job gets npm 11.5.1 and signs in
+- chore: publish to npm through the trusted publisher, with no stored token
+- chore(dist): build dist from 76dda6b [auto]
+- Merge integration/1.0: claude-gauge 1.0
+- Merge pull request #88 from jv-k/feat/token-line-parts-69
+- fix: accept all as the token line parts answer, as the question offers
+- feat: ask which parts the token line shows in the setup wizard
+- Merge pull request #86 from jv-k/feat/configure-from-installed-70
+- Merge integration/1.0 into feat/configure-from-installed-70
+- fix: keep the bars untouched on a yes in configure, and keep more than three rows
+- Merge pull request #83 from jv-k/test/readme-cli-sync-74
+- Merge pull request #81 from jv-k/ci/require-bun-30
+- Merge pull request #80 from jv-k/fix/tokenline-config-dir-29
+- test: catch a stale CLI switch row read from the source, a short-named switch, and any spelling of a stale part
+- test: name the Bun guard for what it does, and keep the child run out of the repo folder
+- refactor: share one session and clean up the token line's --latest tests
+- feat: start configure's questions from the bars set up, not the defaults
+- test: fail the README sync when the CLI switch table or the claude-hud column goes stale
+- test: fail the Bun parity cases under REQUIRE_BUN=1 when bun is missing
+- fix: find the token line's --latest transcript under CLAUDE_CONFIG_DIR
+- Merge pull request #76 from jv-k/docs/out-of-scope-osc8-68
+- Merge pull request #79 from jv-k/ci/ci-matrix-3
+- chore: give each test a minute under Bun, as Node's runner does without a limit
+- fix: run setup from a git clone under Bun on Windows, where a path has a short name
+- chore: make the suites pass on Windows, where a path has a drive and backslashes
+- chore: test on Node 18, 20, 22 and Bun across macOS, Linux and Windows, with typecheck, lint and coverage
+- chore: lint the sources, suites and scripts with Biome, through pnpm lint
+- fix: run the suites on Node 22 with pnpm test
+- fix: show noon as 12:00 pm with --12h on Node 18 and 20
+- docs: record why claude-gauge does not detect OSC 8 link support
+- Merge pull request #75 from jv-k/docs/readme-overhaul-25
+- docs: describe the setup wizard's questions as it asks them, and correct the claude-hud mappings
+- docs: show the bars and the setup wizard in the README, with the npm route and a claude-hud migration table
+- Merge pull request #73 from jv-k/feat/claude-plugin-22
+- Merge integration/1.0 into feat/claude-plugin-22
+- Merge pull request #71 from jv-k/feat/terminal-wizard-21
+- fix: ask the plugin's configure questions in two rounds, and the context window in setup
+- feat: install claude-gauge as a Claude Code plugin, with setup, configure and uninstall commands
+- fix: keep the wizard's preview payload when the status line gets an unreadable one
+- feat: ask for the bars in claude-gauge setup and configure, with a live preview
+- Merge pull request #66 from jv-k/feat/clickable-links-10
+- refactor: tidy the link helpers and their tests after review
+- feat: make the folder, branch and pull request clickable, with --no-links to turn it off
+- Merge pull request #44 from jv-k/feat/theme-presets-7
+- Merge remote-tracking branch 'origin/integration/1.0' into feat/theme-presets-7
+- Merge pull request #48 from jv-k/feat/rich-git-status-9
+- fix: order a changed symbolic link by its own time in the files part
+- Merge remote-tracking branch 'origin/integration/1.0' into feat/rich-git-status-9
+- Merge pull request #64 from jv-k/feat/skills-mcp-14
+- Merge remote-tracking branch 'origin/integration/1.0' into feat/skills-mcp-14
+- Merge pull request #57 from jv-k/feat/model-windows-18
+- Merge remote-tracking branch 'origin/integration/1.0' into feat/model-windows-18
+- Merge pull request #39 from jv-k/feat/settings-cli-20
+- fix: keep unrelated status lines and the saved one safe in setup and uninstall
+- Merge remote-tracking branch 'origin/integration/1.0' into feat/settings-cli-20
+- Merge pull request #65 from jv-k/feat/session-counters-15
+- refactor: read every outside number through one helper, and say the reply part skips Claude Code's error messages
+- feat: count compactions, and show the time since the last reply and the output speed
+- fix: keep a server unmarked when the user stops its call, and share the recent-list helper
+- feat: show the skills used and the MCP servers called, in a skills part
+- Merge pull request #63 from jv-k/feat/todos-13
+- refactor: build todos through one helper, and say the todos part counts only this session's changes
+- feat: show the todo in progress and how many todos are done, in a todos part
+- Merge pull request #61 from jv-k/feat/subagents-row-12
+- fix: keep emoji whole in cut text, and trust only the origin for task notifications
+- fix: keep tools running through a task notification, and share one cut for long text
+- feat: show running subagents in an agents part, with type, model, description and elapsed time
+- Merge pull request #53 from jv-k/feat/cost-ledger-16
+- fix: commit a ledger write only while the render still holds the lock
+- Merge remote-tracking branch 'origin/integration/1.0' into feat/cost-ledger-16
+- Merge pull request #49 from jv-k/feat/transcript-tools-11
+- fix: count every call in a parallel batch, and cap only the calls a prompt ended
+- Merge remote-tracking branch 'origin/integration/1.0' into feat/transcript-tools-11
+- Merge pull request #58 from jv-k/feat/custom-parts-19
+- fix: keep the command part's first visible line, and test its 64 KB cap
+- fix: stop the background jobs a --command command leaves, with the command
+- feat: show memory use with ram, a label with text, and a command's output with command
+- fix: read model names with dots and hyphens, and show a spend reset as days in the limit notice
+- feat: show per-model weekly windows with models, and a limit-reached notice with limit
+- Merge pull request #56 from jv-k/feat/environment-plan-17
+- fix: read the plan from the account in .claude.json where no credentials file exists
+- refactor: read the env and plan setup once per render, beside the other parts
+- feat: show what the session loads with env, the plan and account with plan, and the provider beside the model
+- fix: break only a stale ledger lock, release only a render's own, and say which day spend counts on
+- feat: show today's and this week's spend across sessions with the today and week parts
+- fix: keep counting a tool whose result lands after a prompt, and read long transcript lines once
+- feat: show the running tool and completed tool counts with a tools part
+- fix: read the fallback branch from HEAD, and bound the files part's reads
+- feat: show a dirty marker, ahead and behind, change counts and changed files
+- Merge pull request #47 from jv-k/feat/compact-layout-8
+- fix: leave a --right row as it is when it holds CJK text or emoji
+- feat: fit narrow terminals with --compact, and right-align parts with --right
+- fix: keep a --color override off the mono theme's pace marker
+- refactor: look up themes, pull request roles and colour overrides through one own-key helper
+- feat: restyle the status line with --theme presets, per-part colours and bar characters
+- Merge pull request #40 from jv-k/feat/release-from-tags-23
+- docs: give the npm token and changelog steps that npm and VerBump follow today
+- feat: publish each version tag as a GitHub release and an npm package with provenance
+- fix: keep the saved status line when uninstall cannot write settings.json
+- feat: set up, configure, uninstall and update claude-gauge with the claude-gauge command
+- Merge pull request #37 from jv-k/fix/sanitise-text-6
+- fix: sanitise the folder name once in render, and test hostile colours on the raw output
+- fix: strip terminal control codes from external text in the status line
+- Merge pull request #36 from jv-k/feat/part-registry-5
+- refactor: name the registry's parts and its render input plainly, and pin unknown row names
+- feat: fail the tests when the README's status line tables miss a part or switch
+- Merge pull request #34 from jv-k/ci/dist-on-main-4
+- chore: test dist before the bot commits it, and say how branches cut from main keep it out
+- chore: build dist on main after each merge, and keep it out of pull requests
+- Merge pull request #32 from jv-k/docs/contributor-docs-24
+- docs: install Corepack first on Node.js 25 and later in the setup steps
+- docs: add per-type checklist blocks to the PR template, and correct the commit and release guidance
+- docs: add contributor, security, conduct and release guides, with issue forms and CODEOWNERS
+- Merge pull request #31 from jv-k/feat/typescript-port-2
+- docs: tell existing installs to move their commands to dist/, and align the part lookups
+- refactor: port the status line and token line to TypeScript, built to dist/
+- Merge pull request #28 from jv-k/feat/instruct-hook
+- fix: quote forwarded switches in the --instruct command
+- feat: ask Claude for the bars in VS Code and the desktop app, with --instruct
+- docs: explain how to see both bars in VS Code and the desktop app
+- fix: show the repo and worktree with --latest as the terminal does
+- feat: show the status line where Claude Code runs none, with --latest
+- chore: keep local drafts out of git
+- chore: start claude-gauge from headroom 1.0.0
+
