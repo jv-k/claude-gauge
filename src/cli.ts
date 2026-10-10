@@ -57,9 +57,12 @@ $CLAUDE_CONFIG_DIR/settings.json, else ~/.claude/settings.json.
 `;
 
 // The wordmark and a blank line, in colour when `stream` takes colour. The
-// usage and the questions start with it. The commands run with switches,
-// which scripts and the plugin's slash commands run, print none.
+// usage and the questions start with it. Scripts and the plugin's slash
+// commands run the commands with switches, and those print no wordmark.
 const banner = (stream: NodeJS.WriteStream) => `${wordmark(colorEnabled(stream))}\n`;
+
+// The usage, under the wordmark, for `stream`.
+const usage = (stream: NodeJS.WriteStream) => banner(stream) + USAGE;
 
 // A mistake in the command line: exit 2, with the usage.
 class UsageError extends Error {}
@@ -411,9 +414,14 @@ function update(): void {
 
 async function main(argv: string[]): Promise<number> {
   try {
+    // A bare claude-gauge gets the usage alone, as a mistake: exit 2.
+    if (!argv.length) {
+      process.stderr.write(usage(process.stderr));
+      return 2;
+    }
     const args = parseArgs(argv);
     if (args.help) {
-      process.stdout.write(banner(process.stdout) + USAGE);
+      process.stdout.write(usage(process.stdout));
       return 0;
     }
     if (!args.command) throw new UsageError('Name a command.');
@@ -426,7 +434,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   } catch (err) {
     if (err instanceof UsageError) {
-      process.stderr.write(`claude-gauge: ${err.message}\n\n${banner(process.stderr)}${USAGE}`);
+      process.stderr.write(`claude-gauge: ${err.message}\n\n${usage(process.stderr)}`);
       return 2;
     }
     process.stderr.write(`claude-gauge: ${(err as Error).message}\n`);

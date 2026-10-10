@@ -12,13 +12,13 @@ const WORDMARK: readonly (readonly string[])[] = [
 // A 256-colour number for each chunk: deslopper's rainbow widened to the 11
 // letters, with 27 for blue because 21 reads poorly on a dark background, and
 // grey for the hyphen.
-const COLOURS = [196, 202, 208, 214, 226, 118, 244, 82, 39, 27, 93, 163];
+const COLORS = [196, 202, 208, 214, 226, 118, 244, 82, 39, 27, 93, 163];
 
 const RESET = '\x1b[0m';
 
 // Whether to colour what goes to `stream`, in deslopper's order: a non-empty
-// NO_COLOR turns colour off, a FORCE_COLOR or CLICOLOR_FORCE that is set and
-// not 0 turns it on, and otherwise only a terminal gets colour.
+// NO_COLOR turns colour off, a FORCE_COLOR or CLICOLOR_FORCE that is neither
+// empty nor 0 turns it on, and otherwise only a terminal gets colour.
 function colorEnabled(stream: { isTTY?: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.NO_COLOR) return false;
   if (['CLICOLOR_FORCE', 'FORCE_COLOR'].some((name) => env[name] && env[name] !== '0')) return true;
@@ -29,7 +29,7 @@ function colorEnabled(stream: { isTTY?: boolean }, env: NodeJS.ProcessEnv = proc
 // starts with its colour code and each row ends with a reset.
 function wordmark(color: boolean): string {
   const row = (chunks: readonly string[]) =>
-    color ? chunks.map((chunk, i) => `\x1b[38;5;${COLOURS[i]}m${chunk}`).join('') + RESET : chunks.join('');
+    color ? chunks.map((chunk, i) => `\x1b[38;5;${COLORS[i]}m${chunk}`).join('') + RESET : chunks.join('');
   return WORDMARK.map((chunks) => row(chunks) + '\n').join('');
 }
 
