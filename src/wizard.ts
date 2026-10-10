@@ -1,8 +1,8 @@
 // The questions claude-gauge setup and configure ask when run with no bar
 // switches: take the defaults in one answer, or walk through the status
-// line's rows and parts, its bar size, theme and labels, and the token line
-// and its parts, with a preview of the status line redrawn after each
-// answer. configure starts from the bars set up now: the first answer keeps
+// line's rows and parts, its bar size, theme and labels, and the token line,
+// its parts and its context window, with a preview of the status line
+// redrawn after each answer. configure starts from the bars set up now: the first answer keeps
 // them, and each question offers the value set up. It returns the switches
 // for each bar, as words, for the CLI to write; it reads and writes no
 // settings itself.
@@ -12,7 +12,7 @@
 
 import * as fs from 'node:fs';
 import { render, parseArgs, readSwitches, PARTS, THEMES, DEFAULT_ROWS } from './statusline';
-import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches } from './tokenline';
+import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, parseSize, contextWindow } from './tokenline';
 import type { StatusData, Part } from './statusline';
 import type { Part as TokenPart } from './tokenline';
 import type { InstalledSwitches } from './settings';
@@ -176,6 +176,35 @@ function readTokenParts(fallback: TokenPart[]) {
   return (answer: string) => (/^all$/i.test(answer) ? [...TOKEN_PARTS] : list(answer));
 }
 
+// The context window the token line assumes at the first turn without a
+// --window it can read.
+const DEFAULT_WINDOW = contextWindow(0);
+
+// The context window `switches` name, as the token line reads them: the last
+// --window's value, as written, or undefined without one it can read.
+function tokenWindowOf(switches: readonly string[]): string | undefined {
+  const value = parseTokenArgs(switches).window;
+  return parseSize(value) > 0 ? value : undefined;
+}
+
+// The token line's switches for a context window answer. The size the
+// installed --window gives keeps those switches as they are. Another size
+// drops the installed --window and keeps the rest, then adds the size as
+// --window <size>, unless it is the 200k the token line assumes without one.
+function tokenWindowFor(size: string, installed: string[]): string[] {
+  if (parseSize(size) === parseSize(tokenWindowOf(installed))) return installed;
+  const others = readTokenSwitches(installed).filter(({ name }) => name !== '--window').flatMap(({ words }) => words);
+  return parseSize(size) === DEFAULT_WINDOW ? others : [...others, '--window', size];
+}
+
+// Reads a context window size as the token line reads --window, in lower
+// case: 200k, 1m or a count. Enter gives undefined, which keeps the switches
+// as they are.
+const readWindow = (answer: string): string | undefined | { retry: string } => {
+  if (!answer) return undefined;
+  return parseSize(answer) > 0 ? answer.toLowerCase() : { retry: 'Answer a size such as 200k or 1m.' };
+};
+
 async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): Promise<WizardChoices | null> {
   const start = startFrom(installed);
   let status: StatusChoices = { ...start.status };
@@ -241,6 +270,8 @@ async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): P
     const fallback = tokenPartsOf(start.tokenSwitches);
     const question = `Token line parts: all, req,out,ctx, or your own list from ${TOKEN_PARTS.join(', ')}? [${fallback.join(',')}] `;
     tokenSwitches = tokenSwitchesFor(await askFor(io, question, readTokenParts(fallback)), start.tokenSwitches);
+    const window = await askFor(io, `Context window, 200k or 1m? [${tokenWindowOf(start.tokenSwitches) ?? '200k'}] `, readWindow);
+    if (window !== undefined) tokenSwitches = tokenWindowFor(window, tokenSwitches);
   }
 
   if (!(await confirm(io, 'Write these choices?', true))) return null;
