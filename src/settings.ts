@@ -240,13 +240,11 @@ function installedSwitches(settings: Json): InstalledSwitches {
 const shellWord = (s: string) =>
   /^[\w@%+=:,./~-]+$/.test(s) ? s : /^[^"$`\\!']*$/.test(s) ? `"${s}"` : `'${s.replace(/'/g, `'\\''`)}'`;
 
-// The command that runs `script` with the switches the user chose: one
-// string split at spaces, `--show ctx,5h,7d --segments 10`, or the words
-// themselves, which keeps a value that holds a space. Each word is quoted on
-// its own, so nothing in it can run as a second command.
-function commandFor(script: string, switches: string | readonly string[] = ''): string {
-  const words = typeof switches === 'string' ? switches.split(/\s+/).filter(Boolean) : switches;
-  return ['node', script.replace(/\\/g, '/'), ...words].map(shellWord).join(' ');
+// The command that runs `script` with the switches the user chose, as words,
+// which keeps a value that holds a space. Each word is quoted on its own, so
+// nothing in it can run as a second command.
+function commandFor(script: string, switches: readonly string[] = []): string {
+  return ['node', script.replace(/\\/g, '/'), ...switches].map(shellWord).join(' ');
 }
 
 // The words of a command as the shell splits them, which undoes shellWord:
