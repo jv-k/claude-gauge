@@ -73,18 +73,22 @@ type Command = (typeof COMMANDS)[number];
 interface Args {
   command?: Command;
   help: boolean;
-  statusLine?: string | null;
-  tokenLine?: string | null;
+  statusLine?: string[] | null;
+  tokenLine?: string[] | null;
   replace: boolean;
   yes: boolean;
 }
 
+// The words of a bar switch's value, `--show ctx,5h,7d --segments 10`, split
+// at runs of white space with empty words dropped, so that "" is no switches.
+const words = (value: string) => value.split(/\s+/).filter(Boolean);
+
 // Every switch: its names, the commands that take it, and what it sets.
 // --help goes with any command.
 const SWITCHES: { names: string[]; commands: Command[]; apply: (args: Args, value: () => string) => void }[] = [
-  { names: ['--status-line'], commands: ['setup', 'configure'], apply: (args, value) => { args.statusLine = value(); } },
+  { names: ['--status-line'], commands: ['setup', 'configure'], apply: (args, value) => { args.statusLine = words(value()); } },
   { names: ['--no-status-line'], commands: ['setup', 'configure'], apply: (args) => { args.statusLine = null; } },
-  { names: ['--token-line'], commands: ['setup', 'configure'], apply: (args, value) => { args.tokenLine = value(); } },
+  { names: ['--token-line'], commands: ['setup', 'configure'], apply: (args, value) => { args.tokenLine = words(value()); } },
   { names: ['--no-token-line'], commands: ['setup', 'configure'], apply: (args) => { args.tokenLine = null; } },
   { names: ['--replace'], commands: ['setup', 'configure'], apply: (args) => { args.replace = true; } },
   { names: ['--yes', '-y'], commands: ['setup'], apply: (args) => { args.yes = true; } },
@@ -241,9 +245,9 @@ function savedStatusLine(): StatusLineSetting | null | undefined {
 
 const say = (...lines: string[]) => process.stdout.write(lines.join('\n') + '\n');
 
-// The switches chosen for each bar: a string to run it with, or its words
-// from the wizard, null to take it out, undefined to leave it as it is.
-type Switches = string | readonly string[] | null | undefined;
+// The switches chosen for each bar: its words, from the command line or the
+// wizard, null to take it out, undefined to leave it as it is.
+type Switches = readonly string[] | null | undefined;
 type Bars = { statusLine?: Switches; tokenLine?: Switches };
 
 // setup and configure: turns the bars' switches into commands, plans the
@@ -355,7 +359,7 @@ async function interactive(command: 'setup' | 'configure', replace: boolean): Pr
 async function setup(args: Args): Promise<void> {
   const chosen = args.statusLine !== undefined || args.tokenLine !== undefined;
   if (!chosen && !args.yes) return interactive('setup', args.replace);
-  const orDefault = (v: string | null | undefined) => (v === undefined && args.yes ? '' : v);
+  const orDefault = (v: Switches) => (v === undefined && args.yes ? [] : v);
   apply({ statusLine: orDefault(args.statusLine), tokenLine: orDefault(args.tokenLine) }, args.replace);
 }
 

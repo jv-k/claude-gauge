@@ -52,6 +52,17 @@ test('setup --yes on a fresh config folder installs both bars from a copy of the
   assert.match(plain(line.stdout), /ctx 25%/);
 });
 
+test('a bar switch value is split at runs of white space, with empty words dropped', () => {
+  const dir = configFolder();
+  ok(runCli(dir, ['setup', '--status-line', '  --show   ctx,5h \t--segments 10  ', '--token-line= --window\t1m ']));
+
+  const runtime = runtimeOf(dir);
+  assert.deepEqual(settingsOf(dir), {
+    statusLine: cmd(commandFor(path.join(runtime, 'statusline.js'), ['--show', 'ctx,5h', '--segments', '10'])),
+    hooks: { Stop: [entry(commandFor(path.join(runtime, 'tokenline.js'), ['--window', '1m']))] },
+  });
+});
+
 test('setup writes the chosen switches, keeps every other key and refreshInterval, and backs up', () => {
   const before = {
     model: 'opus',
@@ -67,11 +78,11 @@ test('setup writes the chosen switches, keeps every other key and refreshInterva
     model: 'opus',
     statusLine: {
       type: 'command',
-      command: commandFor(path.join(runtime, 'statusline.js'), '--show ctx,5h,7d --show time,model --segments 10'),
+      command: commandFor(path.join(runtime, 'statusline.js'), ['--show', 'ctx,5h,7d', '--show', 'time,model', '--segments', '10']),
       refreshInterval: 60,
     },
     hooks: {
-      Stop: [entry('afplay done.aiff'), entry(commandFor(path.join(runtime, 'tokenline.js'), '--window 1m'))],
+      Stop: [entry('afplay done.aiff'), entry(commandFor(path.join(runtime, 'tokenline.js'), ['--window', '1m']))],
       PreToolUse: [{ matcher: 'Bash', hooks: [cmd('~/bin/guard.sh')] }],
     },
   });
@@ -152,7 +163,7 @@ test('configure changes one bar in place and needs claude-gauge set up first', (
   let settings = settingsOf(dir);
   assert.deepEqual(settings.hooks.Stop, [
     entry('afplay done.aiff'),
-    entry(commandFor(path.join(runtime, 'tokenline.js'), '--window 1m --show req,ctx')),
+    entry(commandFor(path.join(runtime, 'tokenline.js'), ['--window', '1m', '--show', 'req,ctx'])),
   ]);
   assert.equal(settings.statusLine.command, commandFor(path.join(runtime, 'statusline.js')));
 
@@ -423,7 +434,7 @@ test('the customise path writes the switches chosen, and can leave the token lin
   const dir = configFolder();
   ok(ask(dir, ['setup'], ['n', '2', 'ctx,5h', 'model', '10', 'pastel', 'n', 'n', 'y']));
   assert.deepEqual(settingsOf(dir), {
-    statusLine: cmd(commandFor(path.join(runtimeOf(dir), 'statusline.js'), '--show ctx,5h --show model --segments 10 --theme pastel --no-labels')),
+    statusLine: cmd(commandFor(path.join(runtimeOf(dir), 'statusline.js'), ['--show', 'ctx,5h', '--show', 'model', '--segments', '10', '--theme', 'pastel', '--no-labels'])),
   });
 });
 
@@ -438,14 +449,14 @@ test('the token line parts the wizard is given go into the Stop hook command, an
   const r = ask(fewer, ['setup'], ['n', '', '', '', '', '', '', '', 'req,bogus', 'req,out,ctx', '', 'y']);
   ok(r);
   assert.match(r.stdout, /Unknown part: bogus/);
-  assert.equal(tokenLine(fewer), commandFor(script(fewer), '--show req,out,ctx'));
+  assert.equal(tokenLine(fewer), commandFor(script(fewer), ['--show', 'req,out,ctx']));
 
   // configure starts from that --show and keeps the --window set up.
   ok(runCli(fewer, ['configure', '--token-line', '--show req,out,ctx --window 1m']));
   const again = ask(fewer, ['configure'], ['n', '', '', '', '', '', '', '', 'ctx', '', 'y']);
   ok(again);
   assert.match(again.stdout, /Token line parts.*\[req,out,ctx\]/);
-  assert.equal(tokenLine(fewer), commandFor(script(fewer), '--show ctx --window 1m'));
+  assert.equal(tokenLine(fewer), commandFor(script(fewer), ['--show', 'ctx', '--window', '1m']));
 });
 
 test('the context window the wizard is given goes into the Stop hook command, and configure keeps it on Enter', () => {
@@ -456,16 +467,16 @@ test('the context window the wizard is given goes into the Stop hook command, an
   ok(r);
   assert.match(r.stdout, /Context window, 200k or 1m\? \[200k\]/);
   assert.match(r.stdout, /Answer a size such as 200k or 1m/);
-  assert.equal(tokenLine(dir), commandFor(script(dir), '--show req,out,ctx --window 1m'));
+  assert.equal(tokenLine(dir), commandFor(script(dir), ['--show', 'req,out,ctx', '--window', '1m']));
 
   // configure offers the window set up, and Enter keeps the other switches too.
   const kept = ask(dir, ['configure'], ['n', '', '', '', '', '', '', '', '', '', 'y']);
   ok(kept);
   assert.match(kept.stdout, /Context window, 200k or 1m\? \[1m\]/);
-  assert.equal(tokenLine(dir), commandFor(script(dir), '--show req,out,ctx --window 1m'));
+  assert.equal(tokenLine(dir), commandFor(script(dir), ['--show', 'req,out,ctx', '--window', '1m']));
   // 200k drops the --window and nothing else.
   ok(ask(dir, ['configure'], ['n', '', '', '', '', '', '', '', '', '200k', 'y']));
-  assert.equal(tokenLine(dir), commandFor(script(dir), '--show req,out,ctx'));
+  assert.equal(tokenLine(dir), commandFor(script(dir), ['--show', 'req,out,ctx']));
 });
 
 test('a no at the last question, or answers that end early, change nothing', () => {
@@ -502,7 +513,7 @@ test('configure with no switches runs the wizard on a set-up config, and offers 
   const gh = fakeGh();
   const r = ask(dir, ['configure'], ['n', '1', 'ctx', '', '', '', '', '', '', 'y'], { bin: gh.bin });
   ok(r);
-  assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(runtimeOf(dir), 'statusline.js'), '--show ctx'));
+  assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(runtimeOf(dir), 'statusline.js'), ['--show', 'ctx']));
   assert.doesNotMatch(r.stdout, /Star /);
   assert.deepEqual(gh.calls(), []);
 });

@@ -59,8 +59,8 @@ test('setup run from the plugin cache points the settings at the launcher, never
   const launcher = launcherOf(dir);
   assert.deepEqual(settingsOf(dir), {
     model: 'opus',
-    statusLine: cmd(commandFor(path.join(launcher, 'statusline.js'), '--show ctx,5h,7d --segments 10')),
-    hooks: { Stop: [entry(commandFor(path.join(launcher, 'tokenline.js'), '--window 1m'))] },
+    statusLine: cmd(commandFor(path.join(launcher, 'statusline.js'), ['--show', 'ctx,5h,7d', '--segments', '10'])),
+    hooks: { Stop: [entry(commandFor(path.join(launcher, 'tokenline.js'), ['--window', '1m']))] },
   });
   assert.ok(!JSON.stringify(settingsOf(dir)).replace(/\\\\/g, '/').includes('plugins/cache'), 'no version folder in the settings');
   assert.ok(!fs.existsSync(runtimeOf(dir)), 'the plugin route copies no runtime');
@@ -168,7 +168,7 @@ test('configure and uninstall from the plugin cache keep the launcher and restor
   const cli = path.join(installVersion(dir, '1.0.0'), 'dist', 'cli.js');
   ok(runCli(dir, ['setup', '--yes', '--replace'], { cli }));
   ok(runCli(dir, ['configure', '--status-line', '--segments 10'], { cli }));
-  assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(launcherOf(dir), 'statusline.js'), '--segments 10'));
+  assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(launcherOf(dir), 'statusline.js'), ['--segments', '10']));
   ok(runCli(dir, ['uninstall'], { cli }));
   assert.deepEqual(settingsOf(dir), before);
 });
