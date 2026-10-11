@@ -1570,51 +1570,57 @@ function planName(type: string | undefined, tier: string | undefined): string | 
   return ['Claude', capitalised(type), multiple].filter(Boolean).join(' ');
 }
 
+// The .json files inside a plugin folder and the inline objects that a
+// manifest field names, beside the field's default file: the default first,
+// and each file once. A path that leaves the plugin folder is left out, as
+// Claude Code does not load it.
+function declaredIn(root: string, manifest: JsonObject, key: string, first: string): { files: string[]; inline: JsonObject[] } {
+  const files = new Set([path.join(root, first)]);
+  const inline: JsonObject[] = [];
+  const value: unknown = manifest[key];
+  for (const item of Array.isArray(value) ? value : [value]) {
+    if (isObject(item)) inline.push(item);
+    else if (typeof item === 'string' && item.endsWith('.json')) {
+      const file = path.resolve(root, item);
+      if (file.startsWith(root + path.sep)) files.add(file);
+    }
+  }
+  return { files: [...files], inline };
+}
+
+// A plugin's own name from its enabledPlugins key, name@marketplace.
+const pluginNameOf = (id: string) => id.split('@')[0];
+
 // The hooks and MCP servers of the plugins turned on: each plugin that
-// enabledPlugins, keyed name@marketplace, sets to true, read from the install
-// folder plugins/installed_plugins.json in the config folder names for it.
-// Hooks come from hooks/hooks.json and from the hook files and inline event
-// maps the manifest's hooks field names, each file once. Servers come from
-// .mcp.json and the .json files and inline maps the manifest's mcpServers
-// field names, each named plugin:<plugin>:<server> as Claude Code names it,
-// so a plugin's github is not the user's. A bundle the field names, .mcpb
-// or .dxt, is not opened. A path that leaves the plugin folder is not read,
-// as Claude Code does not load it. A plugin, manifest or file that is
-// missing or not JSON adds nothing.
+// enabledPlugins sets to true, read from the install folder that
+// plugins/installed_plugins.json in the config folder names for it. Hooks
+// come from hooks/hooks.json and from the hook files and inline event maps
+// the manifest's hooks field names. Servers come from .mcp.json and the
+// .json files and inline maps the manifest's mcpServers field names, each
+// named plugin:<plugin>:<server> as Claude Code names it, so a plugin's
+// github is not the user's. A bundle the field names, .mcpb or .dxt, is not
+// opened. A plugin, manifest or file that is missing or not JSON adds
+// nothing.
 function readPlugins(config: string, enabled: JsonObject): { hooks: number; mcp: string[] } {
   const installed = objectAt(readJson(path.join(config, 'plugins', 'installed_plugins.json')), 'plugins');
   let hooks = 0;
   const mcp: string[] = [];
   for (const [id, on] of Object.entries(enabled)) {
     if (on !== true) continue;
-    const install = listAt(installed, id).find((i) => stringAt(i, 'installPath'));
-    if (!install) continue;
-    const root = path.resolve(stringAt(install, 'installPath') as string);
+    const installPath = listAt(installed, id)
+      .map((install) => stringAt(install, 'installPath'))
+      .find(Boolean);
+    if (!installPath) continue;
+    const root = path.resolve(installPath);
     const manifest = readJson(path.join(root, '.claude-plugin', 'plugin.json'));
-    // What a manifest field declares beside its default file: the .json
-    // files inside the plugin folder, the default first and each once, and
-    // the inline objects.
-    const declared = (key: string, first: string) => {
-      const files = new Set([path.join(root, first)]);
-      const inline: JsonObject[] = [];
-      const value: unknown = manifest[key];
-      for (const item of Array.isArray(value) ? value : [value]) {
-        if (isObject(item)) inline.push(item);
-        else if (typeof item === 'string' && item.endsWith('.json')) {
-          const file = path.resolve(root, item);
-          if (file.startsWith(root + path.sep)) files.add(file);
-        }
-      }
-      return { files: [...files], inline };
-    };
-    const declaredHooks = declared('hooks', path.join('hooks', 'hooks.json'));
+    const declaredHooks = declaredIn(root, manifest, 'hooks', path.join('hooks', 'hooks.json'));
     hooks += declaredHooks.files
       .map(readJson)
       .concat(declaredHooks.inline.map((events) => ({ hooks: events })))
       .reduce((n, s) => n + hooksIn(s), 0);
-    const declaredServers = declared('mcpServers', '.mcp.json');
+    const declaredServers = declaredIn(root, manifest, 'mcpServers', '.mcp.json');
     const servers = declaredServers.files.map((file) => objectAt(readJson(file), 'mcpServers')).concat(declaredServers.inline);
-    for (const name of new Set(servers.flatMap(Object.keys))) mcp.push(`plugin:${id.split('@')[0]}:${name}`);
+    for (const name of new Set(servers.flatMap(Object.keys))) mcp.push(`plugin:${pluginNameOf(id)}:${name}`);
   }
   return { hooks, mcp };
 }

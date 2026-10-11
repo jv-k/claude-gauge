@@ -503,6 +503,11 @@ test('env reads the setup of the folder Claude Code runs in', () => {
     setupOf: (cwd) => ((seen = cwd), NOTHING_LOADED),
   });
   assert.equal(seen, '/home/me/project');
+  // Nothing reads the setup when no part shows it.
+  render({ workspace: { current_dir: '/home/me/project' } }, {
+    config: parseArgs(['--show', 'model']),
+    setupOf: () => assert.fail('the setup was read with no part showing it'),
+  });
 });
 
 test('plan shows the subscription and the signed-in user', () => {
@@ -694,11 +699,11 @@ test('the setup is empty where there is nothing to read, and skips files that ar
 // A plugin as Claude Code installs one: enabledPlugins in the user settings
 // names it on, and plugins/installed_plugins.json names its install folder.
 // A temporary config folder, named by CLAUDE_CONFIG_DIR, holds both.
+const path = require('node:path');
 const PLUGIN_ID = 'tools@acme';
 const PLUGIN_DIR = 'config/plugins/cache/acme/tools/1.0.0';
 const pluginTree = (files, { enabled = true, installs = [{ scope: 'user', installPath: PLUGIN_DIR }] } = {}) =>
   setupTree((root) => {
-    const path = require('node:path');
     const at = (install) => ({ ...install, installPath: path.join(root, install.installPath) });
     return {
       'config/settings.json': { enabledPlugins: { [PLUGIN_ID]: enabled } },
@@ -706,8 +711,11 @@ const pluginTree = (files, { enabled = true, installs = [{ scope: 'user', instal
       ...files,
     };
   });
-const pluginSetup = (tree) => readSetup(tree.project, { ...tree.options, env: { CLAUDE_CONFIG_DIR: require('node:path').join(tree.root, 'config') } });
-const { readSetup } = require('../dist/statusline.js');
+const configEnv = (tree) => ({ CLAUDE_CONFIG_DIR: path.join(tree.root, 'config') });
+const pluginSetup = (tree) => {
+  const { readSetup } = require('../dist/statusline.js');
+  return readSetup(tree.project, { ...tree.options, env: configEnv(tree) });
+};
 
 test('the setup counts the hooks and MCP servers of each plugin turned on', () => {
   // Two hooks in hooks/hooks.json and one server in .mcp.json, the two
@@ -752,7 +760,11 @@ test('a plugin turned off, not installed, or with files that are not JSON adds n
   assert.deepEqual(pluginSetup(setupTree({ 'config/settings.json': { enabledPlugins: { [PLUGIN_ID]: true } }, 'config/plugins/installed_plugins.json': '[1, 2' })), nothing);
   // A manifest that is not JSON, one whose fields are the wrong shape, and
   // a hooks file that is not JSON leave the default files' counts.
-  assert.deepEqual(pluginSetup(pluginTree({ ...files, [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: '{ not json' })), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+  const broken = pluginTree({ ...files, [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: '{ not json' });
+  assert.deepEqual(pluginSetup(broken), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+  // And the render, which reads the same files, still shows the part.
+  const line = plain(render({ workspace: { current_dir: broken.project } }, { config: parseArgs(['--show', 'env']), env: configEnv(broken) }));
+  assert.match(line, /^env (\d+ md )?\d+ mcp \d+ hooks$/);
   const shapes = pluginTree({
     ...files,
     [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: { name: 'tools', hooks: 7, mcpServers: ['./config/servers.json', './bundle.mcpb', 'https://example.com/x.mcpb', null] },
