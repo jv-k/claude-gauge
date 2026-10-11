@@ -70,11 +70,15 @@ class UsageError extends Error {}
 const COMMANDS = ['setup', 'configure', 'uninstall', 'update'] as const;
 type Command = (typeof COMMANDS)[number];
 
+// The switches chosen for each bar: its words, from the command line or the
+// wizard, null to take it out, undefined to leave it as it is.
+type Switches = readonly string[] | null | undefined;
+
 interface Args {
   command?: Command;
   help: boolean;
-  statusLine?: string[] | null;
-  tokenLine?: string[] | null;
+  statusLine?: Switches;
+  tokenLine?: Switches;
   replace: boolean;
   yes: boolean;
 }
@@ -245,9 +249,7 @@ function savedStatusLine(): StatusLineSetting | null | undefined {
 
 const say = (...lines: string[]) => process.stdout.write(lines.join('\n') + '\n');
 
-// The switches chosen for each bar: its words, from the command line or the
-// wizard, null to take it out, undefined to leave it as it is.
-type Switches = readonly string[] | null | undefined;
+// The bars' switches, from the command line or the wizard.
 type Bars = { statusLine?: Switches; tokenLine?: Switches };
 
 // setup and configure: turns the bars' switches into commands, plans the
