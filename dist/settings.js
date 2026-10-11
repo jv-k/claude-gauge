@@ -193,13 +193,11 @@ function installedSwitches(settings) {
 // literally there, else in single quotes. Claude Code runs the command
 // through a shell on every OS.
 const shellWord = (s) => /^[\w@%+=:,./~-]+$/.test(s) ? s : /^[^"$`\\!']*$/.test(s) ? `"${s}"` : `'${s.replace(/'/g, `'\\''`)}'`;
-// The command that runs `script` with the switches the user chose: one
-// string split at spaces, `--show ctx,5h,7d --segments 10`, or the words
-// themselves, which keeps a value that holds a space. Each word is quoted on
-// its own, so nothing in it can run as a second command.
-function commandFor(script, switches = '') {
-    const words = typeof switches === 'string' ? switches.split(/\s+/).filter(Boolean) : switches;
-    return ['node', script.replace(/\\/g, '/'), ...words].map(shellWord).join(' ');
+// The command that runs `script` with the switches the user chose, as words,
+// which keeps a value that holds a space. Each word is quoted on its own, so
+// nothing in it can run as a second command.
+function commandFor(script, switches = []) {
+    return ['node', script.replace(/\\/g, '/'), ...switches].map(shellWord).join(' ');
 }
 // The words of a command as the shell splits them, which undoes shellWord:
 // single quotes keep everything, double quotes keep all but an escaped " \ $

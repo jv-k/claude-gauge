@@ -26,7 +26,7 @@
 // registry disagree. test/snapshots/themes/ holds the default rows in every
 // theme.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.COMMAND_TIMEOUT_MS = exports.payloadFile = exports.INSTRUCT_HOSTS = exports.SWITCHES = exports.DEFAULT_ROWS = exports.THEMES = exports.PARTS = void 0;
+exports.COMMAND_TIMEOUT_MS = exports.payloadFile = exports.INSTRUCT_HOSTS = exports.SWITCHES = exports.DEFAULT_ROWS = exports.THEMES = exports.PARTS = exports.stripOwnCodes = void 0;
 exports.render = render;
 exports.parseArgs = parseArgs;
 exports.readSwitches = readSwitches;
@@ -51,56 +51,56 @@ const node_url_1 = require("node:url");
 // first, in the order their rows show them; the order of the rest is the
 // reference's (docs/reference.md).
 const partRegistry = {
-    ctx: { description: 'context window in use: percentage, bar and token count', row: 0, build: ({ data, config, theme }) => contextPart(data, config, theme) },
-    '5h': { description: '5-hour usage, with pace marker and reset time', row: 0, build: ({ data, config, theme, nowMs }) => windowPart('5h', data, config, theme, nowMs) },
-    '7d': { description: 'weekly usage, with pace marker and days to reset', row: 0, build: ({ data, config, theme, nowMs }) => windowPart('7d', data, config, theme, nowMs) },
-    time: { description: 'current local time', row: 1, build: ({ config, theme, nowMs }) => timePart(config, theme, nowMs) },
-    duration: { description: 'how long the session has run', row: 1, build: ({ data, theme }) => durationPart(data, theme) },
+    ctx: { description: 'context window in use: percentage, bar and token count', row: 0, build: contextPart },
+    '5h': { description: '5-hour usage, with pace marker and reset time', row: 0, build: (ctx) => windowPart('5h', ctx) },
+    '7d': { description: 'weekly usage, with pace marker and days to reset', row: 0, build: (ctx) => windowPart('7d', ctx) },
+    time: { description: 'current local time', row: 1, build: timePart },
+    duration: { description: 'how long the session has run', row: 1, build: durationPart },
     repo: {
         description: 'owner/name from the origin remote, else the folder name',
         row: 1,
-        build: ({ data, theme, folder }) => repoPart(data, theme, folder),
+        build: repoPart,
         link: folderUrl,
     },
     branch: {
         description: 'current git branch, dirty marker, ahead and behind, and the linked worktree',
         row: 1,
-        build: ({ data, config, theme, git }) => branchPart(data, config, theme, git()),
+        build: branchPart,
         link: ({ data, git }) => branchUrl(data.workspace?.repo, git().upstream),
     },
-    model: { description: 'model name, and the API provider when not first-party', row: 1, build: ({ data, theme, processEnv }) => modelPart(data, theme, processEnv) },
-    effort: { description: 'reasoning effort', row: 1, build: ({ data, config, theme }) => effortPart(data, config, theme) },
+    model: { description: 'model name, and the API provider when not first-party', row: 1, build: modelPart },
+    effort: { description: 'reasoning effort', row: 1, build: effortPart },
     dir: { description: 'folder Claude Code runs in', build: ({ theme, folder }) => `${theme.info}${folder}${RESET}`, link: folderUrl },
-    cost: { description: 'estimated session cost', build: ({ data, theme }) => costPart(data, theme) },
-    lines: { description: 'lines added and removed this session', build: ({ data, theme }) => linesPart(data, theme) },
-    name: { description: 'session name or title', build: ({ data, theme }) => namePart(data, theme) },
-    thinking: { description: 'extended thinking, when on', build: ({ data, theme }) => thinkingPart(data, theme) },
-    fast: { description: 'fast mode, when on', build: ({ data, theme }) => fastPart(data, theme) },
-    style: { description: 'output style, when not the default', build: ({ data, config, theme }) => stylePart(data, config, theme) },
-    git: { description: 'modified, staged, deleted and untracked file counts, when any', build: ({ theme, git }) => gitCountsPart(git(), theme) },
-    files: { description: 'the most recently changed files', build: ({ theme, git, mtimeOf }) => filesPart(git(), theme, mtimeOf) },
-    worktree: { description: 'linked git worktree', build: ({ data, config, theme }) => worktreePart(data, config, theme) },
-    pr: { description: "the branch's open pull request and its review state", build: ({ data, theme }) => prPart(data, theme), link: ({ data }) => webUrl(data.pr?.url) },
-    agent: { description: 'agent name, with --agent', build: ({ data, config, theme }) => agentPart(data, config, theme) },
-    cache: { description: 'prompt cache hit ratio and warmth', build: ({ data, config, theme }) => cachePart(data, config, theme) },
-    spend: { description: 'spend against a gateway spend limit', build: ({ data, config, theme }) => spendPart(data, config, theme) },
-    version: { description: 'Claude Code version', build: ({ data, theme }) => versionPart(data, theme) },
+    cost: { description: 'estimated session cost', build: costPart },
+    lines: { description: 'lines added and removed this session', build: linesPart },
+    name: { description: 'session name or title', build: namePart },
+    thinking: { description: 'extended thinking, when on', build: thinkingPart },
+    fast: { description: 'fast mode, when on', build: fastPart },
+    style: { description: 'output style, when not the default', build: stylePart },
+    git: { description: 'modified, staged, deleted and untracked file counts, when any', build: gitCountsPart },
+    files: { description: 'the most recently changed files', build: filesPart },
+    worktree: { description: 'linked git worktree', build: worktreePart },
+    pr: { description: "the branch's open pull request and its review state", build: prPart, link: ({ data }) => webUrl(data.pr?.url) },
+    agent: { description: 'agent name, with --agent', build: agentPart },
+    cache: { description: 'prompt cache hit ratio and warmth', build: cachePart },
+    spend: { description: 'spend against a gateway spend limit', build: spendPart },
+    version: { description: 'Claude Code version', build: versionPart },
     today: { description: "today's spend across sessions, from the cost ledger", build: (ctx) => spentPart('today', ctx) },
     week: { description: "this week's spend across sessions, from the cost ledger", build: (ctx) => spentPart('week', ctx) },
-    tools: { description: 'the running tool and its target, and completed tools with counts', build: ({ activity, theme, cwd }) => toolsPart(activity(), theme, cwd) },
-    agents: { description: 'running subagents, and those finished in the last minute', build: ({ activity, theme, nowMs }) => agentsPart(activity(), theme, nowMs) },
-    todos: { description: 'the todo in progress, and how many todos are done', build: ({ activity, config, theme }) => todosPart(activity(), config, theme) },
-    skills: { description: 'skills used, and MCP servers called, marking those whose last call failed', build: ({ activity, config, theme }) => skillsPart(activity(), config, theme) },
-    compactions: { description: 'how many times the conversation was compacted', build: ({ activity, config, theme }) => compactionsPart(activity(), config, theme) },
-    reply: { description: 'time since the last reply', build: ({ activity, config, theme, nowMs }) => replyPart(activity(), config, theme, nowMs) },
-    speed: { description: 'output tokens per second of the last response', build: ({ activity, theme }) => speedPart(activity(), theme) },
-    env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: ({ config, theme, setup }) => envPart(setup(), config, theme) },
-    plan: { description: 'subscription plan and signed-in user', build: ({ theme, setup }) => planPart(setup(), theme) },
-    models: { description: 'per-model weekly usage, as 7d shows the week', build: ({ data, config, theme, nowMs }) => modelsPart(data, config, theme, nowMs) },
-    limit: { description: 'a notice naming each exhausted window and its reset', build: ({ data, config, theme, nowMs }) => limitPart(data, config, theme, nowMs) },
-    ram: { description: 'system memory in use: percentage, bar and amount', build: ({ config, theme, memory }) => ramPart(memory(), config, theme) },
-    text: { description: 'fixed text, with --text', build: ({ config, theme }) => outsideText(config.text, theme) },
-    command: { description: 'first line of output of a shell command, with --command', build: ({ theme, commandOutput }) => outsideText(commandOutput(), theme) },
+    tools: { description: 'the running tool and its target, and completed tools with counts', build: toolsPart },
+    agents: { description: 'running subagents, and those finished in the last minute', build: agentsPart },
+    todos: { description: 'the todo in progress, and how many todos are done', build: todosPart },
+    skills: { description: 'skills used, and MCP servers called, marking those whose last call failed', build: skillsPart },
+    compactions: { description: 'how many times the conversation was compacted', build: compactionsPart },
+    reply: { description: 'time since the last reply', build: replyPart },
+    speed: { description: 'output tokens per second of the last response', build: speedPart },
+    env: { description: 'CLAUDE.md files, rules, MCP servers and hooks loaded', build: envPart },
+    plan: { description: 'subscription plan and signed-in user', build: planPart },
+    models: { description: 'per-model weekly usage, as 7d shows the week', build: modelsPart },
+    limit: { description: 'a notice naming each exhausted window and its reset', build: limitPart },
+    ram: { description: 'system memory in use: percentage, bar and amount', build: ramPart },
+    text: { description: 'fixed text, with --text', build: textPart },
+    command: { description: 'first line of output of a shell command, with --command', build: commandPart },
 };
 // The same object, typed so that every entry reads as a PartSpec: the literal
 // above keeps the names for the Part type, this keeps row optional on each.
@@ -336,6 +336,7 @@ const sanitise = (text) => text.replace(ESCAPE_SEQUENCE, '').replace(CONTROL_CHA
 // Text without claude-gauge's own colour codes and OSC 8 links, the only
 // escapes left in a rendered row once its parts are sanitised.
 const stripOwnCodes = (text) => text.replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x07]*\x07/g, '');
+exports.stripOwnCodes = stripOwnCodes;
 // A parsed payload with every string in it sanitised, at any depth.
 function sanitiseAll(value) {
     if (typeof value === 'string')
@@ -407,24 +408,34 @@ function git(cwd, args) {
         return ''; // not a repository, or git is missing
     }
 }
+// The nearest .git entry at or above a folder, read from the files rather
+// than from git: the folder that holds it, and the git folder it stands for.
+// Inside a linked worktree .git is a file that names the worktree's own git
+// folder under the main checkout's .git/worktrees. undefined outside a
+// repository. Throws where a file cannot be read.
+function gitEntryAbove(cwd) {
+    for (let dir = path.resolve(cwd);; dir = path.dirname(dir)) {
+        const dotGit = path.join(dir, '.git');
+        if (fs.existsSync(dotGit)) {
+            const gitDir = fs.statSync(dotGit).isFile()
+                ? path.resolve(dir, /^gitdir: (.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'))?.[1].trim() ?? '.git')
+                : dotGit;
+            return { dir, gitDir };
+        }
+        if (path.dirname(dir) === dir)
+            return undefined;
+    }
+}
 // The branch HEAD names, read from the repository's files rather than from
 // git: the fallback when git status takes too long, so the render never
-// waits on a second git process. Inside a linked worktree .git is a file
-// that names the worktree's own git folder. '' outside a repository and on
-// a detached HEAD.
+// waits on a second git process. '' outside a repository and on a detached
+// HEAD.
 function headBranch(cwd) {
     try {
-        for (let dir = path.resolve(cwd);; dir = path.dirname(dir)) {
-            const dotGit = path.join(dir, '.git');
-            if (fs.existsSync(dotGit)) {
-                const gitDir = fs.statSync(dotGit).isFile()
-                    ? path.resolve(dir, /^gitdir: (.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'))?.[1].trim() ?? '.git')
-                    : dotGit;
-                return /^ref: refs\/heads\/(.+)$/m.exec(fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8'))?.[1].trim() ?? '';
-            }
-            if (path.dirname(dir) === dir)
-                return '';
-        }
+        const entry = gitEntryAbove(cwd);
+        if (!entry)
+            return '';
+        return /^ref: refs\/heads\/(.+)$/m.exec(fs.readFileSync(path.join(entry.gitDir, 'HEAD'), 'utf8'))?.[1].trim() ?? '';
     }
     catch {
         return '';
@@ -577,7 +588,7 @@ function usageBar(pct, color, window, resetsAt, config, theme, nowMs) {
 // The 5h or 7d part. rate_limits is present only for claude.ai Pro and Max
 // subscribers, after the first response of a session; "~" marks a window
 // Claude Code has not reported yet.
-function windowPart(name, data, config, theme, nowMs) {
+function windowPart(name, { data, config, theme, nowMs }) {
     const window = WINDOWS[name];
     const label = labelOf(config, name);
     const limit = data.rate_limits?.[window.key];
@@ -613,7 +624,7 @@ function modelWindows(data) {
 // The models part: each per-model weekly window as 7d shows the week, with
 // the model's name after the 7d label. The name stays with --no-labels,
 // since without it two windows read alike.
-function modelsPart(data, config, theme, nowMs) {
+function modelsPart({ data, config, theme, nowMs }) {
     return modelWindows(data)
         .map(({ name, limit }) => usageSegment(`${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], config, theme, nowMs))
         .join(separatorOf(config, theme));
@@ -621,7 +632,7 @@ function modelsPart(data, config, theme, nowMs) {
 // The context in the token line's shape: ctx 43% ▓▓░░░ 86.0k. Both figures
 // count input only (fresh input plus cache writes and reads), as Claude
 // Code's used_percentage does.
-function contextPart(data, config, theme) {
+function contextPart({ data, config, theme }) {
     const ctx = data.context_window;
     if (!ctx)
         return '';
@@ -642,7 +653,7 @@ function contextPart(data, config, theme) {
     return `${color}${label}${Math.round(pct)}%${bar}${count}${RESET}`;
 }
 // The current local time, on the same clock as the reset times.
-function timePart(config, theme, nowMs) {
+function timePart({ config, theme, nowMs }) {
     const time = new Date(nowMs).toLocaleTimeString('en-GB', clockOf(config));
     return `${theme.muted}${time}${RESET}`;
 }
@@ -661,13 +672,13 @@ function formatDuration(ms) {
     const d = Math.floor(h / 24);
     return h % 24 ? `${d}d${h % 24}h` : `${d}d`;
 }
-function durationPart(data, theme) {
+function durationPart({ data, theme }) {
     const ms = data.cost?.total_duration_ms;
     return ms != null ? `${theme.muted}${formatDuration(ms)}${RESET}` : '';
 }
 // The session's estimated cost. Behind a spend limit it takes the usage
 // colour of the limit's percentage; otherwise it is plain metadata.
-function costPart(data, theme) {
+function costPart({ data, theme }) {
     const usd = data.cost?.total_cost_usd;
     if (usd == null)
         return '';
@@ -675,7 +686,7 @@ function costPart(data, theme) {
     const color = spent != null ? levelColor(theme, Math.round(spent)) : theme.muted;
     return `${color}$${usd.toFixed(2)}${RESET}`;
 }
-function linesPart(data, theme) {
+function linesPart({ data, theme }) {
     const added = data.cost?.total_lines_added;
     const removed = data.cost?.total_lines_removed;
     if (added == null && removed == null)
@@ -689,7 +700,7 @@ const cut = (text, chars) => {
     return points.length <= chars ? text : `${points.slice(0, chars - 1).join('')}…`;
 };
 // The session's custom name or AI-generated title, cut to 30 characters.
-function namePart(data, theme) {
+function namePart({ data, theme }) {
     const name = data.session_name;
     if (!name)
         return '';
@@ -700,13 +711,17 @@ function namePart(data, theme) {
 // because "high" on its own could mean anything; thinking and fast are their
 // own label and show only when on; style shows only when it is not the
 // default.
-function effortPart(data, config, theme) {
+function effortPart({ data, config, theme }) {
     const level = data.effort?.level;
     return level ? `${theme.accent}${labelOf(config, 'effort')}${level}${RESET}` : '';
 }
-const thinkingPart = (data, theme) => (data.thinking?.enabled ? `${theme.accent}think${RESET}` : '');
-const fastPart = (data, theme) => (data.fast_mode ? `${theme.accent}fast${RESET}` : '');
-function stylePart(data, config, theme) {
+function thinkingPart({ data, theme }) {
+    return data.thinking?.enabled ? `${theme.accent}think${RESET}` : '';
+}
+function fastPart({ data, theme }) {
+    return data.fast_mode ? `${theme.accent}fast${RESET}` : '';
+}
+function stylePart({ data, config, theme }) {
     const name = data.output_style?.name;
     if (!name || name === 'default')
         return '';
@@ -715,7 +730,7 @@ function stylePart(data, config, theme) {
 // The repository as owner/name from the origin remote. Without one (outside
 // git, or no origin) it falls back to the folder name, so a row that leads
 // with repo never loses its location.
-function repoPart(data, theme, folder) {
+function repoPart({ data, theme, folder }) {
     const repo = data.workspace?.repo;
     const shown = repo?.owner && repo?.name ? `${repo.owner}/${repo.name}` : folder;
     return `${theme.muted}${shown}${RESET}`;
@@ -763,7 +778,8 @@ function branchUrl(repo, upstream) {
 // The branch, * when the work tree has changes, ↑n and ↓n for the commits
 // it is ahead of and behind its upstream, and the worktree name inside a
 // linked worktree.
-function branchPart(data, config, theme, git) {
+function branchPart({ data, config, theme, git: gitOf }) {
+    const git = gitOf();
     if (!git.branch)
         return '';
     const dirty = git.changed.length ? `${theme.accent}*${theme.good}` : '';
@@ -775,7 +791,8 @@ function branchPart(data, config, theme, git) {
 }
 // The work tree's changes, as counts: !modified +staged ✘deleted ?untracked.
 // Only counts above 0 show, and nothing shows when the tree is clean.
-function gitCountsPart(git, theme) {
+function gitCountsPart({ theme, git: gitOf }) {
+    const git = gitOf();
     const counts = [
         [git.modified, '!', theme.accent],
         [git.staged, '+', theme.good],
@@ -795,8 +812,8 @@ const TIMED_FILES = 1000;
 // The most recently changed files, newest first, of the first TIMED_FILES
 // that git lists. A deleted file has no time, so it follows the files that
 // have one; files with the same time keep git's order.
-function filesPart(git, theme, mtimeOf) {
-    return git.changed
+function filesPart({ theme, git: gitOf, mtimeOf }) {
+    return gitOf().changed
         .slice(0, TIMED_FILES)
         .map((file) => ({ ...file, time: mtimeOf(file.path) ?? -Infinity }))
         .sort((a, b) => b.time - a.time || 0)
@@ -804,12 +821,12 @@ function filesPart(git, theme, mtimeOf) {
         .map((file) => `${theme.muted}${file.name}${RESET}`)
         .join(' ');
 }
-function worktreePart(data, config, theme) {
+function worktreePart({ data, config, theme }) {
     const wt = worktreeName(data);
     return wt ? `${theme.muted}${labelOf(config, 'wt')}${wt}${RESET}` : '';
 }
 const PR_ROLES = { approved: 'good', pending: 'accent', changes_requested: 'bad', draft: 'muted' };
-function prPart(data, theme) {
+function prPart({ data, theme }) {
     const pr = data.pr;
     if (pr?.number == null)
         return '';
@@ -831,13 +848,13 @@ function webUrl(text) {
         return undefined;
     }
 }
-function agentPart(data, config, theme) {
+function agentPart({ data, config, theme }) {
     const name = data.agent?.name;
     return name ? `${theme.muted}${labelOf(config, 'agent')}${name}${RESET}` : '';
 }
 // The prompt cache's hit ratio and whether it is still warm. A high hit
 // ratio is good, so the colour follows the miss rate on the usage scale.
-function cachePart(data, config, theme) {
+function cachePart({ data, config, theme }) {
     const cache = data.prompt_cache;
     if (!cache)
         return '';
@@ -851,7 +868,7 @@ function cachePart(data, config, theme) {
 // The spend limit behind a Claude apps gateway: dollars when Claude Code has
 // them, which arrive a little after the percentage, and the percentage until
 // then.
-function spendPart(data, config, theme) {
+function spendPart({ data, config, theme }) {
     const limit = data.rate_limits?.spend_limit;
     if (limit?.used_percentage == null)
         return '';
@@ -888,7 +905,7 @@ function providerOf(env) {
     return host === 'api.anthropic.com' ? '' : 'Enterprise';
 }
 // The model, with the provider after it: Opus 5.5 (Bedrock).
-function modelPart(data, theme, env) {
+function modelPart({ data, theme, processEnv: env }) {
     const name = data.model?.display_name;
     if (!name)
         return '';
@@ -905,12 +922,14 @@ const ENV_KINDS = [
     ['hooks', 'hook', 'hooks'],
 ];
 // What the session loads, kind by kind, leaving out a kind with none.
-function envPart(setup, config, theme) {
+function envPart({ config, theme, setup: setupOf }) {
+    const setup = setupOf();
     const counts = ENV_KINDS.filter(([kind]) => setup[kind]).map(([kind, one, many]) => counted(setup[kind], one, many));
     return counts.length ? `${theme.muted}${labelOf(config, 'env')}${counts.join(' ')}${RESET}` : '';
 }
 // The plan, with the signed-in user after it: Claude Max 20x (me@example.com).
-function planPart({ plan, user }, theme) {
+function planPart({ theme, setup: setupOf }) {
+    const { plan, user } = setupOf();
     const shown = plan && user ? `${plan} (${user})` : plan || user;
     return shown ? `${theme.muted}${shown}${RESET}` : '';
 }
@@ -919,7 +938,7 @@ function planPart({ plan, user }, theme) {
 // window says nothing. A reset shows as its window's part shows it. The
 // spend part shows none, so a spend reset, when Claude Code sends one, shows
 // as days or a time of day, as the weekly resets do.
-function limitPart(data, config, theme, nowMs) {
+function limitPart({ data, config, theme, nowMs }) {
     const limits = data.rate_limits ?? {};
     const windows = [
         ['5h', limits.five_hour, WINDOWS['5h'].resetText],
@@ -939,7 +958,8 @@ const gib = (bytes) => {
 };
 // The memory in use in the ctx part's shape: ram 66% ▓▓▓░░ 10.5G, on the
 // usage colours.
-function ramPart(memory, config, theme) {
+function ramPart({ config, theme, memory: memoryOf }) {
+    const memory = memoryOf();
     if (!memory)
         return '';
     const pct = (memory.used * 100) / memory.total;
@@ -953,7 +973,15 @@ function outsideText(raw, theme) {
     const text = sanitise(raw);
     return text ? `${theme.muted}${text}${RESET}` : '';
 }
-const versionPart = (data, theme) => (data.version ? `${theme.muted}v${data.version}${RESET}` : '');
+function textPart({ config, theme }) {
+    return outsideText(config.text, theme);
+}
+function commandPart({ theme, commandOutput: commandOutputOf }) {
+    return outsideText(commandOutputOf(), theme);
+}
+function versionPart({ data, theme }) {
+    return data.version ? `${theme.muted}v${data.version}${RESET}` : '';
+}
 // A ledger from whatever the file held: its two tables where they are
 // objects, else empty ones. The tables have no prototype, so a session id
 // such as __proto__ is a key like any other.
@@ -1017,8 +1045,8 @@ function shortTarget(name, target, cwd) {
 }
 // The tool running now, with its target, then the completed tools used most,
 // with counts: ◐ Edit src/a.ts ✓ Read ×12 ✓ Bash ×3.
-function toolsPart(activity, theme, cwd) {
-    const { running, completed } = activity.tools;
+function toolsPart({ theme, cwd, activity: activityOf }) {
+    const { running, completed } = activityOf().tools;
     const items = [];
     const now = running.at(-1);
     if (now)
@@ -1048,8 +1076,8 @@ function agentItem(agent, theme, nowMs) {
 }
 // The subagents running now, oldest first, then those finished in the last
 // AGENT_LINGER_MS, newest first, up to AGENTS_SHOWN in all.
-function agentsPart(activity, theme, nowMs) {
-    const { agents } = activity;
+function agentsPart({ theme, nowMs, activity: activityOf }) {
+    const { agents } = activityOf();
     const running = agents.filter((a) => a.endedAt === undefined);
     const finished = agents
         .filter((a) => a.endedAt !== undefined && nowMs - a.endedAt < AGENT_LINGER_MS)
@@ -1062,8 +1090,8 @@ function agentsPart(activity, theme, nowMs) {
 // The todo in progress, by the form Claude Code shows while it runs, then
 // how many todos are done: ◐ Writing the tests 1/3. With none in progress,
 // todos 1/3, and ✓ todos 3/3 once all are done.
-function todosPart(activity, config, theme) {
-    const { todos } = activity;
+function todosPart({ config, theme, activity: activityOf }) {
+    const { todos } = activityOf();
     if (!todos.length)
         return '';
     const done = todos.filter((t) => t.status === 'completed').length;
@@ -1079,7 +1107,8 @@ function todosPart(activity, config, theme) {
 const SKILLS_PART_SHOWN = 3;
 // The skills used, newest first, then the MCP servers called, those whose
 // latest call failed first: skills tdd code-review mcp ✗ linear github.
-function skillsPart(activity, config, theme) {
+function skillsPart({ config, theme, activity: activityOf }) {
+    const activity = activityOf();
     // The skills, then the servers, each with its label: none when it has nothing.
     const sections = [];
     const section = (label, items) => {
@@ -1099,21 +1128,21 @@ function skillsPart(activity, config, theme) {
 }
 // How many times the conversation was compacted: compactions 2. Nothing
 // before the first.
-function compactionsPart(activity, config, theme) {
-    const { compactions } = activity;
+function compactionsPart({ config, theme, activity: activityOf }) {
+    const { compactions } = activityOf();
     return compactions > 0 ? `${theme.muted}${labelOf(config, 'compactions')}${compactions}${RESET}` : '';
 }
 // The time since Claude last replied: reply 3m ago. A reply stamped ahead of
 // this machine's clock counts as just now.
-function replyPart(activity, config, theme, nowMs) {
-    const { lastReplyAt } = activity;
+function replyPart({ config, theme, nowMs, activity: activityOf }) {
+    const { lastReplyAt } = activityOf();
     if (lastReplyAt === undefined)
         return '';
     return `${theme.muted}${labelOf(config, 'reply')}${formatDuration(Math.max(0, nowMs - lastReplyAt))} ago${RESET}`;
 }
 // The output speed of the last response: 84 tok/s, or 6.3 tok/s below ten.
-function speedPart(activity, theme) {
-    const { speed } = activity;
+function speedPart({ theme, activity: activityOf }) {
+    const { speed } = activityOf();
     if (speed === undefined)
         return '';
     return `${theme.muted}${speed < 10 ? speed.toFixed(1) : Math.round(speed)} tok/s${RESET}`;
@@ -1178,6 +1207,38 @@ function foldersDownTo(cwd) {
             return folders;
     }
 }
+// The folder Claude Code reads .claude/settings.local.json from: the root of
+// the git repository the launch folder is in, and inside a linked worktree
+// the main checkout's root, the folder above the .git folder the worktree's
+// .git file names. The launch folder itself outside a repository, where the
+// root is the home folder, on Windows, and where the root, its .git entry or
+// its .claude folder is not the current user's.
+function localSettingsDir(project, home, platform) {
+    if (platform === 'win32')
+        return project;
+    try {
+        const entry = gitEntryAbove(project);
+        if (!entry)
+            return project;
+        // A worktree's git folder is <main>/.git/worktrees/<name>.
+        const worktrees = path.dirname(entry.gitDir);
+        const linked = entry.gitDir !== path.join(entry.dir, '.git') && path.basename(worktrees) === 'worktrees' && path.basename(path.dirname(worktrees)) === '.git';
+        const root = linked ? path.dirname(path.dirname(worktrees)) : entry.dir;
+        if (root === path.resolve(home))
+            return project;
+        const uid = process.getuid?.();
+        if (uid !== undefined) {
+            for (const owned of [root, path.join(root, '.git'), path.join(root, '.claude')]) {
+                if (fs.existsSync(owned) && fs.statSync(owned).uid !== uid)
+                    return project;
+            }
+        }
+        return root;
+    }
+    catch {
+        return project;
+    }
+}
 // Hook handlers in a settings file: one per command in each matcher group.
 const hooksIn = (settings) => Object.values(objectAt(settings, 'hooks')).reduce((n, groups) => n + (Array.isArray(groups) ? groups.reduce((m, group) => m + listAt(group, 'hooks').length, 0) : 0), 0);
 // claude.ai plan names from a subscription type and a rate-limit tier: max
@@ -1188,7 +1249,64 @@ function planName(type, tier) {
     const multiple = /_(\d+x)$/.exec(tier ?? '')?.[1];
     return ['Claude', capitalised(type), multiple].filter(Boolean).join(' ');
 }
-function readSetup(cwd, { env = process.env, home = os.homedir(), managedDir = managedDirOf(process.platform) } = {}) {
+// The .json files inside a plugin folder and the inline objects that a
+// manifest field names, beside the field's default file: the default first,
+// and each file once. A path that leaves the plugin folder is left out, as
+// Claude Code does not load it.
+function declaredIn(root, manifest, key, first) {
+    const files = new Set([path.join(root, first)]);
+    const inline = [];
+    const value = manifest[key];
+    for (const item of Array.isArray(value) ? value : [value]) {
+        if (isObject(item))
+            inline.push(item);
+        else if (typeof item === 'string' && item.endsWith('.json')) {
+            const file = path.resolve(root, item);
+            if (file.startsWith(root + path.sep))
+                files.add(file);
+        }
+    }
+    return { files: [...files], inline };
+}
+// A plugin's own name from its enabledPlugins key, name@marketplace.
+const pluginNameOf = (id) => id.split('@')[0];
+// The hooks and MCP servers of the plugins turned on: each plugin that
+// enabledPlugins sets to true, read from the install folder that
+// plugins/installed_plugins.json in the config folder names for it. Hooks
+// come from hooks/hooks.json and from the hook files and inline event maps
+// the manifest's hooks field names. Servers come from .mcp.json and the
+// .json files and inline maps the manifest's mcpServers field names, each
+// named plugin:<plugin>:<server> as Claude Code names it, so a plugin's
+// github is not the user's. A bundle the field names, .mcpb or .dxt, is not
+// opened. A plugin, manifest or file that is missing or not JSON adds
+// nothing.
+function readPlugins(config, enabled) {
+    const installed = objectAt(readJson(path.join(config, 'plugins', 'installed_plugins.json')), 'plugins');
+    let hooks = 0;
+    const mcp = [];
+    for (const [id, on] of Object.entries(enabled)) {
+        if (on !== true)
+            continue;
+        const installPath = listAt(installed, id)
+            .map((install) => stringAt(install, 'installPath'))
+            .find(Boolean);
+        if (!installPath)
+            continue;
+        const root = path.resolve(installPath);
+        const manifest = readJson(path.join(root, '.claude-plugin', 'plugin.json'));
+        const declaredHooks = declaredIn(root, manifest, 'hooks', path.join('hooks', 'hooks.json'));
+        hooks += declaredHooks.files
+            .map(readJson)
+            .concat(declaredHooks.inline.map((events) => ({ hooks: events })))
+            .reduce((n, s) => n + hooksIn(s), 0);
+        const declaredServers = declaredIn(root, manifest, 'mcpServers', '.mcp.json');
+        const servers = declaredServers.files.map((file) => objectAt(readJson(file), 'mcpServers')).concat(declaredServers.inline);
+        for (const name of new Set(servers.flatMap(Object.keys)))
+            mcp.push(`plugin:${pluginNameOf(id)}:${name}`);
+    }
+    return { hooks, mcp };
+}
+function readSetup(cwd, { env = process.env, home = os.homedir(), platform = process.platform, managedDir = managedDirOf(platform) } = {}) {
     const config = configDirOf(env, home);
     const project = path.resolve(cwd);
     const folders = foldersDownTo(project);
@@ -1201,30 +1319,35 @@ function readSetup(cwd, { env = process.env, home = os.homedir(), managedDir = m
         ...folders.flatMap((dir) => ['CLAUDE.md', path.join('.claude', 'CLAUDE.md'), 'CLAUDE.local.md'].map((f) => path.join(dir, f))),
     ].filter(isFile));
     const rules = new Set([config, ...folders.map((dir) => path.join(dir, '.claude'))].flatMap((dir) => markdownUnder(path.join(dir, 'rules'))));
-    // Settings: user, project, local and managed. Each may hold hooks, and
-    // the names of project MCP servers turned off.
-    const settings = [
-        path.join(config, 'settings.json'),
-        path.join(project, '.claude', 'settings.json'),
-        path.join(project, '.claude', 'settings.local.json'),
-        path.join(managedDir, 'managed-settings.json'),
-    ]
+    // Settings: user, project, local and managed, in the order Claude Code
+    // applies them, so a later file's enabledPlugins entry wins. Each may hold
+    // hooks, the names of project MCP servers turned off, and the plugins
+    // turned on. The local file is the repository root's; one in the launch
+    // folder under it is read too, and the root's value applies where both
+    // set a key.
+    const localDir = localSettingsDir(project, home, platform);
+    const localIn = (dir) => readJson(path.join(dir, '.claude', 'settings.local.json'));
+    const local = localDir === project ? localIn(project) : { ...localIn(project), ...localIn(localDir) };
+    const settings = [path.join(config, 'settings.json'), path.join(project, '.claude', 'settings.json')]
         .filter((file, i, all) => all.indexOf(file) === i)
-        .map(readJson);
+        .map(readJson)
+        .concat(local, readJson(path.join(managedDir, 'managed-settings.json')));
+    const plugins = readPlugins(config, Object.assign({}, ...settings.map((s) => objectAt(s, 'enabledPlugins'))));
     // MCP servers: user and local scope in .claude.json, the project's
     // .mcp.json and the managed file, each name once, less the project servers
     // turned off.
     const claudeJson = readJson(claudeJsonOf(env, home));
-    const local = objectAt(objectAt(claudeJson, 'projects'), project);
-    const turnedOff = new Set([...settings, local].flatMap((s) => listAt(s, 'disabledMcpjsonServers')));
+    const localScope = objectAt(objectAt(claudeJson, 'projects'), project);
+    const turnedOff = new Set([...settings, localScope].flatMap((s) => listAt(s, 'disabledMcpjsonServers')));
     const projectServers = Object.keys(objectAt(readJson(path.join(project, '.mcp.json')), 'mcpServers')).filter((name) => !turnedOff.has(name));
     const mcp = new Set([
         ...Object.keys(objectAt(claudeJson, 'mcpServers')),
-        ...Object.keys(objectAt(local, 'mcpServers')),
+        ...Object.keys(objectAt(localScope, 'mcpServers')),
         ...projectServers,
         ...Object.keys(objectAt(readJson(path.join(managedDir, 'managed-mcp.json')), 'mcpServers')),
+        ...plugins.mcp,
     ]);
-    for (const name of listAt(local, 'disabledMcpServers'))
+    for (const name of listAt(localScope, 'disabledMcpServers'))
         if (typeof name === 'string')
             mcp.delete(name);
     // The plan from the login's subscription fields where they are in a file,
@@ -1240,7 +1363,7 @@ function readSetup(cwd, { env = process.env, home = os.homedir(), managedDir = m
         claudeMd: claudeMd.size,
         rules: rules.size,
         mcp: mcp.size,
-        hooks: settings.reduce((n, s) => n + hooksIn(s), 0),
+        hooks: settings.reduce((n, s) => n + hooksIn(s), 0) + plugins.hooks,
         ...(plan ? { plan } : {}),
         ...(user ? { user } : {}),
     };

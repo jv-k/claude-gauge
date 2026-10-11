@@ -37,8 +37,24 @@ const path = require("node:path");
 const PARTS = ['time', 'req', 'out', 'cache', 'ctx'];
 exports.PARTS = PARTS;
 const isPart = (name) => PARTS.includes(name);
-// The switches that take a value. parseArgs reads each of them.
-const TAKES_VALUE = ['--show', '--segments', '--window'];
+// Every switch parseArgs reads, one row each: readSwitches takes a value for
+// a row that says so, and parseArgs runs the row's apply. --instruct is
+// not here, because the program reads it from argv itself, below.
+const SWITCHES = [
+    {
+        name: '--show',
+        takesValue: true,
+        apply: (opts, value) => {
+            const parts = value.split(',').map((p) => p.trim()).filter(isPart);
+            if (parts.length)
+                opts.show = parts;
+        },
+    },
+    { name: '--segments', takesValue: true, apply: (opts, value) => { opts.segments = value; } },
+    { name: '--window', takesValue: true, apply: (opts, value) => { opts.window = value; } },
+    { name: '--latest', apply: (opts) => { opts.latest = true; } },
+];
+const switchNamed = (name) => SWITCHES.find((s) => s.name === name);
 // The switches in `argv` as the token line reads them: a switch that takes a
 // value takes the next word, unless it has one after `=`. Any other word
 // stands alone.
@@ -47,7 +63,7 @@ function readSwitches(argv) {
     for (let i = 0; i < argv.length; i++) {
         const start = i;
         const [name, inline] = argv[i].split(/=(.*)/s);
-        const value = TAKES_VALUE.includes(name) ? (inline ?? argv[++i] ?? '') : '';
+        const value = switchNamed(name)?.takesValue ? (inline ?? argv[++i] ?? '') : '';
         read.push({ name, value, words: argv.slice(start, i + 1) });
     }
     return read;
@@ -56,26 +72,8 @@ function readSwitches(argv) {
 // ignored, so a hook never fails over a typo.
 function parseArgs(argv) {
     const opts = { latest: false };
-    for (const { name, value } of readSwitches(argv)) {
-        switch (name) {
-            case '--show': {
-                const parts = value.split(',').map((p) => p.trim()).filter(isPart);
-                if (parts.length)
-                    opts.show = parts;
-                break;
-            }
-            case '--segments':
-                opts.segments = value;
-                break;
-            case '--window':
-                opts.window = value;
-                break;
-            case '--latest':
-                opts.latest = true;
-                break;
-            default: break;
-        }
-    }
+    for (const { name, value } of readSwitches(argv))
+        switchNamed(name)?.apply(opts, value);
     return opts;
 }
 // Compact counts: 1.69M, 427k, 6.5k, 830.

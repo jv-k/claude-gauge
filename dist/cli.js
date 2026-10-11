@@ -24,13 +24,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const readline = require("node:readline");
 const node_child_process_1 = require("node:child_process");
 const settings_1 = require("./settings");
 const settings_file_1 = require("./settings-file");
 const wizard_1 = require("./wizard");
 const statusline_1 = require("./statusline");
 const wordmark_1 = require("./wordmark");
+const styles_1 = require("./styles");
 const USAGE = `Usage: claude-gauge <setup | configure | uninstall | update> [switches]
 
   setup        add the status line and the token line to Claude Code's settings
@@ -62,12 +62,15 @@ const usage = (stream) => banner(stream) + USAGE;
 class UsageError extends Error {
 }
 const COMMANDS = ['setup', 'configure', 'uninstall', 'update'];
+// The words of a bar switch's value, `--show ctx,5h,7d --segments 10`, split
+// at runs of white space with empty words dropped, so that "" is no switches.
+const words = (value) => value.split(/\s+/).filter(Boolean);
 // Every switch: its names, the commands that take it, and what it sets.
 // --help goes with any command.
 const SWITCHES = [
-    { names: ['--status-line'], commands: ['setup', 'configure'], apply: (args, value) => { args.statusLine = value(); } },
+    { names: ['--status-line'], commands: ['setup', 'configure'], apply: (args, value) => { args.statusLine = words(value()); } },
     { names: ['--no-status-line'], commands: ['setup', 'configure'], apply: (args) => { args.statusLine = null; } },
-    { names: ['--token-line'], commands: ['setup', 'configure'], apply: (args, value) => { args.tokenLine = value(); } },
+    { names: ['--token-line'], commands: ['setup', 'configure'], apply: (args, value) => { args.tokenLine = words(value()); } },
     { names: ['--no-token-line'], commands: ['setup', 'configure'], apply: (args) => { args.tokenLine = null; } },
     { names: ['--replace'], commands: ['setup', 'configure'], apply: (args) => { args.replace = true; } },
     { names: ['--yes', '-y'], commands: ['setup'], apply: (args) => { args.yes = true; } },
@@ -216,10 +219,12 @@ function savedStatusLine() {
     }
     return statusLine;
 }
-const say = (...lines) => process.stdout.write(lines.join('\n') + '\n');
+// Writes the pieces to stdout, each a styled line or a pill.
+const say = (...pieces) => process.stdout.write(pieces.join(''));
 // setup and configure: turns the bars' switches into commands, plans the
-// settings, and writes them.
-function apply({ statusLine, tokenLine }, replace) {
+// settings, and writes them, under a pill that names the step: SETUP or
+// CONFIGURE when run with switches, DONE after the wizard.
+function apply({ statusLine, tokenLine }, replace, heading) {
     const file = settingsFile();
     const { settings, text } = (0, settings_file_1.readSettings)(file);
     const where = scripts();
@@ -255,28 +260,14 @@ function apply({ statusLine, tokenLine }, replace) {
     const settingsBackup = next.changed ? (0, settings_file_1.writeSettings)(file, next.settings, text) : null;
     if (next.dropBackup)
         fs.rmSync(savedStatusLineFile(), { force: true });
+    const s = (0, styles_1.stylesFor)(process.stdout);
     if (!next.changed) {
-        say(`${file} already holds these choices. Nothing to change.`);
+        say(s.pill(heading), s.info(`${s.value(file)} already holds these choices. Nothing to change.`));
         return;
     }
     const ours = (0, settings_1.installed)(next.settings);
-    say(`Status line: ${ours.statusLine ?? 'not set up'}`, `Token line:  ${ours.tokenLine ?? 'not set up'}`, ...(settingsBackup ? [`Backup of the previous settings: ${settingsBackup}`] : []), 'Start a new Claude Code session to pick up the changes.');
-}
-// The questions, asked on the terminal: each prompt on stdout, each answer a
-// line of stdin. Lines are queued as they arrive, so answers piped in all at
-// once each reach their question.
-function terminalIo() {
-    const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-    const lines = rl[Symbol.asyncIterator]();
-    return {
-        ask: async (question) => {
-            process.stdout.write(question);
-            const next = await lines.next();
-            return next.done ? undefined : next.value;
-        },
-        write: (text) => process.stdout.write(text),
-        close: () => rl.close(),
-    };
+    const bar = (name, command) => (command ? s.ok(`${name}: ${s.value(command)}`) : s.info(`${name}: not set up`));
+    say(s.pill(heading), bar('Status line', ours.statusLine), bar('Token line', ours.tokenLine), ...(settingsBackup ? [s.info(`Backup of the previous settings: ${s.value(settingsBackup)}`)] : []), s.info('Start a new Claude Code session to pick up the changes.'));
 }
 // Whether gh runs here, and the call that stars the repo with it.
 const hasGh = () => (0, node_child_process_1.spawnSync)('gh', ['--version'], { stdio: 'ignore' }).status === 0;
@@ -286,17 +277,19 @@ const starWithGh = () => (0, node_child_process_1.spawnSync)('gh', ['api', '--me
 // questions from the bars set up, setup from the defaults. setup ends with
 // the star offer.
 async function interactive(command, replace) {
-    const io = terminalIo();
+    const io = (0, wizard_1.streamIo)(process.stdin, process.stdout);
+    const s = (0, styles_1.stylesFor)(process.stdout);
     try {
-        io.write(banner(process.stdout));
+        io.write((0, wordmark_1.wordmark)((0, wordmark_1.colorEnabled)(process.stdout)) + s.pill(command));
         const file = settingsFile();
         const { settings } = (0, settings_file_1.readSettings)(file);
         const current = settings.statusLine;
         const owner = (0, settings_1.ownerOf)(current);
         if (!replace && (0, settings_1.isForeign)(owner)) {
-            io.write(`${file} already runs ${owner === 'claude-hud' ? "claude-hud's status line" : 'another status line'}:\n  ${current?.command ?? JSON.stringify(current)}\n`);
+            const whose = owner === 'claude-hud' ? "claude-hud's status line" : 'another status line';
+            io.write(s.pill('Warning', 'warning') + s.warn(`${s.value(file)} already runs ${whose}:`) + s.trace(s.value(current?.command ?? JSON.stringify(current))));
             if (!(await (0, wizard_1.confirm)(io, 'Replace it? claude-gauge saves it, and claude-gauge uninstall puts it back.', false))) {
-                say('Nothing changed.');
+                say(s.info('Nothing changed.'));
                 return;
             }
             replace = true;
@@ -304,10 +297,10 @@ async function interactive(command, replace) {
         const preview = (0, wizard_1.previewer)((0, wizard_1.loadPayload)((0, statusline_1.payloadFile)()));
         const choices = await (0, wizard_1.runWizard)(io, { preview, installed: command === 'configure' ? (0, settings_1.installedSwitches)(settings) : undefined });
         if (!choices) {
-            say('Nothing changed.');
+            say(s.info('Nothing changed.'));
             return;
         }
-        apply(choices, replace);
+        apply(choices, replace, 'Done');
         if (command === 'setup')
             await (0, wizard_1.offerStar)(io, { hasGh, star: starWithGh });
     }
@@ -319,8 +312,8 @@ async function setup(args) {
     const chosen = args.statusLine !== undefined || args.tokenLine !== undefined;
     if (!chosen && !args.yes)
         return interactive('setup', args.replace);
-    const orDefault = (v) => (v === undefined && args.yes ? '' : v);
-    apply({ statusLine: orDefault(args.statusLine), tokenLine: orDefault(args.tokenLine) }, args.replace);
+    const orDefault = (v) => (v === undefined && args.yes ? [] : v);
+    apply({ statusLine: orDefault(args.statusLine), tokenLine: orDefault(args.tokenLine) }, args.replace, 'Setup');
 }
 async function configure(args) {
     const file = settingsFile();
@@ -329,7 +322,7 @@ async function configure(args) {
     }
     if (args.statusLine === undefined && args.tokenLine === undefined)
         return interactive('configure', args.replace);
-    apply(args, args.replace);
+    apply(args, args.replace, 'Configure');
 }
 function uninstall() {
     const file = settingsFile();
@@ -340,29 +333,38 @@ function uninstall() {
     // a failed write leaves it for the next try.
     const settingsBackup = next.changed ? (0, settings_file_1.writeSettings)(file, next.settings, text) : null;
     fs.rmSync(savedStatusLineFile(), { force: true });
+    const s = (0, styles_1.stylesFor)(process.stdout);
     if (!next.changed) {
-        say(`claude-gauge is not in ${file}. Nothing to change.`);
+        say(s.pill('Uninstall'), s.info(`claude-gauge is not in ${s.value(file)}. Nothing to change.`));
         return;
     }
-    const restored = next.found === 'claude-gauge' && saved ? `Put back the previous status line: ${saved.command ?? JSON.stringify(saved)}` : undefined;
-    say(`Took claude-gauge out of ${file}.`, ...(restored ? [restored] : []), ...(settingsBackup ? [`Backup of the previous settings: ${settingsBackup}`] : []), `The scripts stay in ${stateDir()}. Delete that folder to remove them too.`, 'Start a new Claude Code session to pick up the changes.');
+    const restored = next.found === 'claude-gauge' && saved ? s.ok(`Put back the previous status line: ${s.value(saved.command ?? JSON.stringify(saved))}`) : '';
+    say(s.pill('Uninstall'), s.ok(`Took claude-gauge out of ${s.value(file)}.`), restored, settingsBackup ? s.info(`Backup of the previous settings: ${s.value(settingsBackup)}`) : '', s.info(`The scripts stay in ${s.value(stateDir())}. Delete that folder to remove them too.`), s.info('Start a new Claude Code session to pick up the changes.'));
 }
 function update() {
     const where = scripts();
     const { dir } = where;
+    const s = (0, styles_1.stylesFor)(process.stdout);
     if (where.route === 'clone') {
-        say(`This claude-gauge is a git clone in ${stateDir()}. Update it with:`, `  git -C ${stateDir()} pull`);
+        say(s.pill('Update'), s.info(`This claude-gauge is a git clone in ${s.value(stateDir())}. Update it with:`), s.trace(s.value(`git -C ${stateDir()} pull`)));
         return;
     }
     if (where.route === 'launcher') {
-        say('This claude-gauge is the Claude Code plugin. Update it with /plugin in Claude Code.', `The settings run ${dir}, which runs the newest installed version, so an update needs no setup.`);
+        say(s.pill('Update'), s.info(`This claude-gauge is the Claude Code plugin. Update it with ${s.value('/plugin')} in Claude Code.`), s.trace(`The settings run ${s.value(dir)}, which runs the newest installed version, so an update needs no setup.`));
         return;
     }
     if (!fs.existsSync(path.join(dir, 'statusline.js'))) {
         throw new Error(`There is no copy of claude-gauge in ${dir} to update. Run claude-gauge setup first.`);
     }
     copyRuntime(dir);
-    say(`Updated claude-gauge in ${dir} to ${version()}.`);
+    say(s.pill('Update'), s.ok(`Updated claude-gauge in ${s.value(dir)} to ${s.value(version())}.`));
+}
+// An error on stderr: a red pill, then a red ✖ before the first line of
+// `message` and a ↳ before each line after it.
+function failure(message) {
+    const s = (0, styles_1.stylesFor)(process.stderr);
+    const [first, ...rest] = message.split('\n');
+    return s.pill('Error', 'error') + s.error(first) + rest.map((line) => s.trace(line.trim())).join('');
 }
 async function main(argv) {
     try {
@@ -396,10 +398,10 @@ async function main(argv) {
     }
     catch (err) {
         if (err instanceof UsageError) {
-            process.stderr.write(`claude-gauge: ${err.message}\n\n${usage(process.stderr)}`);
+            process.stderr.write(`${failure(err.message)}\n${usage(process.stderr)}`);
             return 2;
         }
-        process.stderr.write(`claude-gauge: ${err.message}\n`);
+        process.stderr.write(failure(err.message));
         return 1;
     }
 }
