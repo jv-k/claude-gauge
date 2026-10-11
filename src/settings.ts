@@ -35,8 +35,10 @@ type Owner = 'none' | 'claude-gauge' | 'claude-hud' | 'other';
 
 // One value per bar: `statusLine` for the status line, `tokenLine` for the
 // token line. Every type that pairs the two bars is built from this one, so
-// a bar added later is added here. The token line's type defaults to the
-// status line's; the wizard gives it a second one.
+// a bar added later changes this one type; the code that names each bar by
+// hand, such as installedSwitches() and the CLI's apply(), still changes
+// too. The token line's type defaults to the status line's; the wizard
+// gives it a second one.
 type PerBar<T, U = T> = { statusLine?: T; tokenLine?: U };
 
 // The command to run as the status line, and the token line's Stop hook

@@ -74,7 +74,10 @@ type Command = (typeof COMMANDS)[number];
 // wizard, null to take it out, undefined to leave it as it is.
 type Switches = readonly string[] | null | undefined;
 
-interface Args extends PerBar<Switches> {
+// The bars' switches, from the command line or the wizard.
+type Bars = PerBar<Switches>;
+
+interface Args extends Bars {
   command?: Command;
   help: boolean;
   replace: boolean;
@@ -246,9 +249,6 @@ function savedStatusLine(): StatusLineSetting | null | undefined {
 }
 
 const say = (...lines: string[]) => process.stdout.write(lines.join('\n') + '\n');
-
-// The bars' switches, from the command line or the wizard.
-type Bars = PerBar<Switches>;
 
 // setup and configure: turns the bars' switches into commands, plans the
 // settings, and writes them.
