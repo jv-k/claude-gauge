@@ -221,7 +221,7 @@ In a terminal, run setup with npx:
 npx @jv-k/claude-gauge setup
 ```
 
-Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, then whether to add the token line, and if so, which parts it shows and your context window, 200k or 1M, so that its percentage is right from the first turn. It redraws the status line after each answer, from your last terminal session's figures or from a sample. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is no.
+Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, then whether to add the token line, and if so, which parts it shows and your context window, 200k or 1M, so that its percentage is right from the first turn. It redraws the status line after each answer, from your last terminal session's figures or from a sample. In a terminal the new status line replaces the old one in place. With piped output, each one prints below the last. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is yes, `[Y/n]`, so Enter stars it.
 
 Setup copies the two scripts into `~/.claude/claude-gauge/runtime/` (under `$CLAUDE_CONFIG_DIR` when that is set) and points the settings there, so the bars keep working when npm clears its npx cache. To keep the `claude-gauge` command at hand instead of running it through npx, install it globally with `npm install -g @jv-k/claude-gauge`.
 
@@ -256,7 +256,18 @@ npx @jv-k/claude-gauge configure --status-line "--segments 10"
 
 The settings file is `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set. `claude-gauge --help` lists the commands and switches. The bars' own switches are in [Options](#options).
 
-`claude-gauge --help` prints the claude-gauge wordmark above its usage, as does the usage after a mistake, and `setup` and `configure` print it at the start of their questions. A `setup` or `configure` run with bar switches prints no wordmark. Three variables decide whether the wordmark is in colour:
+`claude-gauge --help` prints the claude-gauge wordmark above its usage, as does the usage after a mistake, and `setup` and `configure` print it at the start of their questions. A `setup` or `configure` run with bar switches prints no wordmark.
+
+The command's output has the look of [VerBump](https://github.com/jv-k/VerBump). Each part of a run starts with a header in capitals, such as `SETUP`, `STATUS LINE`, `TOKEN LINE` or `DONE`, in an inverted cyan bar. A question that waits for your answer has a magenta `CONFIRM` or `INPUT` header, and an error has a red `ERROR` header. A green ✔ starts a line that reports a change, a yellow ! a warning, a red ✖ an error and a cyan ℹ information. A dim ↳ starts a detail under the line before it. Paths, commands, part names and versions are green, and the default answer in brackets, such as `[Y/n]`, is dim. For example, `setup --yes` prints:
+
+```text
+SETUP
+✔ Status line: node ~/.claude/claude-gauge/runtime/statusline.js
+✔ Token line: node ~/.claude/claude-gauge/runtime/tokenline.js
+ℹ Start a new Claude Code session to pick up the changes.
+```
+
+Without colour, each header is the word alone, as above, and the wizard shows the status line without its colours. Three variables decide whether the wordmark and the output are in colour:
 
 - A non-empty `NO_COLOR` turns colour off.
 - A `FORCE_COLOR` or `CLICOLOR_FORCE` that is neither empty nor `0` turns colour on.

@@ -2960,6 +2960,7 @@ function instruction(argv: string[], { host, script }: { host: string | undefine
 const ownPath = () => process.argv[1].replace(new RegExp(`^${os.homedir()}(?=/)`), '~');
 
 export {
+  stripOwnCodes,
   render,
   parseArgs,
   readSwitches,

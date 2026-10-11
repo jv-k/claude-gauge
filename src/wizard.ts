@@ -8,20 +8,31 @@
 // reads and writes no settings itself.
 //
 // The questions go through a WizardIo, so a test can script the answers. The
-// preview renders the payload the status line saved last, else a sample.
+// preview renders the payload the status line saved last, else a sample. On
+// a terminal each preview replaces the one before it, in place; with piped
+// output each preview prints below the last.
 
 import * as fs from 'node:fs';
-import { render, parseArgs, readSwitches, PARTS, THEMES, DEFAULT_ROWS } from './statusline';
+import * as readline from 'node:readline';
+import { render, parseArgs, readSwitches, stripOwnCodes, PARTS, THEMES, DEFAULT_ROWS } from './statusline';
 import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, parseSize, contextWindow } from './tokenline';
 import type { StatusData, Part } from './statusline';
 import type { Part as TokenPart } from './tokenline';
 import type { PerBar, InstalledSwitches } from './settings';
+import { colorEnabled } from './wordmark';
+import { styles } from './styles';
+import type { Styles } from './styles';
 
 interface WizardIo {
   // Shows `question` and resolves to the answer, or to undefined at the end
-  // of the input.
+  // of the input. The answer's line ends before anything else is written.
   ask(question: string): Promise<string | undefined>;
   write(text: string): void;
+  // Whether the questions are in colour. Unset is no colour.
+  color?: boolean;
+  // Set when the output is a terminal, so that each preview can replace the
+  // one before it. `columns` is its width, for the rows a long line wraps to.
+  terminal?: { columns?: number };
 }
 
 interface WizardOptions {
@@ -115,15 +126,24 @@ function startFrom(installed: InstalledSwitches | undefined): WizardStart {
   };
 }
 
+const stylesOf = (io: WizardIo): Styles => styles(io.color === true);
+
+// A default in brackets, dim, such as [Y/n].
+const hint = (s: Styles, value: string | number) => s.dim(`[${value}]`);
+
 // Asks until `read` takes the answer: it returns the value, or a retry that
 // says why it cannot. Each `read` says what an empty answer, Enter, gives.
-async function askFor<T>(io: WizardIo, question: string, read: (answer: string) => T | { retry: string }): Promise<T> {
+// A magenta pill comes before the question, as VerBump's prompts have one:
+// CONFIRM for a yes or no, INPUT for any other answer.
+async function askFor<T>(io: WizardIo, question: string, read: (answer: string) => T | { retry: string }, kind: 'CONFIRM' | 'INPUT' = 'INPUT'): Promise<T> {
+  const s = stylesOf(io);
+  io.write(s.pill(kind, 'question'));
   for (;;) {
     const answer = await io.ask(question);
     if (answer === undefined) throw new EndOfAnswers();
     const value = read(answer.trim());
     if (typeof value === 'object' && value !== null && 'retry' in value) {
-      io.write(`${value.retry}\n`);
+      io.write(s.warn(value.retry));
       continue;
     }
     return value as T;
@@ -138,7 +158,7 @@ const yesNo = (fallback: boolean) => (answer: string) => {
 };
 
 const confirm = (io: WizardIo, question: string, fallback: boolean) =>
-  askFor(io, `${question} ${fallback ? '[Y/n]' : '[y/N]'} `, yesNo(fallback));
+  askFor(io, `${question} ${hint(stylesOf(io), fallback ? 'Y/n' : 'y/N')} `, yesNo(fallback), 'CONFIRM');
 
 // Reads a list of parts from `known`, or `fallback` on Enter. An unknown
 // part is asked again, named, with `where` to say which parts there are.
@@ -208,23 +228,85 @@ const readTokenWindow = (answer: string): string | undefined | { retry: string }
   return parseSize(answer) > 0 ? answer.toLowerCase() : { retry: 'Answer a size such as 200k or 1m.' };
 };
 
-async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): Promise<WizardChoices | null> {
+// The wizard's io, which counts the screen rows written since the last
+// preview: each newline, and each wrap of a line wider than the terminal,
+// with a character counted one column wide, and colour codes and links,
+// the only escapes the wizard and the preview write, counted as none. On a
+// terminal the next preview moves the cursor up over those rows, clears
+// them, and takes their place, so the questions asked under the old preview
+// go with it. `clear` does the same with no preview to follow. Text written
+// with `keep` stays: the next preview starts below it. With piped output
+// every preview prints below the last, and `clear` does nothing.
+function screenOf(io: WizardIo) {
+  let rows = 0;
+  let column = 0;
+  let live = false;
+  const count = (text: string) => {
+    const width = io.terminal?.columns || Infinity;
+    for (const ch of stripOwnCodes(text)) {
+      if (ch === '\n') {
+        rows++;
+        column = 0;
+      } else if (++column > width) {
+        rows++;
+        column = 1;
+      }
+    }
+  };
+  const write = (text: string) => {
+    io.write(text);
+    count(text);
+  };
+  const clear = () => {
+    if (io.terminal && live) io.write(`\r${rows ? `\x1b[${rows}A` : ''}\x1b[J`);
+    rows = 0;
+    column = 0;
+    live = false;
+  };
+  const screen: WizardIo & { keep(text: string): void; preview(text: string): void; clear(): void } = {
+    color: io.color,
+    terminal: io.terminal,
+    write,
+    // The answer's line ends before the next write, so the cursor is at the
+    // start of the row after the question.
+    ask: async (question) => {
+      const answer = await io.ask(question);
+      count(`${question}${answer ?? ''}\n`);
+      return answer;
+    },
+    keep: (text) => {
+      write(text);
+      live = false;
+    },
+    preview: (text) => {
+      clear();
+      live = true;
+      write(text);
+    },
+    clear,
+  };
+  return screen;
+}
+
+async function runWizard(userIo: WizardIo, { preview, installed }: WizardOptions): Promise<WizardChoices | null> {
+  const io = screenOf(userIo);
+  const s = stylesOf(io);
   const start = startFrom(installed);
   let status: StatusChoices = { ...start.status };
   let tokenLine = start.tokenLine;
-  const show = () => {
-    const rows = preview(switchesFor(status));
-    io.write(`\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\n`);
-    io.write(`Token line: ${tokenLine ? 'on, when each turn ends' : 'off'}\n\n`);
+  // The preview in the status line's own colours, or as plain text when the
+  // questions take no colour, under `heading` when one is given.
+  const show = (heading = '') => {
+    const rendered = preview(switchesFor(status));
+    const rows = io.color ? rendered : stripOwnCodes(rendered);
+    io.preview(`${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${tokenLine ? 'on, when each turn ends' : 'off'}\n`);
   };
 
   if (isSetUp(installed)) {
-    io.write(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
-    show();
+    show(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
     if (await confirm(io, 'Keep the current bars as they are?', true)) return {};
   } else {
-    io.write('The status line with the defaults:\n');
-    show();
+    show('The status line with the defaults:\n');
     if (await confirm(io, 'Use the defaults: both bars, with the parts above?', true)) return { statusLine: [], tokenLine: [] };
   }
 
@@ -233,8 +315,13 @@ async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): P
   // More rows than the wizard offers stay possible when that many are set up.
   const rowsNow = start.status.rows.length;
   const maxRows = Math.max(MAX_ROWS, rowsNow);
-  io.write(`\nThe parts: ${PARTS.join(', ')}.\nREADME.md says what each shows. Press Enter to keep the value in brackets.\n`);
-  const count = await askFor(io, `How many status line rows, 1 to ${maxRows}? [${rowsNow}] `, (answer) => {
+  // The customise path starts below the questions, where the first preview
+  // and the question under it were: the next preview takes their place.
+  io.clear();
+  io.keep(
+    `${s.pill('Status line')}The parts: ${PARTS.map(s.value).join(', ')}.\nREADME.md says what each shows. Press Enter to keep the value in brackets.\n`,
+  );
+  const count = await askFor(io, `How many status line rows, 1 to ${maxRows}? ${hint(s, rowsNow)} `, (answer) => {
     const n = answer ? Number(answer) : rowsNow;
     return Number.isInteger(n) && n >= 1 && n <= maxRows ? n : { retry: `Answer a number from 1 to ${maxRows}.` };
   });
@@ -243,19 +330,19 @@ async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): P
 
   for (let i = 0; i < count; i++) {
     const fallback = rowAt(i);
-    const hint = fallback ? ` [${fallback.join(',')}]` : '';
-    const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${hint} `, readParts(fallback, PARTS));
+    const brackets = fallback ? ` ${hint(s, fallback.join(','))}` : '';
+    const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${brackets} `, readParts(fallback, PARTS));
     status = { ...status, rows: status.rows.map((row, j) => (j === i ? parts : row)) };
     show();
   }
 
-  const segments = await askFor(io, `Cells per bar, ${SEGMENTS.join(' or ')}? [${start.status.segments}] `, (answer) =>
+  const segments = await askFor(io, `Cells per bar, ${SEGMENTS.join(' or ')}? ${hint(s, start.status.segments)} `, (answer) =>
     SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` },
   );
   status = { ...status, segments };
   show();
 
-  const theme = await askFor(io, `Theme: ${THEMES.join(', ')}? [${start.status.theme}] `, (answer) => {
+  const theme = await askFor(io, `Theme: ${THEMES.join(', ')}? ${hint(s, start.status.theme)} `, (answer) => {
     const name = answer.toLowerCase() || start.status.theme;
     return THEMES.includes(name) ? name : { retry: `Unknown theme: ${answer}. Answer one of ${THEMES.join(', ')}.` };
   });
@@ -270,11 +357,12 @@ async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): P
 
   let tokenSwitches = start.tokenSwitches;
   if (tokenLine) {
+    io.keep(s.pill('Token line'));
     const fallback = tokenPartsOf(start.tokenSwitches);
-    const question = `Token line parts: all, req,out,ctx, or your own list from ${TOKEN_PARTS.join(', ')}? [${fallback.join(',')}] `;
+    const question = `Token line parts: all, req,out,ctx, or your own list from ${TOKEN_PARTS.map(s.value).join(', ')}? ${hint(s, fallback.join(','))} `;
     tokenSwitches = tokenSwitchesFor(await askFor(io, question, readTokenParts(fallback)), start.tokenSwitches);
-    io.write('The token line cannot read the context window, so it assumes 200k until the context grows past it.\n');
-    const window = await askFor(io, `Context window, 200k or 1m? [${tokenWindowOf(start.tokenSwitches) ?? '200k'}] `, readTokenWindow);
+    io.write(s.info('The token line cannot read the context window, so it assumes 200k until the context grows past it.'));
+    const window = await askFor(io, `Context window, 200k or 1m? ${hint(s, tokenWindowOf(start.tokenSwitches) ?? '200k')} `, readTokenWindow);
     if (window !== undefined) tokenSwitches = tokenSwitchesForWindow(window, tokenSwitches);
   }
 
@@ -292,18 +380,19 @@ interface StarOptions {
 }
 
 // The end of setup: with gh at hand, offers to star the repo, and stars it
-// only on a yes. Without gh it says nothing. The end of the input is a no.
+// on a yes or Enter. Without gh it says nothing. The end of the input is a no.
 async function offerStar(io: WizardIo, { hasGh, star }: StarOptions): Promise<void> {
   if (!hasGh()) return;
   let yes: boolean;
   try {
-    yes = await confirm(io, `Star ${REPO} on GitHub with gh?`, false);
+    yes = await confirm(io, `Star ${REPO} on GitHub with gh?`, true);
   } catch (err) {
     if (err instanceof EndOfAnswers) return;
     throw err;
   }
   if (!yes) return;
-  io.write(star() ? `Starred ${REPO}. Thank you.\n` : `gh could not star ${REPO}. Nothing else changed.\n`);
+  const s = stylesOf(io);
+  io.write(star() ? s.ok(`Starred ${s.value(REPO)}. Thank you.`) : s.warn(`gh could not star ${s.value(REPO)}. Nothing else changed.`));
 }
 
 // A status payload to preview with when the status line has saved none:
@@ -342,6 +431,40 @@ function previewer(payload: StatusData, options: Omit<Parameters<typeof render>[
   return (switches: readonly string[]) => render(payload, { ...options, config: parseArgs([...switches]) });
 }
 
-export { runWizard, offerStar, confirm, EndOfAnswers, samplePayload, loadPayload, previewer, switchesFor };
+// What streamIo writes to: a terminal, or a pipe or file.
+interface Output {
+  isTTY?: boolean;
+  columns?: number;
+  write(text: string): unknown;
+}
+
+// The questions on a pair of streams: each prompt on `output`, each answer a
+// line of `input`. Lines are queued as they arrive, so answers piped in all
+// at once each reach their question. A terminal echoes each answer and its
+// Enter; a piped answer is not, so the io writes it and ends its line
+// itself, as a terminal would show it, and a retry or a preview never runs
+// on from the question. The questions are in
+// colour when the colour gate allows, and redraw the preview in place when
+// `output` is a terminal.
+function streamIo(input: NodeJS.ReadableStream & { isTTY?: boolean }, output: Output, color = colorEnabled(output)): WizardIo & { close(): void } {
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
+  const lines = rl[Symbol.asyncIterator]();
+  return {
+    color,
+    terminal: output.isTTY ? output : undefined,
+    ask: async (question) => {
+      output.write(question);
+      const next = await lines.next();
+      if (!input.isTTY) output.write(`${next.done ? '' : next.value}\n`);
+      return next.done ? undefined : next.value;
+    },
+    write: (text) => {
+      output.write(text);
+    },
+    close: () => rl.close(),
+  };
+}
+
+export { runWizard, offerStar, confirm, streamIo, EndOfAnswers, samplePayload, loadPayload, previewer, switchesFor };
 
 export type { WizardIo, WizardOptions, WizardChoices, StarOptions };
