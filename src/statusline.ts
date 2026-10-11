@@ -1424,6 +1424,8 @@ function speedPart(activity: TranscriptActivity, theme: Theme): string {
 interface SetupOptions {
   env?: Env;
   home?: string;
+  // The OS, as process.platform names it.
+  platform?: string;
   // The folder of the managed policy files an administrator installs.
   managedDir?: string;
 }
@@ -1495,6 +1497,41 @@ function foldersDownTo(cwd: string): string[] {
   }
 }
 
+// The folder Claude Code reads .claude/settings.local.json from: the root of
+// the git repository the launch folder is in, found by the same file walk as
+// headBranch, and inside a linked worktree the main checkout's root, the
+// folder above the .git folder the worktree's .git file names. The launch
+// folder itself outside a repository, where the root is the home folder, on
+// Windows, and where the root, its .git entry or its .claude folder is not
+// the current user's.
+function localSettingsDir(project: string, home: string, platform: string): string {
+  if (platform === 'win32') return project;
+  try {
+    for (let dir = project; ; dir = path.dirname(dir)) {
+      const dotGit = path.join(dir, '.git');
+      if (fs.existsSync(dotGit)) {
+        let root = dir;
+        if (fs.statSync(dotGit).isFile()) {
+          const gitDir = path.resolve(dir, /^gitdir: (.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'))?.[1].trim() ?? '.git');
+          const worktrees = path.dirname(gitDir);
+          if (path.basename(worktrees) === 'worktrees' && path.basename(path.dirname(worktrees)) === '.git') root = path.dirname(path.dirname(worktrees));
+        }
+        if (root === path.resolve(home)) return project;
+        const uid = process.getuid?.();
+        if (uid !== undefined) {
+          for (const entry of [root, path.join(root, '.git'), path.join(root, '.claude')]) {
+            if (fs.existsSync(entry) && fs.statSync(entry).uid !== uid) return project;
+          }
+        }
+        return root;
+      }
+      if (path.dirname(dir) === dir) return project;
+    }
+  } catch {
+    return project;
+  }
+}
+
 // Hook handlers in a settings file: one per command in each matcher group.
 const hooksIn = (settings: JsonObject) =>
   Object.values(objectAt(settings, 'hooks')).reduce<number>(
@@ -1512,7 +1549,7 @@ function planName(type: string | undefined, tier: string | undefined): string | 
 
 function readSetup(
   cwd: string,
-  { env = process.env, home = os.homedir(), managedDir = managedDirOf(process.platform) }: SetupOptions = {},
+  { env = process.env, home = os.homedir(), platform = process.platform, managedDir = managedDirOf(platform) }: SetupOptions = {},
 ): Setup {
   const config = configDirOf(env, home);
   const project = path.resolve(cwd);
@@ -1531,30 +1568,35 @@ function readSetup(
   const rules = new Set([config, ...folders.map((dir) => path.join(dir, '.claude'))].flatMap((dir) => markdownUnder(path.join(dir, 'rules'))));
 
   // Settings: user, project, local and managed. Each may hold hooks, and
-  // the names of project MCP servers turned off.
+  // the names of project MCP servers turned off. The local file is the
+  // repository root's; one in the launch folder under it is read too, and
+  // the root's value applies where both set a key.
+  const localDir = localSettingsDir(project, home, platform);
+  const localIn = (dir: string) => readJson(path.join(dir, '.claude', 'settings.local.json'));
+  const local = localDir === project ? localIn(project) : { ...localIn(project), ...localIn(localDir) };
   const settings = [
     path.join(config, 'settings.json'),
     path.join(project, '.claude', 'settings.json'),
-    path.join(project, '.claude', 'settings.local.json'),
     path.join(managedDir, 'managed-settings.json'),
   ]
     .filter((file, i, all) => all.indexOf(file) === i)
-    .map(readJson);
+    .map(readJson)
+    .concat(local);
 
   // MCP servers: user and local scope in .claude.json, the project's
   // .mcp.json and the managed file, each name once, less the project servers
   // turned off.
   const claudeJson = readJson(claudeJsonOf(env, home));
-  const local = objectAt(objectAt(claudeJson, 'projects'), project);
-  const turnedOff = new Set([...settings, local].flatMap((s) => listAt(s, 'disabledMcpjsonServers')));
+  const localScope = objectAt(objectAt(claudeJson, 'projects'), project);
+  const turnedOff = new Set([...settings, localScope].flatMap((s) => listAt(s, 'disabledMcpjsonServers')));
   const projectServers = Object.keys(objectAt(readJson(path.join(project, '.mcp.json')), 'mcpServers')).filter((name) => !turnedOff.has(name));
   const mcp = new Set([
     ...Object.keys(objectAt(claudeJson, 'mcpServers')),
-    ...Object.keys(objectAt(local, 'mcpServers')),
+    ...Object.keys(objectAt(localScope, 'mcpServers')),
     ...projectServers,
     ...Object.keys(objectAt(readJson(path.join(managedDir, 'managed-mcp.json')), 'mcpServers')),
   ]);
-  for (const name of listAt(local, 'disabledMcpServers')) if (typeof name === 'string') mcp.delete(name);
+  for (const name of listAt(localScope, 'disabledMcpServers')) if (typeof name === 'string') mcp.delete(name);
 
   // The plan from the login's subscription fields where they are in a file,
   // else from the account Claude Code keeps in .claude.json, as on macOS,

@@ -564,6 +564,8 @@ test('the setup counts what Claude Code loads, from the files on disk', () => {
     },
     [`${project}/.mcp.json`]: { mcpServers: { github: {}, sentry: {}, figma: {} } },
     'managed/managed-mcp.json': { mcpServers: { intranet: {} } },
+    // The project is a repository root, so the local file is read from it.
+    [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n',
     // Hooks: one per handler, across user, project, local and managed settings.
     'home/.claude/settings.json': { hooks: hooks(['Stop', 2], ['SessionStart', 1]) },
     [`${project}/.claude/settings.json`]: { hooks: hooks(['PreToolUse', 1]) },
@@ -575,6 +577,77 @@ test('the setup counts what Claude Code loads, from the files on disk', () => {
   const setup = readSetup(tree.project, tree.options);
   assert.deepEqual(setup, { claudeMd: 6, rules: 4, mcp: 5, hooks: 5, plan: 'Claude Max 20x', user: 'me@example.com' });
   assert.doesNotMatch(JSON.stringify(setup), /secret/);
+});
+
+// The repository root's local settings file: Claude Code reads
+// .claude/settings.local.json from the root of the git repository the launch
+// folder is in, with the launch folder's own file under it.
+test('the setup reads the local settings file from the repository root above the launch folder', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const repo = 'home/work/project';
+  const launch = `${repo}/packages/app`;
+  const tree = setupTree({
+    [`${repo}/.git/HEAD`]: 'ref: refs/heads/main\n',
+    [`${repo}/.claude/settings.local.json`]: { hooks: hooks(['Stop', 1]), disabledMcpjsonServers: ['figma'] },
+    // The project settings and .mcp.json stay the launch folder's.
+    [`${launch}/.mcp.json`]: { mcpServers: { github: {}, figma: {} } },
+    [`${launch}/.claude/settings.json`]: { hooks: hooks(['PreToolUse', 1]) },
+    [`${repo}/.mcp.json`]: { mcpServers: { unseen: {} } },
+    [`${repo}/.claude/settings.json`]: { hooks: hooks(['Stop', 4]) },
+  });
+  const launchDir = require('node:path').join(tree.root, launch);
+  assert.deepEqual(readSetup(launchDir, tree.options), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+});
+
+test('a local settings file in the launch folder is read beside the root\'s, and the root\'s value wins', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const repo = 'home/work/project';
+  const launch = `${repo}/packages/app`;
+  const tree = setupTree({
+    [`${repo}/.git/HEAD`]: 'ref: refs/heads/main\n',
+    [`${repo}/.claude/settings.local.json`]: { disabledMcpjsonServers: ['figma'] },
+    [`${launch}/.claude/settings.local.json`]: { hooks: hooks(['Stop', 3]), disabledMcpjsonServers: ['sentry', 'linear'] },
+    [`${launch}/.mcp.json`]: { mcpServers: { github: {}, sentry: {}, figma: {}, linear: {} } },
+  });
+  const launchDir = require('node:path').join(tree.root, launch);
+  // The launch file's hooks count; its disabledMcpjsonServers is replaced by
+  // the root's whole, so sentry and linear stay on and figma is off.
+  assert.deepEqual(readSetup(launchDir, tree.options), { claudeMd: 0, rules: 0, mcp: 3, hooks: 3 });
+});
+
+test('in a linked worktree the local settings file is the main checkout\'s', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const tree = setupTree({
+    'home/work/main/.git/HEAD': 'ref: refs/heads/main\n',
+    'home/work/main/.git/worktrees/feature/HEAD': 'ref: refs/heads/feature\n',
+    'home/work/main/.claude/settings.local.json': { hooks: hooks(['Stop', 2]) },
+    'home/work/feature/.git': 'gitdir: ../main/.git/worktrees/feature\n',
+    'home/work/feature/.claude/settings.local.json': { hooks: hooks(['Stop', 5]) },
+    'home/work/feature/src/index.ts': '',
+  });
+  const path = require('node:path');
+  assert.deepEqual(readSetup(path.join(tree.root, 'home/work/feature'), tree.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 2 });
+  assert.deepEqual(readSetup(path.join(tree.root, 'home/work/feature/src'), tree.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 2 });
+});
+
+test('the local settings file stays the launch folder\'s outside a repository, under a home repository and on Windows', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const path = require('node:path');
+  // The launch folder's file has two hooks and the folder above it one, so
+  // the count says which file was read.
+  const files = (above) => ({
+    [`${above}/.claude/settings.local.json`]: { hooks: hooks(['Stop', 1]) },
+    'home/work/project/sub/.claude/settings.local.json': { hooks: hooks(['Stop', 2]) },
+  });
+  const hooksAt = (tree, options = {}) => readSetup(path.join(tree.root, 'home/work/project/sub'), { ...tree.options, ...options }).hooks;
+  // No .git above the launch folder.
+  assert.equal(hooksAt(setupTree(files('home/work/project'))), 2);
+  // The repository root is the home folder.
+  assert.equal(hooksAt(setupTree({ ...files('home'), 'home/.git/HEAD': 'ref: refs/heads/main\n' })), 2);
+  // On Windows, where the same tree on Linux reads the root's file.
+  const repo = setupTree({ ...files('home/work/project'), 'home/work/project/.git/HEAD': 'ref: refs/heads/main\n' });
+  assert.equal(hooksAt(repo, { platform: 'linux' }), 1);
+  assert.equal(hooksAt(repo, { platform: 'win32' }), 2);
 });
 
 test('the setup follows CLAUDE_CONFIG_DIR, and names each plan', () => {
