@@ -9,7 +9,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runWizard, offerStar, EndOfAnswers, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
+const { Readable } = require('node:stream');
+const { runWizard, offerStar, streamIo, EndOfAnswers, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
 const { DEFAULT_ROWS } = require('../dist/statusline.js');
 
 const { plain } = require('./helpers');
@@ -303,7 +304,7 @@ test('a no at the last question changes nothing, and the end of the answers stop
   await assert.rejects(runWizard(scripted(['n', '2', 'ctx']), { preview }), EndOfAnswers);
 });
 
-test('the star offer runs the star only on a yes, and is skipped without gh', async () => {
+test('the star offer defaults to yes, runs the star on a yes or Enter, and is skipped without gh', async () => {
   const offer = async (hasGh, answers) => {
     const io = scripted(answers);
     let starred = 0;
@@ -315,11 +316,13 @@ test('the star offer runs the star only on a yes, and is skipped without gh', as
   assert.deepEqual(noGh.io.questions, [], 'not even asked');
   assert.equal(noGh.io.output, '');
 
-  for (const no of ['n', '', 'no']) assert.equal((await offer(true, [no])).starred, 0, JSON.stringify(no));
+  for (const no of ['n', 'no', 'N']) assert.equal((await offer(true, [no])).starred, 0, JSON.stringify(no));
   assert.equal((await offer(true, [])).starred, 0, 'the end of the answers is a no');
+  for (const yes of ['', 'y', 'Yes']) assert.equal((await offer(true, [yes])).starred, 1, JSON.stringify(yes));
   const yes = await offer(true, ['y']);
   assert.equal(yes.starred, 1);
   assert.match(yes.io.questions[0], /Star jv-k\/claude-gauge/);
+  assert.match(yes.io.questions[0], /\[Y\/n\] $/, 'the default is yes');
   assert.match(yes.io.output, /Thank you/);
 
   const io = scripted(['y']);
@@ -352,4 +355,61 @@ test('the preview uses the payload the status line saved, else a sample', () => 
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// A stand-in for the output stream: a terminal of `columns` when `isTTY`,
+// else a pipe, keeping all that is written to it.
+function fakeOutput(isTTY, columns) {
+  const output = { isTTY, columns, text: '', write: (t) => { output.text += t; return true; } };
+  return output;
+}
+
+// The answers as piped lines, and the wizard run over them on `output`.
+async function runOn(output, answers) {
+  const io = streamIo(Readable.from([answers.map((a) => `${a}\n`).join('')]), output, false);
+  const { preview, calls } = fakePreview();
+  try {
+    return { result: await runWizard(io, { preview }), calls };
+  } finally {
+    io.close();
+  }
+}
+
+// One row of ctx, the rest with Enter, no token line, and a yes to write.
+const oneRow = ['n', '1', 'ctx', '', '', '', 'n', 'y'];
+
+// The code that moves the cursor up `n` rows to the start of the old
+// preview, and clears from there to the end of the screen.
+const rewind = (n) => `\r\x1b[${n}A\x1b[J`;
+const REWIND = /\r\x1b\[(\d+)A\x1b\[J/g;
+
+test('on a terminal, each preview after an answer moves up over the last one and the question under it, and clears them', async () => {
+  const output = fakeOutput(true, 80);
+  const { result, calls } = await runOn(output, oneRow);
+  assert.deepEqual(result, { statusLine: ['--show', 'ctx'], tokenLine: null });
+  assert.equal(calls.length, 7);
+  // The first preview and the first after the STATUS LINE pill start fresh:
+  // the five after them each replace the one before.
+  const rewinds = [...output.text.matchAll(REWIND)];
+  assert.equal(rewinds.length, 5, JSON.stringify(output.text));
+  // The preview's blank line, its row and the token line row, the INPUT pill
+  // and its blank line, then the question and its answer: six rows.
+  assert.equal(rewinds[0][0], rewind(6));
+  assert.ok(output.text.indexOf('STATUS LINE') < rewinds[0].index);
+  assert.ok(output.text.lastIndexOf('<--show ctx>') > rewinds.at(-1).index, 'the last preview follows the last rewind');
+});
+
+test('on a narrow terminal, the rewind counts the rows that long lines wrap to', async () => {
+  const output = fakeOutput(true, 20);
+  await runOn(output, oneRow);
+  // The token line row of 35 characters takes two rows, the question and its
+  // answer of 49 take three: nine rows in all.
+  assert.equal([...output.text.matchAll(REWIND)][0][0], rewind(9));
+});
+
+test('with piped output, each preview prints below the last, with no cursor codes', async () => {
+  const output = fakeOutput(false, undefined);
+  const { calls } = await runOn(output, oneRow);
+  assert.doesNotMatch(output.text, /\x1b/);
+  assert.equal(output.text.split('Token line: ').length - 1, calls.length, 'every preview is in the output');
 });

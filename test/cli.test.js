@@ -298,6 +298,27 @@ test('the colour gate colours a terminal, unless NO_COLOR is set, and a pipe onl
   assert.equal(colorEnabled(pipe, { FORCE_COLOR: '' }), false);
 });
 
+// The command's look, after jv-k/VerBump's lib/styles.sh: inverted bold
+// pills, coloured icons, green values and dim defaults.
+const SGR = {
+  section: '\x1b[7;1;36m',
+  question: '\x1b[7;1;35m',
+  errorPill: '\x1b[7;1;31m',
+  warnPill: '\x1b[7;1;33m',
+  ok: '\x1b[0;32m',
+  warn: '\x1b[1;33m',
+  error: '\x1b[0;31m',
+  info: '\x1b[0;36m',
+  dim: '\x1b[2m',
+  reset: '\x1b[0m',
+};
+const pill = (text, code = SGR.section) => `${code} ${text} ${SGR.reset}`;
+const icon = (code, glyph) => `${code}${glyph}${SGR.reset} `;
+const green = (text) => `${SGR.ok}${text}${SGR.reset}`;
+const OK = icon(SGR.ok, '✔');
+const INFO = icon(SGR.info, 'ℹ');
+const ERROR = icon(SGR.error, '✖');
+
 test('a bare claude-gauge prints the wordmark and the usage, on stderr, and exits 2', () => {
   const bare = runCli(configFolder(), [], { env: { NO_COLOR: '1' } });
   assert.equal(bare.status, 2);
@@ -308,10 +329,10 @@ test('a bare claude-gauge prints the wordmark and the usage, on stderr, and exit
 test('the usage after a mistake starts with the wordmark, coloured by the gate on stderr', () => {
   const noCommand = runCli(configFolder(), ['--replace'], { env: { NO_COLOR: '1' } });
   assert.equal(noCommand.status, 2);
-  assert.ok(noCommand.stderr.startsWith(`claude-gauge: Name a command.\n\n${WORDMARK.join('\n')}\n\nUsage: claude-gauge `), noCommand.stderr);
+  assert.ok(noCommand.stderr.startsWith(`\nERROR\n✖ Name a command.\n\n${WORDMARK.join('\n')}\n\nUsage: claude-gauge `), noCommand.stderr);
   const unknown = runCli(configFolder(), ['launch'], { env: { FORCE_COLOR: '1' } });
   assert.equal(unknown.status, 2);
-  assert.ok(unknown.stderr.startsWith(`claude-gauge: Unknown command: launch\n\n${RAINBOW.join('\n')}\n\nUsage: claude-gauge `), JSON.stringify(unknown.stderr.slice(0, 400)));
+  assert.ok(unknown.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}Unknown command: launch\n\n${RAINBOW.join('\n')}\n\nUsage: claude-gauge `), JSON.stringify(unknown.stderr.slice(0, 400)));
   assert.equal(unknown.stdout, '');
 });
 
@@ -399,13 +420,13 @@ test('the setup and configure questions start with the wordmark and a blank line
   const dir = configFolder();
   const setup = ask(dir, ['setup'], ['y'], { env: { NO_COLOR: '1' } });
   ok(setup);
-  assert.ok(setup.stdout.startsWith(`${WORDMARK.join('\n')}\n\nThe status line with the defaults:\n`), setup.stdout);
+  assert.ok(setup.stdout.startsWith(`${WORDMARK.join('\n')}\n\nSETUP\nThe status line with the defaults:\n`), setup.stdout);
   const configure = ask(dir, ['configure'], ['y'], { env: { NO_COLOR: '1' } });
   ok(configure);
-  assert.ok(configure.stdout.startsWith(`${WORDMARK.join('\n')}\n\nThe status line as set up now:\n`), configure.stdout);
+  assert.ok(configure.stdout.startsWith(`${WORDMARK.join('\n')}\n\nCONFIGURE\nThe status line as set up now:\n`), configure.stdout);
   const coloured = ask(dir, ['configure'], ['y'], { env: { NO_COLOR: '', FORCE_COLOR: '1' } });
   ok(coloured);
-  assert.ok(coloured.stdout.startsWith(`${RAINBOW.join('\n')}\n\nThe status line as set up now:\n`), JSON.stringify(coloured.stdout.slice(0, 400)));
+  assert.ok(coloured.stdout.startsWith(`${RAINBOW.join('\n')}\n\n${pill('CONFIGURE')}\nThe status line as set up now:\n`), JSON.stringify(coloured.stdout.slice(0, 400)));
 });
 
 test('the commands run with switches print no wordmark, so scripts and the slash commands get short output', () => {
@@ -574,4 +595,93 @@ test('setup ends by offering to star the repo with gh, and stars it only on a ye
   ok(yes);
   assert.deepEqual(accepted.calls().filter((c) => !c.startsWith('--version')), ['api --method PUT user/starred/jv-k/claude-gauge']);
   assert.match(yes.stdout, /Thank you/);
+});
+
+test('with colour on, each command prints a pill header, icons and green values', () => {
+  const dir = configFolder();
+  const env = { FORCE_COLOR: '1' };
+  const script = (name) => path.join(runtimeOf(dir), name);
+
+  const setup = runCli(dir, ['setup', '--yes'], { env });
+  ok(setup);
+  assert.ok(setup.stdout.startsWith(`\n${pill('SETUP')}\n`), JSON.stringify(setup.stdout));
+  assert.ok(setup.stdout.includes(`${OK}Status line: ${green(commandFor(script('statusline.js')))}\n`), JSON.stringify(setup.stdout));
+  assert.ok(setup.stdout.includes(`${OK}Token line: ${green(commandFor(script('tokenline.js')))}\n`), JSON.stringify(setup.stdout));
+  assert.ok(setup.stdout.includes(`${INFO}Start a new Claude Code session`), JSON.stringify(setup.stdout));
+
+  const configure = runCli(dir, ['configure', '--no-token-line'], { env });
+  ok(configure);
+  assert.ok(configure.stdout.startsWith(`\n${pill('CONFIGURE')}\n`), JSON.stringify(configure.stdout));
+  assert.ok(configure.stdout.includes(`${INFO}Token line: not set up\n`), JSON.stringify(configure.stdout));
+  assert.ok(configure.stdout.includes(`${INFO}Backup of the previous settings: ${SGR.ok}`), JSON.stringify(configure.stdout));
+
+  const update = runCli(dir, ['update'], { env });
+  ok(update);
+  assert.ok(update.stdout.startsWith(`\n${pill('UPDATE')}\n`), JSON.stringify(update.stdout));
+  const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  assert.ok(update.stdout.includes(`${OK}Updated claude-gauge in ${green(runtimeOf(dir))} to ${green(version)}.\n`), JSON.stringify(update.stdout));
+
+  const uninstall = runCli(dir, ['uninstall'], { env });
+  ok(uninstall);
+  assert.ok(uninstall.stdout.startsWith(`\n${pill('UNINSTALL')}\n`), JSON.stringify(uninstall.stdout));
+  assert.ok(uninstall.stdout.includes(`${OK}Took claude-gauge out of ${green(path.join(dir, 'settings.json'))}.\n`), JSON.stringify(uninstall.stdout));
+
+  // An error: a red pill and a red ✖, on stderr.
+  const failed = runCli(configFolder(), ['update'], { env });
+  assert.equal(failed.status, 1);
+  assert.ok(failed.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}There is no copy`), JSON.stringify(failed.stderr));
+  assert.equal(failed.stdout, '');
+});
+
+test('with NO_COLOR, or piped with no force variable, the output has no escape codes, and each pill reads as plain text', () => {
+  for (const env of [{}, { NO_COLOR: '1', FORCE_COLOR: '1' }]) {
+    const dir = configFolder();
+    const script = (name) => path.join(runtimeOf(dir), name);
+    const setup = runCli(dir, ['setup', '--yes'], { env });
+    ok(setup);
+    assert.equal(
+      setup.stdout,
+      [
+        '',
+        'SETUP',
+        `✔ Status line: ${commandFor(script('statusline.js'))}`,
+        `✔ Token line: ${commandFor(script('tokenline.js'))}`,
+        'ℹ Start a new Claude Code session to pick up the changes.',
+        '',
+      ].join('\n'),
+      JSON.stringify(env),
+    );
+    const runs = [
+      runCli(dir, ['configure', '--status-line', '--segments 10'], { env }),
+      runCli(dir, ['update'], { env }),
+      runCli(dir, ['uninstall'], { env }),
+      runCli(dir, ['update', '--bogus'], { env }),
+      runCli(configFolder(), ['update'], { env }),
+      ask(configFolder(), ['setup'], ['maybe', 'n', '', '', '', '', '', '', '', '', '', 'y'], { env }),
+    ];
+    for (const r of runs) assert.ok(!/\x1b/.test(r.stdout + r.stderr), JSON.stringify(r.stdout + r.stderr));
+    assert.match(runs[1].stdout, /^\nUPDATE\n✔ Updated claude-gauge in /);
+    assert.match(runs[2].stdout, /^\nUNINSTALL\n✔ Took claude-gauge out of /);
+    assert.ok(runs[3].stderr.startsWith('\nERROR\n✖ Unknown switch: --bogus\n'), runs[3].stderr);
+    assert.ok(runs[4].stderr.startsWith('\nERROR\n✖ There is no copy of claude-gauge in '), runs[4].stderr);
+    assert.match(runs[5].stdout, /\nCONFIRM\nUse the defaults/);
+    assert.match(runs[5].stdout, /\nSTATUS LINE\n/);
+    assert.match(runs[5].stdout, /\nINPUT\nHow many status line rows/);
+    assert.match(runs[5].stdout, /\nDONE\n✔ Status line: /);
+  }
+});
+
+test('the wizard with colour on: magenta question pills, dim defaults in brackets, and a yellow ! before a retry', () => {
+  const r = ask(configFolder(), ['setup'], ['maybe', 'y'], { env: { FORCE_COLOR: '1' } });
+  ok(r);
+  assert.ok(r.stdout.includes(`\n${pill('SETUP')}\n`), JSON.stringify(r.stdout));
+  assert.ok(r.stdout.includes(`\n${pill('CONFIRM', SGR.question)}\nUse the defaults: both bars, with the parts above? ${SGR.dim}[Y/n]${SGR.reset} `), JSON.stringify(r.stdout));
+  assert.ok(r.stdout.includes(`${icon(SGR.warn, '!')}Answer y or n.\n`), JSON.stringify(r.stdout));
+  assert.ok(r.stdout.includes(`\n${pill('DONE')}\n${OK}Status line: `), JSON.stringify(r.stdout));
+});
+
+test('a retry after a piped answer starts a line of its own', () => {
+  const r = ask(configFolder(), ['setup'], ['maybe', 'y'], { env: { NO_COLOR: '1' } });
+  ok(r);
+  assert.ok(r.stdout.includes('[Y/n] \n! Answer y or n.\nUse the defaults'), JSON.stringify(r.stdout));
 });
