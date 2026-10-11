@@ -27,7 +27,7 @@ import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { spawnSync } from 'node:child_process';
 import { plan, commandFor, installed, installedSwitches, ownerOf, isForeign } from './settings';
-import type { Choices, StatusLineSetting } from './settings';
+import type { PerBar, Choices, StatusLineSetting } from './settings';
 import { readSettings, writeSettings, writeAtomic } from './settings-file';
 import { runWizard, offerStar, confirm, loadPayload, previewer } from './wizard';
 import { payloadFile } from './statusline';
@@ -74,11 +74,12 @@ type Command = (typeof COMMANDS)[number];
 // wizard, null to take it out, undefined to leave it as it is.
 type Switches = readonly string[] | null | undefined;
 
-interface Args {
+// The bars' switches, from the command line or the wizard.
+type Bars = PerBar<Switches>;
+
+interface Args extends Bars {
   command?: Command;
   help: boolean;
-  statusLine?: Switches;
-  tokenLine?: Switches;
   replace: boolean;
   yes: boolean;
 }
@@ -248,9 +249,6 @@ function savedStatusLine(): StatusLineSetting | null | undefined {
 }
 
 const say = (...lines: string[]) => process.stdout.write(lines.join('\n') + '\n');
-
-// The bars' switches, from the command line or the wizard.
-type Bars = { statusLine?: Switches; tokenLine?: Switches };
 
 // setup and configure: turns the bars' switches into commands, plans the
 // settings, and writes them.

@@ -15,7 +15,7 @@ import { render, parseArgs, readSwitches, PARTS, THEMES, DEFAULT_ROWS } from './
 import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, parseSize, contextWindow } from './tokenline';
 import type { StatusData, Part } from './statusline';
 import type { Part as TokenPart } from './tokenline';
-import type { InstalledSwitches } from './settings';
+import type { PerBar, InstalledSwitches } from './settings';
 
 interface WizardIo {
   // Shows `question` and resolves to the answer, or to undefined at the end
@@ -34,11 +34,9 @@ interface WizardOptions {
 
 // The switches for each bar, as words: the words to run it with, null to
 // leave it out, undefined to leave it as it is, which a yes to keeping the
-// bars gives.
-interface WizardChoices {
-  statusLine?: string[];
-  tokenLine?: string[] | null;
-}
+// bars gives. Only the token line can be left out, so only it takes null:
+// that is PerBar's second parameter.
+type WizardChoices = PerBar<string[], string[] | null>;
 
 // The input ended before the last question: nothing is written.
 class EndOfAnswers extends Error {
