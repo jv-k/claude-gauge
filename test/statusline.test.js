@@ -691,6 +691,83 @@ test('the setup is empty where there is nothing to read, and skips files that ar
   assert.deepEqual(readSetup(broken.project, broken.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
 });
 
+// A plugin as Claude Code installs one: enabledPlugins in the user settings
+// names it on, and plugins/installed_plugins.json names its install folder.
+// A temporary config folder, named by CLAUDE_CONFIG_DIR, holds both.
+const PLUGIN_ID = 'tools@acme';
+const PLUGIN_DIR = 'config/plugins/cache/acme/tools/1.0.0';
+const pluginTree = (files, { enabled = true, installs = [{ scope: 'user', installPath: PLUGIN_DIR }] } = {}) =>
+  setupTree((root) => {
+    const path = require('node:path');
+    const at = (install) => ({ ...install, installPath: path.join(root, install.installPath) });
+    return {
+      'config/settings.json': { enabledPlugins: { [PLUGIN_ID]: enabled } },
+      'config/plugins/installed_plugins.json': { version: 2, plugins: { [PLUGIN_ID]: installs.map(at) } },
+      ...files,
+    };
+  });
+const pluginSetup = (tree) => readSetup(tree.project, { ...tree.options, env: { CLAUDE_CONFIG_DIR: require('node:path').join(tree.root, 'config') } });
+const { readSetup } = require('../dist/statusline.js');
+
+test('the setup counts the hooks and MCP servers of each plugin turned on', () => {
+  // Two hooks in hooks/hooks.json and one server in .mcp.json, the two
+  // default files, with no manifest.
+  const plain = pluginTree({
+    [`${PLUGIN_DIR}/hooks/hooks.json`]: { description: 'format', hooks: hooks(['PostToolUse', 2]) },
+    [`${PLUGIN_DIR}/.mcp.json`]: { mcpServers: { api: { command: 'node' } } },
+  });
+  assert.deepEqual(pluginSetup(plain), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+  // The manifest adds a hooks file and an inline event map, and a servers
+  // file and an inline map, beside the defaults. The default hooks file
+  // named again in the manifest counts once, and a plugin server with the
+  // user's server's name is its own, named plugin:<plugin>:<server> as
+  // Claude Code names it.
+  const declared = pluginTree({
+    'config/.claude.json': { mcpServers: { github: {} } },
+    [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: {
+      name: 'tools',
+      hooks: ['./hooks/hooks.json', './config/more-hooks.json', hooks(['Stop', 1])],
+      mcpServers: ['./config/servers.json', { github: { command: 'node' } }],
+    },
+    [`${PLUGIN_DIR}/hooks/hooks.json`]: { hooks: hooks(['PostToolUse', 2]) },
+    [`${PLUGIN_DIR}/config/more-hooks.json`]: { hooks: hooks(['PreToolUse', 3]) },
+    [`${PLUGIN_DIR}/.mcp.json`]: { mcpServers: { api: {} } },
+    [`${PLUGIN_DIR}/config/servers.json`]: { mcpServers: { api: {}, docs: {} } },
+  });
+  assert.deepEqual(pluginSetup(declared), { claudeMd: 0, rules: 0, mcp: 4, hooks: 6 });
+});
+
+test('a plugin turned off, not installed, or with files that are not JSON adds nothing', () => {
+  const files = {
+    [`${PLUGIN_DIR}/hooks/hooks.json`]: { hooks: hooks(['PostToolUse', 2]) },
+    [`${PLUGIN_DIR}/.mcp.json`]: { mcpServers: { api: {} } },
+  };
+  const nothing = { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 };
+  assert.deepEqual(pluginSetup(pluginTree(files, { enabled: false })), nothing);
+  assert.deepEqual(pluginSetup(pluginTree(files, { installs: [] })), nothing);
+  assert.deepEqual(pluginSetup(pluginTree(files, { installs: [{ scope: 'user', installPath: 'config/plugins/cache/gone' }] })), nothing);
+  // No plugins folder at all, and the install list in another shape.
+  const bare = setupTree({ 'config/settings.json': { enabledPlugins: { [PLUGIN_ID]: true } } });
+  assert.deepEqual(pluginSetup(bare), nothing);
+  assert.deepEqual(pluginSetup(setupTree({ 'config/settings.json': { enabledPlugins: { [PLUGIN_ID]: true } }, 'config/plugins/installed_plugins.json': '[1, 2' })), nothing);
+  // A manifest that is not JSON, one whose fields are the wrong shape, and
+  // a hooks file that is not JSON leave the default files' counts.
+  assert.deepEqual(pluginSetup(pluginTree({ ...files, [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: '{ not json' })), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+  const shapes = pluginTree({
+    ...files,
+    [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: { name: 'tools', hooks: 7, mcpServers: ['./config/servers.json', './bundle.mcpb', 'https://example.com/x.mcpb', null] },
+    [`${PLUGIN_DIR}/config/servers.json`]: '{ not json',
+  });
+  assert.deepEqual(pluginSetup(shapes), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+  // A manifest path that leaves the plugin folder is not read.
+  const outside = pluginTree({
+    ...files,
+    [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: { name: 'tools', hooks: '../outside.json' },
+    'config/plugins/cache/acme/tools/outside.json': { hooks: hooks(['Stop', 5]) },
+  });
+  assert.deepEqual(pluginSetup(outside), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+});
+
 const GIB = 1024 ** 3;
 
 test('the memory reading on Linux counts what is not available as used, from /proc/meminfo', () => {

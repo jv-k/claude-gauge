@@ -1570,6 +1570,55 @@ function planName(type: string | undefined, tier: string | undefined): string | 
   return ['Claude', capitalised(type), multiple].filter(Boolean).join(' ');
 }
 
+// The hooks and MCP servers of the plugins turned on: each plugin that
+// enabledPlugins, keyed name@marketplace, sets to true, read from the install
+// folder plugins/installed_plugins.json in the config folder names for it.
+// Hooks come from hooks/hooks.json and from the hook files and inline event
+// maps the manifest's hooks field names, each file once. Servers come from
+// .mcp.json and the .json files and inline maps the manifest's mcpServers
+// field names, each named plugin:<plugin>:<server> as Claude Code names it,
+// so a plugin's github is not the user's. A bundle the field names, .mcpb
+// or .dxt, is not opened. A path that leaves the plugin folder is not read,
+// as Claude Code does not load it. A plugin, manifest or file that is
+// missing or not JSON adds nothing.
+function readPlugins(config: string, enabled: JsonObject): { hooks: number; mcp: string[] } {
+  const installed = objectAt(readJson(path.join(config, 'plugins', 'installed_plugins.json')), 'plugins');
+  let hooks = 0;
+  const mcp: string[] = [];
+  for (const [id, on] of Object.entries(enabled)) {
+    if (on !== true) continue;
+    const install = listAt(installed, id).find((i) => stringAt(i, 'installPath'));
+    if (!install) continue;
+    const root = path.resolve(stringAt(install, 'installPath') as string);
+    const manifest = readJson(path.join(root, '.claude-plugin', 'plugin.json'));
+    // What a manifest field declares beside its default file: the .json
+    // files inside the plugin folder, the default first and each once, and
+    // the inline objects.
+    const declared = (key: string, first: string) => {
+      const files = new Set([path.join(root, first)]);
+      const inline: JsonObject[] = [];
+      const value: unknown = manifest[key];
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (isObject(item)) inline.push(item);
+        else if (typeof item === 'string' && item.endsWith('.json')) {
+          const file = path.resolve(root, item);
+          if (file.startsWith(root + path.sep)) files.add(file);
+        }
+      }
+      return { files: [...files], inline };
+    };
+    const declaredHooks = declared('hooks', path.join('hooks', 'hooks.json'));
+    hooks += declaredHooks.files
+      .map(readJson)
+      .concat(declaredHooks.inline.map((events) => ({ hooks: events })))
+      .reduce((n, s) => n + hooksIn(s), 0);
+    const declaredServers = declared('mcpServers', '.mcp.json');
+    const servers = declaredServers.files.map((file) => objectAt(readJson(file), 'mcpServers')).concat(declaredServers.inline);
+    for (const name of new Set(servers.flatMap(Object.keys))) mcp.push(`plugin:${id.split('@')[0]}:${name}`);
+  }
+  return { hooks, mcp };
+}
+
 function readSetup(
   cwd: string,
   { env = process.env, home = os.homedir(), platform = process.platform, managedDir = managedDirOf(platform) }: SetupOptions = {},
@@ -1590,21 +1639,20 @@ function readSetup(
   );
   const rules = new Set([config, ...folders.map((dir) => path.join(dir, '.claude'))].flatMap((dir) => markdownUnder(path.join(dir, 'rules'))));
 
-  // Settings: user, project, local and managed. Each may hold hooks, and
-  // the names of project MCP servers turned off. The local file is the
-  // repository root's; one in the launch folder under it is read too, and
-  // the root's value applies where both set a key.
+  // Settings: user, project, local and managed, in the order Claude Code
+  // applies them, so a later file's enabledPlugins entry wins. Each may hold
+  // hooks, the names of project MCP servers turned off, and the plugins
+  // turned on. The local file is the repository root's; one in the launch
+  // folder under it is read too, and the root's value applies where both
+  // set a key.
   const localDir = localSettingsDir(project, home, platform);
   const localIn = (dir: string) => readJson(path.join(dir, '.claude', 'settings.local.json'));
   const local = localDir === project ? localIn(project) : { ...localIn(project), ...localIn(localDir) };
-  const settings = [
-    path.join(config, 'settings.json'),
-    path.join(project, '.claude', 'settings.json'),
-    path.join(managedDir, 'managed-settings.json'),
-  ]
+  const settings = [path.join(config, 'settings.json'), path.join(project, '.claude', 'settings.json')]
     .filter((file, i, all) => all.indexOf(file) === i)
     .map(readJson)
-    .concat(local);
+    .concat(local, readJson(path.join(managedDir, 'managed-settings.json')));
+  const plugins = readPlugins(config, Object.assign({}, ...settings.map((s) => objectAt(s, 'enabledPlugins'))));
 
   // MCP servers: user and local scope in .claude.json, the project's
   // .mcp.json and the managed file, each name once, less the project servers
@@ -1618,6 +1666,7 @@ function readSetup(
     ...Object.keys(objectAt(localScope, 'mcpServers')),
     ...projectServers,
     ...Object.keys(objectAt(readJson(path.join(managedDir, 'managed-mcp.json')), 'mcpServers')),
+    ...plugins.mcp,
   ]);
   for (const name of listAt(localScope, 'disabledMcpServers')) if (typeof name === 'string') mcp.delete(name);
 
@@ -1636,7 +1685,7 @@ function readSetup(
     claudeMd: claudeMd.size,
     rules: rules.size,
     mcp: mcp.size,
-    hooks: settings.reduce((n, s) => n + hooksIn(s), 0),
+    hooks: settings.reduce((n, s) => n + hooksIn(s), 0) + plugins.hooks,
     ...(plan ? { plan } : {}),
     ...(user ? { user } : {}),
   };
