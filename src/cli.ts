@@ -247,10 +247,6 @@ function savedStatusLine(): StatusLineSetting | null | undefined {
   return statusLine as StatusLineSetting | null;
 }
 
-// The styles for stdout and stderr, each coloured by the gate for its stream.
-const stdoutStyles = () => stylesFor(process.stdout);
-const stderrStyles = () => stylesFor(process.stderr);
-
 // Writes the pieces to stdout, each a styled line or a pill.
 const say = (...pieces: string[]) => process.stdout.write(pieces.join(''));
 
@@ -294,7 +290,7 @@ function apply({ statusLine, tokenLine }: Bars, replace: boolean, heading: strin
   const settingsBackup = next.changed ? writeSettings(file, next.settings, text) : null;
   if (next.dropBackup) fs.rmSync(savedStatusLineFile(), { force: true });
 
-  const s = stdoutStyles();
+  const s = stylesFor(process.stdout);
   if (!next.changed) {
     say(s.pill(heading), s.info(`${s.value(file)} already holds these choices. Nothing to change.`));
     return;
@@ -320,7 +316,7 @@ const starWithGh = () => spawnSync('gh', ['api', '--method', 'PUT', 'user/starre
 // the star offer.
 async function interactive(command: 'setup' | 'configure', replace: boolean): Promise<void> {
   const io = streamIo(process.stdin, process.stdout);
-  const s = stdoutStyles();
+  const s = stylesFor(process.stdout);
   try {
     io.write(wordmark(colorEnabled(process.stdout)) + s.pill(command));
     const file = settingsFile();
@@ -329,7 +325,7 @@ async function interactive(command: 'setup' | 'configure', replace: boolean): Pr
     const owner = ownerOf(current);
     if (!replace && isForeign(owner)) {
       const whose = owner === 'claude-hud' ? "claude-hud's status line" : 'another status line';
-      io.write(s.warn(`${s.value(file)} already runs ${whose}:`) + s.trace(current?.command ?? JSON.stringify(current)));
+      io.write(s.pill('Warning', 'warning') + s.warn(`${s.value(file)} already runs ${whose}:`) + s.trace(s.value(current?.command ?? JSON.stringify(current))));
       if (!(await confirm(io, 'Replace it? claude-gauge saves it, and claude-gauge uninstall puts it back.', false))) {
         say(s.info('Nothing changed.'));
         return;
@@ -374,7 +370,7 @@ function uninstall(): void {
   // a failed write leaves it for the next try.
   const settingsBackup = next.changed ? writeSettings(file, next.settings, text) : null;
   fs.rmSync(savedStatusLineFile(), { force: true });
-  const s = stdoutStyles();
+  const s = stylesFor(process.stdout);
   if (!next.changed) {
     say(s.pill('Uninstall'), s.info(`claude-gauge is not in ${s.value(file)}. Nothing to change.`));
     return;
@@ -393,7 +389,7 @@ function uninstall(): void {
 function update(): void {
   const where = scripts();
   const { dir } = where;
-  const s = stdoutStyles();
+  const s = stylesFor(process.stdout);
   if (where.route === 'clone') {
     say(s.pill('Update'), s.info(`This claude-gauge is a git clone in ${s.value(stateDir())}. Update it with:`), s.trace(s.value(`git -C ${stateDir()} pull`)));
     return;
@@ -402,7 +398,7 @@ function update(): void {
     say(
       s.pill('Update'),
       s.info(`This claude-gauge is the Claude Code plugin. Update it with ${s.value('/plugin')} in Claude Code.`),
-      s.trace(`The settings run ${dir}, which runs the newest installed version, so an update needs no setup.`),
+      s.trace(`The settings run ${s.value(dir)}, which runs the newest installed version, so an update needs no setup.`),
     );
     return;
   }
@@ -416,7 +412,7 @@ function update(): void {
 // An error on stderr: a red pill, then a red ✖ before the first line of
 // `message` and a ↳ before each line after it.
 function failure(message: string): string {
-  const s = stderrStyles();
+  const s = stylesFor(process.stderr);
   const [first, ...rest] = message.split('\n');
   return s.pill('Error', 'error') + s.error(first) + rest.map((line) => s.trace(line.trim())).join('');
 }

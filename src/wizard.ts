@@ -14,7 +14,7 @@
 
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
-import { render, parseArgs, readSwitches, PARTS, THEMES, DEFAULT_ROWS } from './statusline';
+import { render, parseArgs, readSwitches, stripOwnCodes, PARTS, THEMES, DEFAULT_ROWS } from './statusline';
 import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, parseSize, contextWindow } from './tokenline';
 import type { StatusData, Part } from './statusline';
 import type { Part as TokenPart } from './tokenline';
@@ -228,23 +228,22 @@ const readTokenWindow = (answer: string): string | undefined | { retry: string }
   return parseSize(answer) > 0 ? answer.toLowerCase() : { retry: 'Answer a size such as 200k or 1m.' };
 };
 
-// Escape codes and links, which take no room on the screen.
-const INVISIBLE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-
 // The wizard's io, which counts the screen rows written since the last
 // preview: each newline, and each wrap of a line wider than the terminal,
-// with a character counted one column wide. On a terminal the next preview
-// moves the cursor up over those rows, clears them, and takes their place,
-// so the questions asked under the old preview go with it. Text written with
-// `keep` stays: the next preview starts below it. With piped output every
-// preview prints below the last.
+// with a character counted one column wide, and colour codes and links,
+// the only escapes the wizard and the preview write, counted as none. On a
+// terminal the next preview moves the cursor up over those rows, clears
+// them, and takes their place, so the questions asked under the old preview
+// go with it. `clear` does the same with no preview to follow. Text written
+// with `keep` stays: the next preview starts below it. With piped output
+// every preview prints below the last, and `clear` does nothing.
 function screenOf(io: WizardIo) {
   let rows = 0;
   let column = 0;
   let live = false;
   const count = (text: string) => {
     const width = io.terminal?.columns || Infinity;
-    for (const ch of text.replace(INVISIBLE, '')) {
+    for (const ch of stripOwnCodes(text)) {
       if (ch === '\n') {
         rows++;
         column = 0;
@@ -258,7 +257,13 @@ function screenOf(io: WizardIo) {
     io.write(text);
     count(text);
   };
-  const screen: WizardIo & { keep(text: string): void; preview(text: string): void } = {
+  const clear = () => {
+    if (io.terminal && live) io.write(`\r${rows ? `\x1b[${rows}A` : ''}\x1b[J`);
+    rows = 0;
+    column = 0;
+    live = false;
+  };
+  const screen: WizardIo & { keep(text: string): void; preview(text: string): void; clear(): void } = {
     color: io.color,
     terminal: io.terminal,
     write,
@@ -274,12 +279,11 @@ function screenOf(io: WizardIo) {
       live = false;
     },
     preview: (text) => {
-      if (io.terminal && live) io.write(`\r${rows ? `\x1b[${rows}A` : ''}\x1b[J`);
-      rows = 0;
-      column = 0;
+      clear();
       live = true;
       write(text);
     },
+    clear,
   };
   return screen;
 }
@@ -291,20 +295,18 @@ async function runWizard(userIo: WizardIo, { preview, installed }: WizardOptions
   let status: StatusChoices = { ...start.status };
   let tokenLine = start.tokenLine;
   // The preview in the status line's own colours, or as plain text when the
-  // questions take no colour.
-  const show = () => {
+  // questions take no colour, under `heading` when one is given.
+  const show = (heading = '') => {
     const rendered = preview(switchesFor(status));
-    const rows = io.color ? rendered : rendered.replace(INVISIBLE, '');
-    io.preview(`\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${tokenLine ? 'on, when each turn ends' : 'off'}\n`);
+    const rows = io.color ? rendered : stripOwnCodes(rendered);
+    io.preview(`${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${tokenLine ? 'on, when each turn ends' : 'off'}\n`);
   };
 
   if (isSetUp(installed)) {
-    io.write(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
-    show();
+    show(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
     if (await confirm(io, 'Keep the current bars as they are?', true)) return {};
   } else {
-    io.write('The status line with the defaults:\n');
-    show();
+    show('The status line with the defaults:\n');
     if (await confirm(io, 'Use the defaults: both bars, with the parts above?', true)) return { statusLine: [], tokenLine: [] };
   }
 
@@ -313,6 +315,9 @@ async function runWizard(userIo: WizardIo, { preview, installed }: WizardOptions
   // More rows than the wizard offers stay possible when that many are set up.
   const rowsNow = start.status.rows.length;
   const maxRows = Math.max(MAX_ROWS, rowsNow);
+  // The customise path starts below the questions, where the first preview
+  // and the question under it were: the next preview takes their place.
+  io.clear();
   io.keep(
     `${s.pill('Status line')}The parts: ${PARTS.map(s.value).join(', ')}.\nREADME.md says what each shows. Press Enter to keep the value in brackets.\n`,
   );
@@ -436,8 +441,9 @@ interface Output {
 // The questions on a pair of streams: each prompt on `output`, each answer a
 // line of `input`. Lines are queued as they arrive, so answers piped in all
 // at once each reach their question. A terminal echoes each answer and its
-// Enter; a piped answer is not echoed, so the io ends its line itself, and a
-// retry or a preview never runs on from the question. The questions are in
+// Enter; a piped answer is not, so the io writes it and ends its line
+// itself, as a terminal would show it, and a retry or a preview never runs
+// on from the question. The questions are in
 // colour when the colour gate allows, and redraw the preview in place when
 // `output` is a terminal.
 function streamIo(input: NodeJS.ReadableStream & { isTTY?: boolean }, output: Output, color = colorEnabled(output)): WizardIo & { close(): void } {
@@ -449,7 +455,7 @@ function streamIo(input: NodeJS.ReadableStream & { isTTY?: boolean }, output: Ou
     ask: async (question) => {
       output.write(question);
       const next = await lines.next();
-      if (!input.isTTY) output.write('\n');
+      if (!input.isTTY) output.write(`${next.done ? '' : next.value}\n`);
       return next.done ? undefined : next.value;
     },
     write: (text) => {

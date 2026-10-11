@@ -68,8 +68,8 @@ function styles(color: boolean): Styles {
 }
 
 // The styles for what goes to `stream`, in colour when the colour gate allows.
-const stylesFor = (stream: { isTTY?: boolean }, env: NodeJS.ProcessEnv = process.env): Styles => styles(colorEnabled(stream, env));
+const stylesFor = (stream: { isTTY?: boolean }): Styles => styles(colorEnabled(stream));
 
 export { styles, stylesFor };
 
-export type { Styles, Tone };
+export type { Styles };

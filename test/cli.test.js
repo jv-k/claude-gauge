@@ -519,6 +519,7 @@ test('the wizard asks before it replaces a status line that is not claude-gauge'
   const kept = ask(dir, ['setup'], ['n']);
   ok(kept);
   assert.match(kept.stdout, /my-status\.sh/);
+  assert.match(kept.stdout, /\nWARNING\n! .*settings\.json already runs another status line:\n  ↳ ~\/bin\/my-status\.sh\n/, 'a yellow pill, a !, and the command under it');
   assert.match(kept.stdout, /Nothing changed/);
   assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), original);
 
@@ -583,7 +584,7 @@ test('configure keeps a quoted value and a switch it does not know, whichever pa
   });
 });
 
-test('setup ends by offering to star the repo with gh, and stars it only on a yes', { skip: process.platform === 'win32' && 'the fake gh is a shell script' }, () => {
+test('setup ends by offering to star the repo with gh, and stars it on a yes or Enter', { skip: process.platform === 'win32' && 'the fake gh is a shell script' }, () => {
   const declined = fakeGh();
   const no = ask(configFolder(), ['setup'], ['y', 'n'], { bin: declined.bin });
   ok(no);
@@ -595,6 +596,10 @@ test('setup ends by offering to star the repo with gh, and stars it only on a ye
   ok(yes);
   assert.deepEqual(accepted.calls().filter((c) => !c.startsWith('--version')), ['api --method PUT user/starred/jv-k/claude-gauge']);
   assert.match(yes.stdout, /Thank you/);
+
+  const enter = fakeGh();
+  ok(ask(configFolder(), ['setup'], ['y', ''], { bin: enter.bin }));
+  assert.deepEqual(enter.calls().filter((c) => !c.startsWith('--version')), ['api --method PUT user/starred/jv-k/claude-gauge'], 'Enter stars the repo');
 });
 
 test('with colour on, each command prints a pill header, icons and green values', () => {
@@ -680,8 +685,8 @@ test('the wizard with colour on: magenta question pills, dim defaults in bracket
   assert.ok(r.stdout.includes(`\n${pill('DONE')}\n${OK}Status line: `), JSON.stringify(r.stdout));
 });
 
-test('a retry after a piped answer starts a line of its own', () => {
+test('a piped answer is written after its question, so a retry starts a line of its own', () => {
   const r = ask(configFolder(), ['setup'], ['maybe', 'y'], { env: { NO_COLOR: '1' } });
   ok(r);
-  assert.ok(r.stdout.includes('[Y/n] \n! Answer y or n.\nUse the defaults'), JSON.stringify(r.stdout));
+  assert.ok(r.stdout.includes('[Y/n] maybe\n! Answer y or n.\nUse the defaults: both bars, with the parts above? [Y/n] y\n'), JSON.stringify(r.stdout));
 });

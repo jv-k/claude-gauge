@@ -388,14 +388,20 @@ test('on a terminal, each preview after an answer moves up over the last one and
   const { result, calls } = await runOn(output, oneRow);
   assert.deepEqual(result, { statusLine: ['--show', 'ctx'], tokenLine: null });
   assert.equal(calls.length, 7);
-  // The first preview and the first after the STATUS LINE pill start fresh:
-  // the five after them each replace the one before.
+  // A no to the defaults clears the first preview with its heading and the
+  // question under it: the heading, the preview's blank line, its row and
+  // the token line row, the CONFIRM pill and its blank line, then the
+  // question and its answer, seven rows. The STATUS LINE pill takes their
+  // place, and the first preview after it starts fresh.
   const rewinds = [...output.text.matchAll(REWIND)];
-  assert.equal(rewinds.length, 5, JSON.stringify(output.text));
-  // The preview's blank line, its row and the token line row, the INPUT pill
-  // and its blank line, then the question and its answer: six rows.
-  assert.equal(rewinds[0][0], rewind(6));
-  assert.ok(output.text.indexOf('STATUS LINE') < rewinds[0].index);
+  assert.equal(rewinds.length, 6, JSON.stringify(output.text));
+  assert.equal(rewinds[0][0], rewind(7));
+  assert.ok(rewinds[0].index < output.text.indexOf('STATUS LINE'));
+  assert.ok(output.text.indexOf('STATUS LINE') < rewinds[1].index);
+  // Each of the five after it replaces the preview before: its blank line,
+  // its row and the token line row, the INPUT pill and its blank line, then
+  // the question and its answer: six rows.
+  assert.equal(rewinds[1][0], rewind(6));
   assert.ok(output.text.lastIndexOf('<--show ctx>') > rewinds.at(-1).index, 'the last preview follows the last rewind');
 });
 
@@ -404,7 +410,7 @@ test('on a narrow terminal, the rewind counts the rows that long lines wrap to',
   await runOn(output, oneRow);
   // The token line row of 35 characters takes two rows, the question and its
   // answer of 49 take three: nine rows in all.
-  assert.equal([...output.text.matchAll(REWIND)][0][0], rewind(9));
+  assert.equal([...output.text.matchAll(REWIND)][1][0], rewind(9));
 });
 
 test('with piped output, each preview prints below the last, with no cursor codes', async () => {
