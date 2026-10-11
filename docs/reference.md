@@ -256,6 +256,12 @@ npx @jv-k/claude-gauge configure --status-line "--segments 10"
 
 The settings file is `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set. `claude-gauge --help` lists the commands and switches. The bars' own switches are in [Options](#options).
 
+`claude-gauge --help` prints the claude-gauge wordmark above its usage, as does the usage after a mistake, and `setup` and `configure` print it at the start of their questions. A `setup` or `configure` run with bar switches prints no wordmark. Three variables decide whether the wordmark is in colour:
+
+- A non-empty `NO_COLOR` turns colour off.
+- A `FORCE_COLOR` or `CLICOLOR_FORCE` that is neither empty nor `0` turns colour on.
+- Otherwise, only a terminal gets colour.
+
 ### With Claude Code
 
 Paste this into a Claude Code session:
