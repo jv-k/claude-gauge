@@ -528,8 +528,9 @@ function setupTree(files) {
   const dir = (name) => (fs.mkdirSync(path.join(root, name), { recursive: true }), path.join(root, name));
   const home = dir('home');
   const managedDir = dir('managed');
-  // What readSetup takes to read this tree and nothing else.
-  const options = { env: {}, home, managedDir };
+  // What readSetup takes to read this tree and nothing else, on a platform
+  // that reads the local settings file from the repository root.
+  const options = { env: {}, home, managedDir, platform: 'linux' };
   return { root, project: dir('home/work/project'), options };
 }
 
@@ -646,7 +647,7 @@ test('the local settings file stays the launch folder\'s outside a repository, u
   assert.equal(hooksAt(setupTree({ ...files('home'), 'home/.git/HEAD': 'ref: refs/heads/main\n' })), 2);
   // On Windows, where the same tree on Linux reads the root's file.
   const repo = setupTree({ ...files('home/work/project'), 'home/work/project/.git/HEAD': 'ref: refs/heads/main\n' });
-  assert.equal(hooksAt(repo, { platform: 'linux' }), 1);
+  assert.equal(hooksAt(repo), 1);
   assert.equal(hooksAt(repo, { platform: 'win32' }), 2);
 });
 

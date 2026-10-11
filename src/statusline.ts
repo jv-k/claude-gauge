@@ -630,23 +630,33 @@ function git(cwd: string, args: string[]): string {
   }
 }
 
+// The nearest .git entry at or above a folder, read from the files rather
+// than from git: the folder that holds it, and the git folder it stands for.
+// Inside a linked worktree .git is a file that names the worktree's own git
+// folder under the main checkout's .git/worktrees. undefined outside a
+// repository. Throws where a file cannot be read.
+function gitEntryAbove(cwd: string): { dir: string; gitDir: string } | undefined {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    const dotGit = path.join(dir, '.git');
+    if (fs.existsSync(dotGit)) {
+      const gitDir = fs.statSync(dotGit).isFile()
+        ? path.resolve(dir, /^gitdir: (.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'))?.[1].trim() ?? '.git')
+        : dotGit;
+      return { dir, gitDir };
+    }
+    if (path.dirname(dir) === dir) return undefined;
+  }
+}
+
 // The branch HEAD names, read from the repository's files rather than from
 // git: the fallback when git status takes too long, so the render never
-// waits on a second git process. Inside a linked worktree .git is a file
-// that names the worktree's own git folder. '' outside a repository and on
-// a detached HEAD.
+// waits on a second git process. '' outside a repository and on a detached
+// HEAD.
 function headBranch(cwd: string): string {
   try {
-    for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
-      const dotGit = path.join(dir, '.git');
-      if (fs.existsSync(dotGit)) {
-        const gitDir = fs.statSync(dotGit).isFile()
-          ? path.resolve(dir, /^gitdir: (.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'))?.[1].trim() ?? '.git')
-          : dotGit;
-        return /^ref: refs\/heads\/(.+)$/m.exec(fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8'))?.[1].trim() ?? '';
-      }
-      if (path.dirname(dir) === dir) return '';
-    }
+    const entry = gitEntryAbove(cwd);
+    if (!entry) return '';
+    return /^ref: refs\/heads\/(.+)$/m.exec(fs.readFileSync(path.join(entry.gitDir, 'HEAD'), 'utf8'))?.[1].trim() ?? '';
   } catch {
     return '';
   }
@@ -1498,35 +1508,28 @@ function foldersDownTo(cwd: string): string[] {
 }
 
 // The folder Claude Code reads .claude/settings.local.json from: the root of
-// the git repository the launch folder is in, found by the same file walk as
-// headBranch, and inside a linked worktree the main checkout's root, the
-// folder above the .git folder the worktree's .git file names. The launch
-// folder itself outside a repository, where the root is the home folder, on
-// Windows, and where the root, its .git entry or its .claude folder is not
-// the current user's.
+// the git repository the launch folder is in, and inside a linked worktree
+// the main checkout's root, the folder above the .git folder the worktree's
+// .git file names. The launch folder itself outside a repository, where the
+// root is the home folder, on Windows, and where the root, its .git entry or
+// its .claude folder is not the current user's.
 function localSettingsDir(project: string, home: string, platform: string): string {
   if (platform === 'win32') return project;
   try {
-    for (let dir = project; ; dir = path.dirname(dir)) {
-      const dotGit = path.join(dir, '.git');
-      if (fs.existsSync(dotGit)) {
-        let root = dir;
-        if (fs.statSync(dotGit).isFile()) {
-          const gitDir = path.resolve(dir, /^gitdir: (.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'))?.[1].trim() ?? '.git');
-          const worktrees = path.dirname(gitDir);
-          if (path.basename(worktrees) === 'worktrees' && path.basename(path.dirname(worktrees)) === '.git') root = path.dirname(path.dirname(worktrees));
-        }
-        if (root === path.resolve(home)) return project;
-        const uid = process.getuid?.();
-        if (uid !== undefined) {
-          for (const entry of [root, path.join(root, '.git'), path.join(root, '.claude')]) {
-            if (fs.existsSync(entry) && fs.statSync(entry).uid !== uid) return project;
-          }
-        }
-        return root;
+    const entry = gitEntryAbove(project);
+    if (!entry) return project;
+    // A worktree's git folder is <main>/.git/worktrees/<name>.
+    const worktrees = path.dirname(entry.gitDir);
+    const linked = entry.gitDir !== path.join(entry.dir, '.git') && path.basename(worktrees) === 'worktrees' && path.basename(path.dirname(worktrees)) === '.git';
+    const root = linked ? path.dirname(path.dirname(worktrees)) : entry.dir;
+    if (root === path.resolve(home)) return project;
+    const uid = process.getuid?.();
+    if (uid !== undefined) {
+      for (const owned of [root, path.join(root, '.git'), path.join(root, '.claude')]) {
+        if (fs.existsSync(owned) && fs.statSync(owned).uid !== uid) return project;
       }
-      if (path.dirname(dir) === dir) return project;
     }
+    return root;
   } catch {
     return project;
   }
