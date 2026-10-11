@@ -10,6 +10,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { cliSource, switchesIn } = require('./helpers');
 
 const root = path.join(__dirname, '..');
 const json = (file) => JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
@@ -76,11 +77,11 @@ test('setup and configure ask their questions with AskUserQuestion, then pass th
 });
 
 test('the commands name only switches the CLI and the two bars take', () => {
-  const usage = fs.readFileSync(path.join(root, 'src', 'cli.ts'), 'utf8');
+  const usage = cliSource();
   const reference = fs.readFileSync(path.join(root, 'docs', 'reference.md'), 'utf8');
   for (const name of ['setup', 'configure', 'uninstall']) {
     const { body } = command(name);
-    for (const [flag] of body.matchAll(/--[a-z0-9][a-z0-9-]*/g)) {
+    for (const flag of switchesIn(body)) {
       assert.ok(usage.includes(`'${flag}'`) || reference.includes(`| \`${flag}`), `${name}.md names ${flag}, which neither the CLI nor docs/reference.md documents`);
     }
   }

@@ -3,10 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { render, parseArgs } = require('../dist/statusline.js');
-
-// A render as the terminal shows it: no colour codes, and no OSC 8 link
-// wrappers, which a terminal turns into a link rather than text.
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
+const { plain } = require('./helpers');
 
 // The model part names the API provider from the environment, so the suite
 // runs without the caller's provider variables.
@@ -506,6 +503,11 @@ test('env reads the setup of the folder Claude Code runs in', () => {
     setupOf: (cwd) => ((seen = cwd), NOTHING_LOADED),
   });
   assert.equal(seen, '/home/me/project');
+  // Nothing reads the setup when no part shows it.
+  render({ workspace: { current_dir: '/home/me/project' } }, {
+    config: parseArgs(['--show', 'model']),
+    setupOf: () => assert.fail('the setup was read with no part showing it'),
+  });
 });
 
 test('plan shows the subscription and the signed-in user', () => {
@@ -531,8 +533,9 @@ function setupTree(files) {
   const dir = (name) => (fs.mkdirSync(path.join(root, name), { recursive: true }), path.join(root, name));
   const home = dir('home');
   const managedDir = dir('managed');
-  // What readSetup takes to read this tree and nothing else.
-  const options = { env: {}, home, managedDir };
+  // What readSetup takes to read this tree and nothing else, on a platform
+  // that reads the local settings file from the repository root.
+  const options = { env: {}, home, managedDir, platform: 'linux' };
   return { root, project: dir('home/work/project'), options };
 }
 
@@ -567,6 +570,8 @@ test('the setup counts what Claude Code loads, from the files on disk', () => {
     },
     [`${project}/.mcp.json`]: { mcpServers: { github: {}, sentry: {}, figma: {} } },
     'managed/managed-mcp.json': { mcpServers: { intranet: {} } },
+    // The project is a repository root, so the local file is read from it.
+    [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n',
     // Hooks: one per handler, across user, project, local and managed settings.
     'home/.claude/settings.json': { hooks: hooks(['Stop', 2], ['SessionStart', 1]) },
     [`${project}/.claude/settings.json`]: { hooks: hooks(['PreToolUse', 1]) },
@@ -578,6 +583,77 @@ test('the setup counts what Claude Code loads, from the files on disk', () => {
   const setup = readSetup(tree.project, tree.options);
   assert.deepEqual(setup, { claudeMd: 6, rules: 4, mcp: 5, hooks: 5, plan: 'Claude Max 20x', user: 'me@example.com' });
   assert.doesNotMatch(JSON.stringify(setup), /secret/);
+});
+
+// The repository root's local settings file: Claude Code reads
+// .claude/settings.local.json from the root of the git repository the launch
+// folder is in, with the launch folder's own file under it.
+test('the setup reads the local settings file from the repository root above the launch folder', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const repo = 'home/work/project';
+  const launch = `${repo}/packages/app`;
+  const tree = setupTree({
+    [`${repo}/.git/HEAD`]: 'ref: refs/heads/main\n',
+    [`${repo}/.claude/settings.local.json`]: { hooks: hooks(['Stop', 1]), disabledMcpjsonServers: ['figma'] },
+    // The project settings and .mcp.json stay the launch folder's.
+    [`${launch}/.mcp.json`]: { mcpServers: { github: {}, figma: {} } },
+    [`${launch}/.claude/settings.json`]: { hooks: hooks(['PreToolUse', 1]) },
+    [`${repo}/.mcp.json`]: { mcpServers: { unseen: {} } },
+    [`${repo}/.claude/settings.json`]: { hooks: hooks(['Stop', 4]) },
+  });
+  const launchDir = require('node:path').join(tree.root, launch);
+  assert.deepEqual(readSetup(launchDir, tree.options), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+});
+
+test('a local settings file in the launch folder is read beside the root\'s, and the root\'s value wins', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const repo = 'home/work/project';
+  const launch = `${repo}/packages/app`;
+  const tree = setupTree({
+    [`${repo}/.git/HEAD`]: 'ref: refs/heads/main\n',
+    [`${repo}/.claude/settings.local.json`]: { disabledMcpjsonServers: ['figma'] },
+    [`${launch}/.claude/settings.local.json`]: { hooks: hooks(['Stop', 3]), disabledMcpjsonServers: ['sentry', 'linear'] },
+    [`${launch}/.mcp.json`]: { mcpServers: { github: {}, sentry: {}, figma: {}, linear: {} } },
+  });
+  const launchDir = require('node:path').join(tree.root, launch);
+  // The launch file's hooks count; its disabledMcpjsonServers is replaced by
+  // the root's whole, so sentry and linear stay on and figma is off.
+  assert.deepEqual(readSetup(launchDir, tree.options), { claudeMd: 0, rules: 0, mcp: 3, hooks: 3 });
+});
+
+test('in a linked worktree the local settings file is the main checkout\'s', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const tree = setupTree({
+    'home/work/main/.git/HEAD': 'ref: refs/heads/main\n',
+    'home/work/main/.git/worktrees/feature/HEAD': 'ref: refs/heads/feature\n',
+    'home/work/main/.claude/settings.local.json': { hooks: hooks(['Stop', 2]) },
+    'home/work/feature/.git': 'gitdir: ../main/.git/worktrees/feature\n',
+    'home/work/feature/.claude/settings.local.json': { hooks: hooks(['Stop', 5]) },
+    'home/work/feature/src/index.ts': '',
+  });
+  const path = require('node:path');
+  assert.deepEqual(readSetup(path.join(tree.root, 'home/work/feature'), tree.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 2 });
+  assert.deepEqual(readSetup(path.join(tree.root, 'home/work/feature/src'), tree.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 2 });
+});
+
+test('the local settings file stays the launch folder\'s outside a repository, under a home repository and on Windows', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const path = require('node:path');
+  // The launch folder's file has two hooks and the folder above it one, so
+  // the count says which file was read.
+  const files = (above) => ({
+    [`${above}/.claude/settings.local.json`]: { hooks: hooks(['Stop', 1]) },
+    'home/work/project/sub/.claude/settings.local.json': { hooks: hooks(['Stop', 2]) },
+  });
+  const hooksAt = (tree, options = {}) => readSetup(path.join(tree.root, 'home/work/project/sub'), { ...tree.options, ...options }).hooks;
+  // No .git above the launch folder.
+  assert.equal(hooksAt(setupTree(files('home/work/project'))), 2);
+  // The repository root is the home folder.
+  assert.equal(hooksAt(setupTree({ ...files('home'), 'home/.git/HEAD': 'ref: refs/heads/main\n' })), 2);
+  // On Windows, where the same tree on Linux reads the root's file.
+  const repo = setupTree({ ...files('home/work/project'), 'home/work/project/.git/HEAD': 'ref: refs/heads/main\n' });
+  assert.equal(hooksAt(repo), 1);
+  assert.equal(hooksAt(repo, { platform: 'win32' }), 2);
 });
 
 test('the setup follows CLAUDE_CONFIG_DIR, and names each plan', () => {
@@ -618,6 +694,90 @@ test('the setup is empty where there is nothing to read, and skips files that ar
     'home/work/project/.claude/settings.json': { hooks: { Stop: 'not a list' } },
   });
   assert.deepEqual(readSetup(broken.project, broken.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
+});
+
+// A plugin as Claude Code installs one: enabledPlugins in the user settings
+// names it on, and plugins/installed_plugins.json names its install folder.
+// A temporary config folder, named by CLAUDE_CONFIG_DIR, holds both.
+const path = require('node:path');
+const PLUGIN_ID = 'tools@acme';
+const PLUGIN_DIR = 'config/plugins/cache/acme/tools/1.0.0';
+const pluginTree = (files, { enabled = true, installs = [{ scope: 'user', installPath: PLUGIN_DIR }] } = {}) =>
+  setupTree((root) => {
+    const at = (install) => ({ ...install, installPath: path.join(root, install.installPath) });
+    return {
+      'config/settings.json': { enabledPlugins: { [PLUGIN_ID]: enabled } },
+      'config/plugins/installed_plugins.json': { version: 2, plugins: { [PLUGIN_ID]: installs.map(at) } },
+      ...files,
+    };
+  });
+const configEnv = (tree) => ({ CLAUDE_CONFIG_DIR: path.join(tree.root, 'config') });
+const pluginSetup = (tree) => {
+  const { readSetup } = require('../dist/statusline.js');
+  return readSetup(tree.project, { ...tree.options, env: configEnv(tree) });
+};
+
+test('the setup counts the hooks and MCP servers of each plugin turned on', () => {
+  // Two hooks in hooks/hooks.json and one server in .mcp.json, the two
+  // default files, with no manifest.
+  const plain = pluginTree({
+    [`${PLUGIN_DIR}/hooks/hooks.json`]: { description: 'format', hooks: hooks(['PostToolUse', 2]) },
+    [`${PLUGIN_DIR}/.mcp.json`]: { mcpServers: { api: { command: 'node' } } },
+  });
+  assert.deepEqual(pluginSetup(plain), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+  // The manifest adds a hooks file and an inline event map, and a servers
+  // file and an inline map, beside the defaults. The default hooks file
+  // named again in the manifest counts once, and a plugin server with the
+  // user's server's name is its own, named plugin:<plugin>:<server> as
+  // Claude Code names it.
+  const declared = pluginTree({
+    'config/.claude.json': { mcpServers: { github: {} } },
+    [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: {
+      name: 'tools',
+      hooks: ['./hooks/hooks.json', './config/more-hooks.json', hooks(['Stop', 1])],
+      mcpServers: ['./config/servers.json', { github: { command: 'node' } }],
+    },
+    [`${PLUGIN_DIR}/hooks/hooks.json`]: { hooks: hooks(['PostToolUse', 2]) },
+    [`${PLUGIN_DIR}/config/more-hooks.json`]: { hooks: hooks(['PreToolUse', 3]) },
+    [`${PLUGIN_DIR}/.mcp.json`]: { mcpServers: { api: {} } },
+    [`${PLUGIN_DIR}/config/servers.json`]: { mcpServers: { api: {}, docs: {} } },
+  });
+  assert.deepEqual(pluginSetup(declared), { claudeMd: 0, rules: 0, mcp: 4, hooks: 6 });
+});
+
+test('a plugin turned off, not installed, or with files that are not JSON adds nothing', () => {
+  const files = {
+    [`${PLUGIN_DIR}/hooks/hooks.json`]: { hooks: hooks(['PostToolUse', 2]) },
+    [`${PLUGIN_DIR}/.mcp.json`]: { mcpServers: { api: {} } },
+  };
+  const nothing = { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 };
+  assert.deepEqual(pluginSetup(pluginTree(files, { enabled: false })), nothing);
+  assert.deepEqual(pluginSetup(pluginTree(files, { installs: [] })), nothing);
+  assert.deepEqual(pluginSetup(pluginTree(files, { installs: [{ scope: 'user', installPath: 'config/plugins/cache/gone' }] })), nothing);
+  // No plugins folder at all, and the install list in another shape.
+  const bare = setupTree({ 'config/settings.json': { enabledPlugins: { [PLUGIN_ID]: true } } });
+  assert.deepEqual(pluginSetup(bare), nothing);
+  assert.deepEqual(pluginSetup(setupTree({ 'config/settings.json': { enabledPlugins: { [PLUGIN_ID]: true } }, 'config/plugins/installed_plugins.json': '[1, 2' })), nothing);
+  // A manifest that is not JSON, one whose fields are the wrong shape, and
+  // a hooks file that is not JSON leave the default files' counts.
+  const broken = pluginTree({ ...files, [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: '{ not json' });
+  assert.deepEqual(pluginSetup(broken), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+  // And the render, which reads the same files, still shows the part.
+  const line = plain(render({ workspace: { current_dir: broken.project } }, { config: parseArgs(['--show', 'env']), env: configEnv(broken) }));
+  assert.match(line, /^env (\d+ md )?\d+ mcp \d+ hooks$/);
+  const shapes = pluginTree({
+    ...files,
+    [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: { name: 'tools', hooks: 7, mcpServers: ['./config/servers.json', './bundle.mcpb', 'https://example.com/x.mcpb', null] },
+    [`${PLUGIN_DIR}/config/servers.json`]: '{ not json',
+  });
+  assert.deepEqual(pluginSetup(shapes), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+  // A manifest path that leaves the plugin folder is not read.
+  const outside = pluginTree({
+    ...files,
+    [`${PLUGIN_DIR}/.claude-plugin/plugin.json`]: { name: 'tools', hooks: '../outside.json' },
+    'config/plugins/cache/acme/tools/outside.json': { hooks: hooks(['Stop', 5]) },
+  });
+  assert.deepEqual(pluginSetup(outside), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
 });
 
 const GIB = 1024 ** 3;

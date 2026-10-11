@@ -69,7 +69,7 @@ In a terminal, run:
 npx @jv-k/claude-gauge setup
 ```
 
-Setup shows the status line and asks which parts you want. It draws the status line again after each answer:
+Setup shows the status line and asks which parts you want. In a terminal, it draws the status line again in place after each answer:
 
 ![claude-gauge setup in a terminal: it shows the default rows, then draws them again as the answers change the second row, the bar size and the theme.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/demo.gif)
 

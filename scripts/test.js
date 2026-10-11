@@ -2,7 +2,7 @@
 'use strict';
 
 // Runs every test/*.test.js file with Node's test runner, named one by one,
-// so the same command works on Node 18, 20 and 22 and on every system.
+// so the same command works on Node 18, 20, 22 and 24 and on every system.
 // Node 22 reads `node --test test/` as a module to load, not a folder, and a
 // glob is expanded neither by Node 18 and 20 nor by cmd.exe on Windows.
 // Switches pass through to node --test:

@@ -1,8 +1,8 @@
-# Runs the suite on Node 18, 20 and 22 and on Bun, each on Linux, macOS and
-# Windows, and the typecheck, the linter and a coverage report beside it. Any
-# failing job turns the check red. A new push to a pull request cancels the
-# run it supersedes. Each push to main has a group of its own, so no run on
-# main is cancelled, queued or running.
+# Runs the suite on Node 18, 20, 22 and 24 and on Bun, each on Linux, macOS
+# and Windows, and the typecheck, the linter and a coverage report beside it.
+# Any failing job turns the check red. A new push to a pull request cancels
+# the run it supersedes. Each push to main has a group of its own, so no run
+# on main is cancelled, queued or running.
 name: test
 
 on:
@@ -26,7 +26,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        runtime: ['18', '20', '22', bun]
+        runtime: ['18', '20', '22', '24', bun]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -99,10 +99,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      # Coverage counts the built lines the suites load in their own process.
-      # A line run as a child process, as the CLI suites do, is not counted.
-      # bash, named, runs with pipefail, so a failing suite fails the step
-      # through tee.
+      # Coverage counts the built lines the suites load in their own process
+      # and the lines their child processes run, as the suites that spawn a
+      # built script do, dist/cli.js among them. Node's runner sets
+      # NODE_V8_COVERAGE for the suites, and each spawn passes the suite's
+      # environment on, as runCli in test/helpers.js does, so Node writes the
+      # spawned script's coverage too. A spawn that drops the environment
+      # drops its lines from the report. bash, named, runs with pipefail, so
+      # a failing suite fails the step through tee.
       - name: Run the suite with coverage
         shell: bash
         run: |

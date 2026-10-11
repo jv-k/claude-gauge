@@ -9,9 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { render, parseArgs } = require('../dist/statusline.js');
-
-// What the terminal shows: no colour codes, and no OSC 8 link wrappers.
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
+const { plain } = require('./helpers');
 
 const OID = 'a'.repeat(40);
 const entry = (xy, file) => `1 ${xy} N... 100644 100644 100644 ${OID} ${OID} ${file}`;

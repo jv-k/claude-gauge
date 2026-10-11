@@ -7,13 +7,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { render, parseArgs, readTranscriptActivity } = require('../dist/statusline.js');
 
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+const { plain, tempDir } = require('./helpers');
 
 const CWD = '/home/me/project';
 // A path relative to CWD as the part prints it, with this system's separator.
@@ -37,7 +35,7 @@ const jsonl = (records) => records.map((r) => `${JSON.stringify(r)}\n`).join('')
 // Renders the given switches over a payload whose transcript is file, read
 // by reader (the real one by default, with its state in stateDir, a folder
 // of its own unless one is given, so a test never writes the real one).
-const renderTools = (file, { args = ['--show', 'tools'], stateDir = path.join(tmpDir(), 'state'), reader } = {}) =>
+const renderTools = (file, { args = ['--show', 'tools'], stateDir = path.join(tempDir(), 'state'), reader } = {}) =>
   plain(
     render(
       { workspace: { current_dir: CWD }, transcript_path: file },
@@ -62,7 +60,7 @@ test('tools shows the running tool with its target, and completed tools with cou
 });
 
 test('tools reads them from the transcript', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const reads = Array.from({ length: 12 }, (_, i) => [toolUse(`r${i}`, 'Read', { file_path: `${CWD}/f${i}.ts` }), toolResult(`r${i}`)]).flat();
   fs.writeFileSync(file, jsonl([prompt('go'), ...reads, toolUse('e1', 'Edit', { file_path: `${CWD}/src/a.ts` })]));
@@ -83,7 +81,7 @@ test('no transcript read happens when no transcript part is shown', () => {
 });
 
 test('the reader reads only the bytes appended since the last render', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const stateDir = path.join(dir, 'state');
   const file = path.join(dir, 'session.jsonl');
   fs.writeFileSync(file, jsonl([prompt('go'), toolUse('a', 'Read', { file_path: `${CWD}/a.ts` }), toolResult('a')]));
@@ -106,7 +104,7 @@ test('the reader reads only the bytes appended since the last render', () => {
 });
 
 test('a line still being written is read once it is complete', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const stateDir = path.join(dir, 'state');
   const file = path.join(dir, 'session.jsonl');
   const line = JSON.stringify(toolUse('a', 'Grep', { pattern: 'TODO' }));
@@ -117,7 +115,7 @@ test('a line still being written is read once it is complete', () => {
 });
 
 test('a line longer than one read, with characters split across reads, is read whole', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const big = { ...toolResult('a'), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'é✓'.repeat(100_000) }] } };
   fs.writeFileSync(file, jsonl([toolUse('a', 'Read', { file_path: `${CWD}/big.txt` }), big, toolUse('b', 'Edit', { file_path: `${CWD}/é.ts` })]));
@@ -125,7 +123,7 @@ test('a line longer than one read, with characters split across reads, is read w
 });
 
 test('a truncated transcript is read again from the start', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const stateDir = path.join(dir, 'state');
   const file = path.join(dir, 'session.jsonl');
   fs.writeFileSync(file, jsonl([toolUse('a', 'Read'), toolResult('a'), toolUse('b', 'Read'), toolResult('b')]));
@@ -139,7 +137,7 @@ test('a truncated transcript is read again from the start', () => {
 });
 
 test('a replaced transcript is read again from the start, even when it is longer', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const stateDir = path.join(dir, 'state');
   const file = path.join(dir, 'session.jsonl');
   fs.writeFileSync(file, jsonl([toolUse('a', 'Read'), toolResult('a')]));
@@ -157,7 +155,7 @@ test('a replaced transcript is read again from the start, even when it is longer
 });
 
 test('a new prompt ends the tools still marked running, and subagent records are left out', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   fs.writeFileSync(
     file,
@@ -173,14 +171,14 @@ test('a new prompt ends the tools still marked running, and subagent records are
 });
 
 test('a result that arrives after a prompt still counts', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   fs.writeFileSync(file, jsonl([toolUse('a', 'Bash', { command: 'make' }), prompt('<local-command-stdout>done</local-command-stdout>'), toolResult('a')]));
   assert.equal(renderTools(file), '✓ Bash ×1');
 });
 
 test('a task notification is not a prompt: the tools running then still show as running', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const notification = {
     type: 'user',
@@ -192,7 +190,7 @@ test('a task notification is not a prompt: the tools running then still show as 
 });
 
 test('every call in a parallel batch counts, however many run at once', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
   const ids = Array.from({ length: 25 }, (_, i) => `r${i}`);
   fs.writeFileSync(file, jsonl([...ids.map((id) => toolUse(id, 'Read')), ...ids.map((id) => toolResult(id))]));
@@ -222,7 +220,7 @@ test('tools has nothing to show without a transcript or tool calls', () => {
   assert.equal(reads, 0);
   assert.equal(renderTools('/t.jsonl', { reader }), '');
   // A missing transcript file is nothing to show, not a failure.
-  const dir = tmpDir();
+  const dir = tempDir();
   assert.equal(renderTools(path.join(dir, 'gone.jsonl'), { stateDir: path.join(dir, 'state') }), '');
 });
 
@@ -235,7 +233,7 @@ test('tool names and targets from the transcript print without their control cod
 });
 
 test('the program keeps its transcript state under CLAUDE_CONFIG_DIR', () => {
-  const dir = tmpDir();
+  const dir = tempDir();
   const configDir = path.join(dir, 'config');
   const file = path.join(dir, 'session.jsonl');
   fs.writeFileSync(file, jsonl([toolUse('a', 'Read', { file_path: path.join(dir, 'a.ts') }), toolResult('a')]));

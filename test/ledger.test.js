@@ -11,7 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { render, parseArgs, recordCost, withLock } = require('../dist/statusline.js');
 
-const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
+const { plain } = require('./helpers');
 
 // A fixed local noon on Wednesday 7 October 2026, so the week began on
 // Monday the 5th.
