@@ -100,12 +100,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       # Coverage counts the built lines the suites load in their own process
-      # and the lines their child processes run, as the CLI suites spawn
-      # dist/cli.js. Node's runner sets NODE_V8_COVERAGE for the suites, and
-      # test/helpers.js passes the suite's environment on to each spawned
-      # script, so Node writes that script's coverage too. A spawn that drops
-      # the environment drops its lines from the report. bash, named, runs
-      # with pipefail, so a failing suite fails the step through tee.
+      # and the lines their child processes run, as the suites that spawn a
+      # built script do, dist/cli.js among them. Node's runner sets
+      # NODE_V8_COVERAGE for the suites, and each spawn passes the suite's
+      # environment on, as runCli in test/helpers.js does, so Node writes the
+      # spawned script's coverage too. A spawn that drops the environment
+      # drops its lines from the report. bash, named, runs with pipefail, so
+      # a failing suite fails the step through tee.
       - name: Run the suite with coverage
         shell: bash
         run: |

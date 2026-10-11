@@ -40,7 +40,7 @@ function configFolder(settings) {
 // plugin version folder. The colour variables are only as `env` sets them, so
 // a NO_COLOR or FORCE_COLOR in the shell that runs the suite changes nothing.
 // The rest of the suite's environment passes through, NODE_V8_COVERAGE
-// included, so the Coverage job counts the lines the CLI runs here.
+// included, so the Coverage job counts the lines the build's CLI runs here.
 function runCli(dir, args, { cli = path.join(dist, 'cli.js'), env = {}, input } = {}) {
   const base = { ...process.env, CLAUDE_CONFIG_DIR: dir };
   for (const name of ['NO_COLOR', 'FORCE_COLOR', 'CLICOLOR_FORCE']) delete base[name];
