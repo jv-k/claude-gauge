@@ -85,14 +85,14 @@ test('the customise path covers rows, parts, segments, theme, labels and the tok
 });
 
 test('customising with Enter at every question keeps the defaults, which need no switches', async () => {
-  const io = scripted(['n', '', '', '', '', '', '', '', '', '']);
+  const io = scripted(['n', '', '', '', '', '', '', '', '', '', '']);
   const { preview } = fakePreview();
   assert.deepEqual(await runWizard(io, { preview }), { statusLine: [], tokenLine: [] });
-  assert.equal(io.questions.length, 10, 'two default rows: one question for each');
+  assert.equal(io.questions.length, 11, 'two default rows: one question for each');
 });
 
 test('an answer the wizard cannot use is asked again, with the reason', async () => {
-  const io = scripted(['maybe', 'n', '9', '1', 'ctx,bogus', ',', 'ctx', '7', '10', 'neon', 'mono', 'perhaps', 'y', 'y', '', 'y']);
+  const io = scripted(['maybe', 'n', '9', '1', 'ctx,bogus', ',', 'ctx', '7', '10', 'neon', 'mono', 'perhaps', 'y', 'y', '', '', 'y']);
   const { preview } = fakePreview();
   assert.deepEqual(await runWizard(io, { preview }), { statusLine: ['--show', 'ctx', '--segments', '10', '--theme', 'mono'], tokenLine: [] });
   assert.match(io.output, /Answer y or n/);
@@ -108,23 +108,23 @@ const enterAtStatusLine = ['n', '', '', '', '', '', ''];
 
 test('a yes to the token line asks for its parts: Enter writes no --show, and any other answer writes it', async () => {
   const { preview } = fakePreview();
-  const enter = scripted([...enterAtStatusLine, 'y', '', 'y']);
+  const enter = scripted([...enterAtStatusLine, 'y', '', '', 'y']);
   assert.deepEqual(await runWizard(enter, { preview }), { statusLine: [], tokenLine: [] });
-  const asked = enter.questions.at(-2);
+  const asked = enter.questions.at(-3);
   assert.match(asked, /Token line parts/);
   assert.match(asked, /req,out,ctx/, 'the shorter list is offered');
   assert.match(asked, /\[time,req,out,cache,ctx\] $/, 'all five parts in brackets');
 
-  const fewer = scripted([...enterAtStatusLine, 'y', 'req,out,ctx', 'y']);
+  const fewer = scripted([...enterAtStatusLine, 'y', 'req,out,ctx', '', 'y']);
   assert.deepEqual(await runWizard(fewer, { preview }), { statusLine: [], tokenLine: ['--show', 'req,out,ctx'] });
-  const spaced = scripted([...enterAtStatusLine, 'y', 'ctx, time ctx', 'y']);
+  const spaced = scripted([...enterAtStatusLine, 'y', 'ctx, time ctx', '', 'y']);
   assert.deepEqual(await runWizard(spaced, { preview }), { statusLine: [], tokenLine: ['--show', 'ctx,time'] });
-  const reordered = scripted([...enterAtStatusLine, 'y', 'ctx,time,req,out,cache', 'y']);
+  const reordered = scripted([...enterAtStatusLine, 'y', 'ctx,time,req,out,cache', '', 'y']);
   assert.deepEqual(await runWizard(reordered, { preview }), { statusLine: [], tokenLine: ['--show', 'ctx,time,req,out,cache'] });
 });
 
 test('an unknown token line part is asked again, and the message names it', async () => {
-  const io = scripted([...enterAtStatusLine, 'y', 'req,bogus', ',', 'out', 'y']);
+  const io = scripted([...enterAtStatusLine, 'y', 'req,bogus', ',', 'out', '', 'y']);
   const { preview } = fakePreview();
   assert.deepEqual(await runWizard(io, { preview }), { statusLine: [], tokenLine: ['--show', 'out'] });
   assert.match(io.output, /Unknown part: bogus\. The token line parts are time, req, out, cache, ctx\./);
@@ -137,30 +137,93 @@ test('a no to the token line asks nothing about its parts', async () => {
   const { preview } = fakePreview();
   assert.deepEqual(await runWizard(io, { preview }), { statusLine: [], tokenLine: null });
   assert.ok(!io.questions.some((q) => /Token line parts/.test(q)));
+  assert.ok(!io.questions.some((q) => /Context window/.test(q)));
+});
+
+test('a yes to the token line asks for its context window: Enter and 200k write no --window, and 1m writes it', async () => {
+  const { preview } = fakePreview();
+  const enter = scripted([...enterAtStatusLine, 'y', '', '', 'y']);
+  assert.deepEqual(await runWizard(enter, { preview }), { statusLine: [], tokenLine: [] });
+  const asked = enter.questions.at(-2);
+  assert.match(asked, /^Context window/);
+  assert.match(asked, /200k or 1m/, 'the two sizes are offered');
+  assert.match(asked, /\[200k\] $/, 'the window the token line assumes without a switch');
+  assert.match(enter.output, /cannot read the context window, so it assumes 200k/, 'says why the answer matters');
+  assert.ok(enter.questions.indexOf(asked) > enter.questions.findIndex((q) => /Token line parts/.test(q)), 'asked after the parts');
+  for (const answer of ['200k', '200K', '200000']) {
+    assert.deepEqual(await runWizard(scripted([...enterAtStatusLine, 'y', '', answer, 'y']), { preview }), { statusLine: [], tokenLine: [] }, answer);
+  }
+  for (const answer of ['1m', '1M', ' 1m ', '1000000']) {
+    const expected = ['--window', answer.trim().toLowerCase()];
+    assert.deepEqual(await runWizard(scripted([...enterAtStatusLine, 'y', '', answer, 'y']), { preview }), { statusLine: [], tokenLine: expected }, JSON.stringify(answer));
+  }
+  const both = scripted([...enterAtStatusLine, 'y', 'req,out,ctx', '1m', 'y']);
+  assert.deepEqual(await runWizard(both, { preview }), { statusLine: [], tokenLine: ['--show', 'req,out,ctx', '--window', '1m'] });
+  const other = scripted([...enterAtStatusLine, 'y', '', '500k', 'y']);
+  assert.deepEqual(await runWizard(other, { preview }), { statusLine: [], tokenLine: ['--window', '500k'] }, 'any size the token line reads');
+});
+
+test('a context window the token line cannot read is asked again', async () => {
+  const io = scripted([...enterAtStatusLine, 'y', '', 'huge', '0', '1m', 'y']);
+  const { preview } = fakePreview();
+  assert.deepEqual(await runWizard(io, { preview }), { statusLine: [], tokenLine: ['--window', '1m'] });
+  assert.match(io.output, /Answer a size such as 200k or 1m\./);
+  assert.equal(io.questions.filter((q) => /^Context window/.test(q)).length, 3);
+});
+
+test('configure: the context window starts from the installed --window, Enter keeps the switches, and a change replaces only --window', async () => {
+  const { preview } = fakePreview();
+  const tokenLine = ['--window', '1m', '--show', 'req,ctx', '--segments=10'];
+  const installed = { statusLine: [], tokenLine };
+  const kept = scripted([...enterAtStatusLine, '', '', '', 'y']);
+  assert.deepEqual(await runWizard(kept, { preview, installed }), { statusLine: [], tokenLine });
+  assert.match(kept.questions.at(-2), /\[1m\] $/, 'the window set up');
+  const same = scripted([...enterAtStatusLine, '', '', '1M', 'y']);
+  assert.deepEqual(await runWizard(same, { preview, installed }), { statusLine: [], tokenLine }, 'the same size keeps the switches as they are');
+  const back = scripted([...enterAtStatusLine, '', '', '200k', 'y']);
+  assert.deepEqual(await runWizard(back, { preview, installed }), { statusLine: [], tokenLine: ['--show', 'req,ctx', '--segments=10'] }, '200k needs no --window');
+  const other = scripted([...enterAtStatusLine, '', '', '500k', 'y']);
+  assert.deepEqual(await runWizard(other, { preview, installed }), { statusLine: [], tokenLine: ['--show', 'req,ctx', '--segments=10', '--window', '500k'] });
+  // Parts and window both changed: the new --show goes first, and the --window is dropped.
+  const both = scripted([...enterAtStatusLine, '', 'out', '200k', 'y']);
+  assert.deepEqual(await runWizard(both, { preview, installed }), { statusLine: [], tokenLine: ['--show', 'out', '--segments=10'] });
+
+  // The last --window, as the token line reads it, in the form it was written.
+  const last = { tokenLine: ['--window=200K', '--window', '1M'] };
+  const written = scripted([...enterAtStatusLine, '', '', '', 'y']);
+  assert.deepEqual(await runWizard(written, { preview, installed: last }), { statusLine: [], tokenLine: last.tokenLine });
+  assert.match(written.questions.at(-2), /\[1M\] $/);
+  assert.deepEqual(await runWizard(scripted([...enterAtStatusLine, '', '', '200k', 'y']), { preview, installed: last }), { statusLine: [], tokenLine: [] }, 'every --window goes');
+  // A --window the token line cannot read gives the window it assumes, 200k: Enter keeps the switch, and 200k drops it.
+  const unread = { tokenLine: ['--window', 'huge'] };
+  const unreadKept = scripted([...enterAtStatusLine, '', '', '', 'y']);
+  assert.deepEqual(await runWizard(unreadKept, { preview, installed: unread }), { statusLine: [], tokenLine: ['--window', 'huge'] });
+  assert.match(unreadKept.questions.at(-2), /\[200k\] $/);
+  assert.deepEqual(await runWizard(scripted([...enterAtStatusLine, '', '', '200k', 'y']), { preview, installed: unread }), { statusLine: [], tokenLine: [] });
 });
 
 test('configure: the token line parts start from the installed --show, Enter keeps the switches, and a change keeps the others', async () => {
   const { preview } = fakePreview();
   const tokenLine = ['--window', '1m', '--show', 'req,bogus,ctx', '--segments=10'];
   const installed = { statusLine: [], tokenLine };
-  const kept = scripted([...enterAtStatusLine, '', '', 'y']);
+  const kept = scripted([...enterAtStatusLine, '', '', '', 'y']);
   assert.deepEqual(await runWizard(kept, { preview, installed }), { statusLine: [], tokenLine });
-  assert.match(kept.questions.at(-2), /\[req,ctx\] $/, 'the parts the token line shows now');
+  assert.match(kept.questions.at(-3), /\[req,ctx\] $/, 'the parts the token line shows now');
 
-  const changed = scripted([...enterAtStatusLine, '', 'out', 'y']);
+  const changed = scripted([...enterAtStatusLine, '', 'out', '', 'y']);
   assert.deepEqual(await runWizard(changed, { preview, installed }), { statusLine: [], tokenLine: ['--show', 'out', '--window', '1m', '--segments=10'] });
 
-  const all = scripted([...enterAtStatusLine, '', 'time,req,out,cache,ctx', 'y']);
+  const all = scripted([...enterAtStatusLine, '', 'time,req,out,cache,ctx', '', 'y']);
   assert.deepEqual(await runWizard(all, { preview, installed }), { statusLine: [], tokenLine: ['--window', '1m', '--segments=10'] }, 'all five need no --show');
   for (const word of ['all', 'All']) {
-    const named = scripted([...enterAtStatusLine, '', word, 'y']);
+    const named = scripted([...enterAtStatusLine, '', word, '', 'y']);
     assert.deepEqual(await runWizard(named, { preview, installed }), { statusLine: [], tokenLine: ['--window', '1m', '--segments=10'] }, `${word} answers all five`);
   }
 
   // A --show with no part the token line knows shows all five.
-  const unknown = scripted([...enterAtStatusLine, '', '', 'y']);
+  const unknown = scripted([...enterAtStatusLine, '', '', '', 'y']);
   await runWizard(unknown, { preview, installed: { tokenLine: ['--show=bogus', '--window', '1m'] } });
-  assert.match(unknown.questions.at(-2), /\[time,req,out,cache,ctx\] $/);
+  assert.match(unknown.questions.at(-3), /\[time,req,out,cache,ctx\] $/);
 });
 
 // configure: the wizard starts from the switches set up now.
@@ -185,7 +248,7 @@ test('configure offers to keep the bars set up now, and a yes leaves both as the
 });
 
 test('configure: each question defaults to the installed value, and the switches it does not ask about stay', async () => {
-  const io = scripted(['n', '', '', '', '', '', '', '', 'y']);
+  const io = scripted(['n', '', '', '', '', '', '', '', '', 'y']);
   const { preview, calls } = fakePreview();
   const installed = {
     statusLine: ['--text', 'a b', '--show', 'ctx,bogus,5h', '--segments=10', '--frobnicate', '--theme', 'mono', '--no-labels', '--right', 'ctx'],
@@ -212,7 +275,7 @@ test('configure: the token line defaults to no when none is set up, and answers 
   const io = scripted(['n', '', '', '', '5', 'pastel', '', '', 'y']);
   assert.deepEqual(await runWizard(io, { preview, installed }), { statusLine: ['--theme', 'pastel', '--text', 'a b'], tokenLine: null });
   assert.match(io.questions[7], /token line.*\[y\/N\] $/);
-  assert.deepEqual(await runWizard(scripted(['n', '', '', '', '', '', '', 'y', '', 'y']), { preview, installed }), { statusLine: ['--segments', '10', '--text', 'a b'], tokenLine: [] });
+  assert.deepEqual(await runWizard(scripted(['n', '', '', '', '', '', '', 'y', '', '', 'y']), { preview, installed }), { statusLine: ['--segments', '10', '--text', 'a b'], tokenLine: [] });
   // Two rows asked for where one is set up: the second offers the default row.
   const rows = scripted(['n', '2', '', '', '', '', '', '', 'y']);
   await runWizard(rows, { preview, installed: { statusLine: ['--show', 'ctx'] } });
@@ -235,7 +298,7 @@ test('setup, or configure with no bar set up, starts from the factory defaults',
 
 test('a no at the last question changes nothing, and the end of the answers stops the wizard', async () => {
   const { preview } = fakePreview();
-  assert.equal(await runWizard(scripted(['n', '', '', '', '', '', '', '', '', 'n']), { preview }), null);
+  assert.equal(await runWizard(scripted(['n', '', '', '', '', '', '', '', '', '', 'n']), { preview }), null);
   await assert.rejects(runWizard(scripted([]), { preview }), EndOfAnswers);
   await assert.rejects(runWizard(scripted(['n', '2', 'ctx']), { preview }), EndOfAnswers);
 });
