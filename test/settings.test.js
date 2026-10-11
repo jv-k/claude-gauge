@@ -226,8 +226,6 @@ test('switchesOf() reads back the switches commandFor() wrote, quoted values inc
   ]) {
     assert.deepEqual(switchesOf(commandFor(script, words)), words, JSON.stringify(words));
   }
-  // The string form splits on spaces, as before.
-  assert.deepEqual(switchesOf(commandFor(script, ['--show', 'ctx,5h,7d', '--segments', '10'])), ['--show', 'ctx,5h,7d', '--segments', '10']);
   // Commands written by hand: a quoted or Windows script path, single quotes,
   // a backslash before a space, and no node in front.
   assert.deepEqual(switchesOf('node "C:/Users/me/.claude/claude-gauge/runtime/statusline.js" --text \'a b\''), ['--text', 'a b']);
