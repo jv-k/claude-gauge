@@ -148,6 +148,7 @@ test('a yes to the token line asks for its context window: Enter and 200k write 
   assert.match(asked, /^Context window/);
   assert.match(asked, /200k or 1m/, 'the two sizes are offered');
   assert.match(asked, /\[200k\] $/, 'the window the token line assumes without a switch');
+  assert.match(enter.output, /cannot read the context window, so it assumes 200k/, 'says why the answer matters');
   assert.ok(enter.questions.indexOf(asked) > enter.questions.findIndex((q) => /Token line parts/.test(q)), 'asked after the parts');
   for (const answer of ['200k', '200K', '200000']) {
     assert.deepEqual(await runWizard(scripted([...enterAtStatusLine, 'y', '', answer, 'y']), { preview }), { statusLine: [], tokenLine: [] }, answer);
@@ -195,9 +196,9 @@ test('configure: the context window starts from the installed --window, Enter ke
   assert.deepEqual(await runWizard(scripted([...enterAtStatusLine, '', '', '200k', 'y']), { preview, installed: last }), { statusLine: [], tokenLine: [] }, 'every --window goes');
   // A --window the token line cannot read gives the window it assumes, 200k: Enter keeps the switch, and 200k drops it.
   const unread = { tokenLine: ['--window', 'huge'] };
-  const kept2 = scripted([...enterAtStatusLine, '', '', '', 'y']);
-  assert.deepEqual(await runWizard(kept2, { preview, installed: unread }), { statusLine: [], tokenLine: ['--window', 'huge'] });
-  assert.match(kept2.questions.at(-2), /\[200k\] $/);
+  const unreadKept = scripted([...enterAtStatusLine, '', '', '', 'y']);
+  assert.deepEqual(await runWizard(unreadKept, { preview, installed: unread }), { statusLine: [], tokenLine: ['--window', 'huge'] });
+  assert.match(unreadKept.questions.at(-2), /\[200k\] $/);
   assert.deepEqual(await runWizard(scripted([...enterAtStatusLine, '', '', '200k', 'y']), { preview, installed: unread }), { statusLine: [], tokenLine: [] });
 });
 

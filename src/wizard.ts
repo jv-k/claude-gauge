@@ -2,10 +2,10 @@
 // switches: take the defaults in one answer, or walk through the status
 // line's rows and parts, its bar size, theme and labels, and the token line,
 // its parts and its context window, with a preview of the status line
-// redrawn after each answer. configure starts from the bars set up now: the first answer keeps
-// them, and each question offers the value set up. It returns the switches
-// for each bar, as words, for the CLI to write; it reads and writes no
-// settings itself.
+// redrawn after each answer. configure starts from the bars set up now: the
+// first answer keeps them, and each question offers the value set up. It
+// returns the switches for each bar, as words, for the CLI to write; it
+// reads and writes no settings itself.
 //
 // The questions go through a WizardIo, so a test can script the answers. The
 // preview renders the payload the status line saved last, else a sample.
@@ -159,13 +159,18 @@ function readParts<P extends string>(fallback: P[] | undefined, known: readonly 
 // reads them: all of them without a --show it can use.
 const tokenPartsOf = (switches: readonly string[]): TokenPart[] => parseTokenArgs(switches).show ?? [...TOKEN_PARTS];
 
+// The token line's `switches` without each `name` switch and its value, as
+// the token line reads them, so the rest stay as written.
+const without = (switches: readonly string[], name: string): string[] =>
+  readTokenSwitches(switches).filter((s) => s.name !== name).flatMap(({ words }) => words);
+
 // The token line's switches for `parts`. Parts the installed switches show
 // already keep those switches as they are. Other parts drop the installed
 // --show and keep the rest. All five parts, in order, need no --show; any
 // other list goes first, as --show <parts>.
 function tokenSwitchesFor(parts: TokenPart[], installed: string[]): string[] {
   if (same(parts, tokenPartsOf(installed))) return installed;
-  const others = readTokenSwitches(installed).filter(({ name }) => name !== '--show').flatMap(({ words }) => words);
+  const others = without(installed, '--show');
   return same(parts, TOKEN_PARTS) ? others : ['--show', parts.join(','), ...others];
 }
 
@@ -187,20 +192,20 @@ function tokenWindowOf(switches: readonly string[]): string | undefined {
   return parseSize(value) > 0 ? value : undefined;
 }
 
-// The token line's switches for a context window answer. The size the
+// The token line's switches for a context window `size`. The size the
 // installed --window gives keeps those switches as they are. Another size
 // drops the installed --window and keeps the rest, then adds the size as
 // --window <size>, unless it is the 200k the token line assumes without one.
-function tokenWindowFor(size: string, installed: string[]): string[] {
+function tokenSwitchesForWindow(size: string, installed: string[]): string[] {
   if (parseSize(size) === parseSize(tokenWindowOf(installed))) return installed;
-  const others = readTokenSwitches(installed).filter(({ name }) => name !== '--window').flatMap(({ words }) => words);
+  const others = without(installed, '--window');
   return parseSize(size) === DEFAULT_WINDOW ? others : [...others, '--window', size];
 }
 
 // Reads a context window size as the token line reads --window, in lower
 // case: 200k, 1m or a count. Enter gives undefined, which keeps the switches
 // as they are.
-const readWindow = (answer: string): string | undefined | { retry: string } => {
+const readTokenWindow = (answer: string): string | undefined | { retry: string } => {
   if (!answer) return undefined;
   return parseSize(answer) > 0 ? answer.toLowerCase() : { retry: 'Answer a size such as 200k or 1m.' };
 };
@@ -270,8 +275,9 @@ async function runWizard(io: WizardIo, { preview, installed }: WizardOptions): P
     const fallback = tokenPartsOf(start.tokenSwitches);
     const question = `Token line parts: all, req,out,ctx, or your own list from ${TOKEN_PARTS.join(', ')}? [${fallback.join(',')}] `;
     tokenSwitches = tokenSwitchesFor(await askFor(io, question, readTokenParts(fallback)), start.tokenSwitches);
-    const window = await askFor(io, `Context window, 200k or 1m? [${tokenWindowOf(start.tokenSwitches) ?? '200k'}] `, readWindow);
-    if (window !== undefined) tokenSwitches = tokenWindowFor(window, tokenSwitches);
+    io.write('The token line cannot read the context window, so it assumes 200k until the context grows past it.\n');
+    const window = await askFor(io, `Context window, 200k or 1m? [${tokenWindowOf(start.tokenSwitches) ?? '200k'}] `, readTokenWindow);
+    if (window !== undefined) tokenSwitches = tokenSwitchesForWindow(window, tokenSwitches);
   }
 
   if (!(await confirm(io, 'Write these choices?', true))) return null;
