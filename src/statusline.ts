@@ -153,8 +153,8 @@ const partRegistry = {
   models: { description: 'per-model weekly usage, as 7d shows the week', build: modelsPart },
   limit: { description: 'a notice naming each exhausted window and its reset', build: limitPart },
   ram: { description: 'system memory in use: percentage, bar and amount', build: ramPart },
-  text: { description: 'fixed text, with --text', build: ({ config, theme }) => outsideText(config.text, theme) },
-  command: { description: 'first line of output of a shell command, with --command', build: ({ theme, commandOutput }) => outsideText(commandOutput(), theme) },
+  text: { description: 'fixed text, with --text', build: textPart },
+  command: { description: 'first line of output of a shell command, with --command', build: commandPart },
 } satisfies Record<string, PartSpec>;
 
 type Part = keyof typeof partRegistry;
@@ -1197,8 +1197,8 @@ function envPart({ config, theme, setup: setupOf }: PartContext): string {
 }
 
 // The plan, with the signed-in user after it: Claude Max 20x (me@example.com).
-function planPart({ theme, setup }: PartContext): string {
-  const { plan, user } = setup();
+function planPart({ theme, setup: setupOf }: PartContext): string {
+  const { plan, user } = setupOf();
   const shown = plan && user ? `${plan} (${user})` : plan || user;
   return shown ? `${theme.muted}${shown}${RESET}` : '';
 }
@@ -1246,6 +1246,14 @@ function ramPart({ config, theme, memory: memoryOf }: PartContext): string {
 function outsideText(raw: string, theme: Theme): string {
   const text = sanitise(raw);
   return text ? `${theme.muted}${text}${RESET}` : '';
+}
+
+function textPart({ config, theme }: PartContext): string {
+  return outsideText(config.text, theme);
+}
+
+function commandPart({ theme, commandOutput: commandOutputOf }: PartContext): string {
+  return outsideText(commandOutputOf(), theme);
 }
 
 function versionPart({ data, theme }: PartContext): string {
@@ -1335,8 +1343,8 @@ function shortTarget(name: string, target: string, cwd: string): string {
 
 // The tool running now, with its target, then the completed tools used most,
 // with counts: ◐ Edit src/a.ts ✓ Read ×12 ✓ Bash ×3.
-function toolsPart({ theme, cwd, activity }: PartContext): string {
-  const { running, completed } = activity().tools;
+function toolsPart({ theme, cwd, activity: activityOf }: PartContext): string {
+  const { running, completed } = activityOf().tools;
   const items: string[] = [];
   const now = running.at(-1);
   if (now) items.push(`${theme.accent}◐ ${now.name}${now.target ? ` ${shortTarget(now.name, now.target, cwd)}` : ''}${RESET}`);
@@ -1366,8 +1374,8 @@ function agentItem(agent: AgentRun, theme: Theme, nowMs: number): string {
 
 // The subagents running now, oldest first, then those finished in the last
 // AGENT_LINGER_MS, newest first, up to AGENTS_SHOWN in all.
-function agentsPart({ theme, nowMs, activity }: PartContext): string {
-  const { agents } = activity();
+function agentsPart({ theme, nowMs, activity: activityOf }: PartContext): string {
+  const { agents } = activityOf();
   const running = agents.filter((a) => a.endedAt === undefined);
   const finished = agents
     .filter((a): a is AgentRun & { endedAt: number } => a.endedAt !== undefined && nowMs - a.endedAt < AGENT_LINGER_MS)
@@ -1381,8 +1389,8 @@ function agentsPart({ theme, nowMs, activity }: PartContext): string {
 // The todo in progress, by the form Claude Code shows while it runs, then
 // how many todos are done: ◐ Writing the tests 1/3. With none in progress,
 // todos 1/3, and ✓ todos 3/3 once all are done.
-function todosPart({ config, theme, activity }: PartContext): string {
-  const { todos } = activity();
+function todosPart({ config, theme, activity: activityOf }: PartContext): string {
+  const { todos } = activityOf();
   if (!todos.length) return '';
   const done = todos.filter((t) => t.status === 'completed').length;
   const count = `${done}/${todos.length}`;
@@ -1419,22 +1427,22 @@ function skillsPart({ config, theme, activity: activityOf }: PartContext): strin
 
 // How many times the conversation was compacted: compactions 2. Nothing
 // before the first.
-function compactionsPart({ config, theme, activity }: PartContext): string {
-  const { compactions } = activity();
+function compactionsPart({ config, theme, activity: activityOf }: PartContext): string {
+  const { compactions } = activityOf();
   return compactions > 0 ? `${theme.muted}${labelOf(config, 'compactions')}${compactions}${RESET}` : '';
 }
 
 // The time since Claude last replied: reply 3m ago. A reply stamped ahead of
 // this machine's clock counts as just now.
-function replyPart({ config, theme, nowMs, activity }: PartContext): string {
-  const { lastReplyAt } = activity();
+function replyPart({ config, theme, nowMs, activity: activityOf }: PartContext): string {
+  const { lastReplyAt } = activityOf();
   if (lastReplyAt === undefined) return '';
   return `${theme.muted}${labelOf(config, 'reply')}${formatDuration(Math.max(0, nowMs - lastReplyAt))} ago${RESET}`;
 }
 
 // The output speed of the last response: 84 tok/s, or 6.3 tok/s below ten.
-function speedPart({ theme, activity }: PartContext): string {
-  const { speed } = activity();
+function speedPart({ theme, activity: activityOf }: PartContext): string {
+  const { speed } = activityOf();
   if (speed === undefined) return '';
   return `${theme.muted}${speed < 10 ? speed.toFixed(1) : Math.round(speed)} tok/s${RESET}`;
 }
