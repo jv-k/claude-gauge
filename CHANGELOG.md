@@ -1,3 +1,35 @@
+## 1.2.0 (2026-10-23)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.1.0 -> 1.2.0
+- chore(dist): build dist from a36f438 [auto]
+- feat: clear the defaults preview when the wizard starts its questions, and show piped answers
+- feat: give the claude-gauge command VerBump's look, redraw the preview in place, and star on Enter
+- refactor: read a plugin manifest's files through one top-level reader
+- feat: count the hooks and MCP servers of plugins turned on in env
+- refactor: declare the CLI's bar pair once, and narrow the PerBar comment
+- refactor: build every status line and token line pair from one PerBar type
+- refactor: give the text and command parts their own builders, and one shape for the lazy readers
+- refactor: pass the part context to every builder, so a new render input needs no signature change
+- refactor: share the .git walk between the branch and the local settings root
+- fix: read the local settings file from the repository root, as Claude Code does
+- docs: name the bar switches and the usage after a mistake in the wordmark text
+- docs: say where the wordmark prints and which variables colour it
+- chore: credit every suite that spawns a built script with the coverage it adds
+- chore: say that the coverage report counts the lines the CLI suites spawn
+- test: drop the string form check from the settings suite
+- refactor: name the bars' switches type once in the command
+- refactor: split a bar switch value into words where the command reads its arguments
+- refactor: say why the context window answer matters, and drop a token line switch in one place
+- feat: ask for the token line's context window in the setup wizard
+- refactor: say whether a token line switch takes a value with a boolean, not a placeholder
+- refactor: name each token line switch once, in one table
+- test: share the CLI result check, the settings entries and the wizard driver too
+- test: move the helpers the suites copied into one shared module
+- chore: test on Node 24, the Node the release job publishes on
+- Merge pull request #100 from jv-k/ci/test-integration-branches
+- Merge pull request #98 from jv-k/docs/reference-toc
+- chore: test pull requests into any integration branch, not only integration/1.0
+- docs: add a table of contents to the reference
+
 ## 1.1.0 (2026-10-10)
 - chore: updated package.json, updated CHANGELOG.md, bumped 1.0.0 -> 1.1.0
 - chore(dist): build dist from fd0def9 [auto]
