@@ -10,6 +10,7 @@
 //   claude-gauge configure --no-token-line
 //   claude-gauge uninstall
 //   claude-gauge update
+//   claude-gauge update --dry-run
 //
 // setup and configure with no bar switches ask the questions themselves,
 // with a preview of the status line after each answer (wizard.ts). With
@@ -36,7 +37,7 @@ const USAGE = `Usage: claude-gauge <setup | configure | uninstall | update> [swi
   setup        add the status line and the token line to Claude Code's settings
   configure    change the switches of a bar that setup added, or take it out
   uninstall    take claude-gauge out, and put back the status line it replaced
-  update       refresh the copy of claude-gauge that the settings run
+  update       update claude-gauge with the tool that installed it
 
 Switches for setup and configure:
   --status-line <switches>   add the status line, run with these switches ("" for none)
@@ -45,6 +46,9 @@ Switches for setup and configure:
   --no-token-line            leave the token line out
   --replace                  replace a status line that is not claude-gauge's
   --yes                      setup only: add each bar not chosen above, with no switches
+
+Switches for update:
+  --dry-run                  print the commands that update would run, and run nothing
 
 With none of the bar switches above, setup and configure ask which bars and
 parts you want, and show the status line after each answer.
@@ -61,6 +65,9 @@ const usage = (stream) => banner(stream) + USAGE;
 // A mistake in the command line: exit 2, with the usage.
 class UsageError extends Error {
 }
+// A tool that update needs is not on PATH: exit 2, with no usage.
+class MissingTool extends Error {
+}
 const COMMANDS = ['setup', 'configure', 'uninstall', 'update'];
 // The words of a bar switch's value, `--show ctx,5h,7d --segments 10`, split
 // at runs of white space with empty words dropped, so that "" is no switches.
@@ -74,13 +81,14 @@ const SWITCHES = [
     { names: ['--no-token-line'], commands: ['setup', 'configure'], apply: (args) => { args.tokenLine = null; } },
     { names: ['--replace'], commands: ['setup', 'configure'], apply: (args) => { args.replace = true; } },
     { names: ['--yes', '-y'], commands: ['setup'], apply: (args) => { args.yes = true; } },
+    { names: ['--dry-run'], commands: ['update'], apply: (args) => { args.dryRun = true; } },
     { names: ['--help', '-h'], commands: [...COMMANDS], apply: (args) => { args.help = true; } },
 ];
 // Unlike the two bars, which ignore what they do not know so that a typo
 // never blanks the status line, the command refuses an unknown word: it
 // writes the user's settings, and a typo there should stop it.
 function parseArgs(argv) {
-    const args = { help: false, replace: false, yes: false };
+    const args = { help: false, replace: false, yes: false, dryRun: false };
     const seen = [];
     for (let i = 0; i < argv.length; i++) {
         const [name, inline] = argv[i].split(/=(.*)/s);
@@ -341,8 +349,91 @@ function uninstall() {
     const restored = next.found === 'claude-gauge' && saved ? s.ok(`Put back the previous status line: ${s.value(saved.command ?? JSON.stringify(saved))}`) : '';
     say(s.pill('Uninstall'), s.ok(`Took claude-gauge out of ${s.value(file)}.`), restored, settingsBackup ? s.info(`Backup of the previous settings: ${s.value(settingsBackup)}`) : '', s.info(`The scripts stay in ${s.value(stateDir())}. Delete that folder to remove them too.`), s.info('Start a new Claude Code session to pick up the changes.'));
 }
-function update() {
+// The tools that install claude-gauge, and the release that update asks
+// each one for.
+const PACKAGE = '@jv-k/claude-gauge';
+const PLUGIN = 'claude-gauge@claude-gauge';
+// Set on the claude-gauge that update runs from the newest release, so that
+// one copies its own scripts into the state folder and runs nothing else.
+const IN_PLACE = 'CLAUDE_GAUGE_UPDATE_IN_PLACE';
+// Windows runs npm, npx and claude through their .cmd shims, which only a
+// shell finds. The words are fixed, so the shell splits nothing it should not.
+const viaShell = (program) => process.platform === 'win32' && program !== process.execPath;
+const onPath = (program) => (0, node_child_process_1.spawnSync)(program, ['--version'], { stdio: 'ignore', shell: viaShell(program) }).status === 0;
+// Whether this command runs from a global npm install of the package.
+// A link that npm link made points at a checkout, which update copies from
+// in place, as it does any other folder.
+function globalInstall() {
+    if (path.basename(path.dirname(path.dirname(packageRoot))) !== 'node_modules')
+        return false;
+    const root = (0, node_child_process_1.spawnSync)('npm', ['root', '-g'], { encoding: 'utf8', shell: viaShell('npm') });
+    if (root.status !== 0)
+        return false;
+    const installed = path.join(root.stdout.trim(), ...PACKAGE.split('/'));
+    try {
+        if (fs.lstatSync(installed).isSymbolicLink())
+            return false;
+    }
+    catch {
+        return false;
+    }
+    return sameFolder(installed, packageRoot);
+}
+// The commands that update the copy in `runtime/`, or none when this command
+// copies from itself: a checkout, or the newest release that a parent update
+// ran. npx keeps each version in a cache folder under _npx/.
+function copySteps() {
+    if (process.env[IN_PLACE])
+        return undefined;
+    const env = { [IN_PLACE]: '1' };
+    if (packageRoot.split(path.sep).includes('_npx')) {
+        return { method: 'npx', steps: [{ argv: ['npx', '--yes', `${PACKAGE}@latest`, 'update'], env }] };
+    }
+    if (globalInstall()) {
+        return {
+            method: 'A global npm install',
+            steps: [{ argv: ['npm', 'install', '-g', `${PACKAGE}@latest`] }, { argv: [process.execPath, path.join(packageRoot, 'dist', 'cli.js'), 'update'], env }],
+        };
+    }
+    return undefined;
+}
+const shown = (step) => step.argv.map((w) => (/[\s"']/.test(w) ? JSON.stringify(w) : w)).join(' ');
+// Runs `steps` in turn, with the terminal, after it has checked that each
+// program is on PATH. A step that fails stops the rest.
+function runSteps(method, steps, dryRun) {
+    const s = (0, styles_1.stylesFor)(process.stdout);
+    say(s.pill('Update'), s.info(`${method} installed claude-gauge. ${dryRun ? 'Would run:' : 'Running:'}`), ...steps.map((step) => s.trace(s.value(shown(step)))));
+    if (dryRun)
+        return;
+    const missing = steps.find((step) => !path.isAbsolute(step.argv[0]) && !onPath(step.argv[0]));
+    if (missing)
+        throw new MissingTool(`${missing.argv[0]} is not on PATH, so run ${shown(missing)} by hand.`);
+    for (const step of steps) {
+        const [program, ...rest] = step.argv;
+        const r = (0, node_child_process_1.spawnSync)(program, rest, { stdio: 'inherit', env: { ...process.env, ...step.env }, shell: viaShell(program) });
+        if (r.status !== 0)
+            throw new Error(`${shown(step)} failed.`);
+    }
+}
+// The scripts that the settings run, for update. scripts() goes by where this
+// command runs from, so npx on a plugin or clone install would find no copy
+// in runtime/: the launcher or the clone in the state folder names the tool.
+function installedScripts() {
     const where = scripts();
+    if (where.route !== 'copy' || fs.existsSync(path.join(where.dir, 'statusline.js')))
+        return where;
+    const launcher = path.join(stateDir(), 'launcher');
+    if (fs.existsSync(path.join(launcher, 'statusline.js')))
+        return { route: 'launcher', dir: launcher };
+    if (fs.existsSync(path.join(stateDir(), '.git')))
+        return { route: 'clone', dir: path.join(stateDir(), 'dist') };
+    return where;
+}
+// Updates claude-gauge with the tool that installed it, as the settings run
+// it: the plugin with Claude Code, an npx or global npm copy with npm. A git
+// clone, like any checkout, is the user's to pull.
+function update(dryRun) {
+    const where = installedScripts();
     const { dir } = where;
     const s = (0, styles_1.stylesFor)(process.stdout);
     if (where.route === 'clone') {
@@ -350,11 +441,22 @@ function update() {
         return;
     }
     if (where.route === 'launcher') {
-        say(s.pill('Update'), s.info(`This claude-gauge is the Claude Code plugin. Update it with ${s.value('/plugin')} in Claude Code.`), s.trace(`The settings run ${s.value(dir)}, which runs the newest installed version, so an update needs no setup.`));
+        runSteps('The Claude Code plugin', [{ argv: ['claude', 'plugin', 'update', PLUGIN] }], dryRun);
+        if (!dryRun)
+            say(s.ok(`Updated the plugin. The settings run ${s.value(dir)}, which runs the newest installed version, so the next new session runs it with no setup.`));
         return;
     }
     if (!fs.existsSync(path.join(dir, 'statusline.js'))) {
         throw new Error(`There is no copy of claude-gauge in ${dir} to update. Run claude-gauge setup first.`);
+    }
+    const fetch = copySteps();
+    if (fetch) {
+        runSteps(fetch.method, fetch.steps, dryRun);
+        return;
+    }
+    if (dryRun) {
+        say(s.pill('Update'), s.info(`Would copy claude-gauge ${s.value(version())} into ${s.value(dir)}.`));
+        return;
     }
     copyRuntime(dir);
     say(s.pill('Update'), s.ok(`Updated claude-gauge in ${s.value(dir)} to ${s.value(version())}.`));
@@ -391,7 +493,7 @@ async function main(argv) {
                 uninstall();
                 break;
             case 'update':
-                update();
+                update(args.dryRun);
                 break;
         }
         return 0;
@@ -399,6 +501,10 @@ async function main(argv) {
     catch (err) {
         if (err instanceof UsageError) {
             process.stderr.write(`${failure(err.message)}\n${usage(process.stderr)}`);
+            return 2;
+        }
+        if (err instanceof MissingTool) {
+            process.stderr.write(failure(err.message));
             return 2;
         }
         process.stderr.write(failure(err.message));
