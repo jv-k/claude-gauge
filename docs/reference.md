@@ -172,7 +172,7 @@ A part shows no link when its address is not known, for example a `branch` on an
 | `4 req` | API requests made since your last prompt, subagents included. |
 | `out 3.4k (1.2k think)` | Output tokens, and how many of them were thinking. |
 | `cache w6.5k r1.69M` | Prompt-cache writes and reads. |
-| `ctx 43% ▓▓░░░ 427k` | The context the last request carried, as a share of the window and as a bar. |
+| `ctx 43% ▓▓░░░ 86.0k` | The context the last request carried, as a share of the window and as a bar. |
 
 **Requests.** One request is one model call, so each tool round trip counts as one request. With `--latest`, the count leaves out the request that writes the final reply, because that request is still running. As a Stop hook, the count includes every request.
 
@@ -343,7 +343,7 @@ For the second way, keep the settings entries above and add one hook per bar you
 "hooks": {
   "SessionStart": [
     { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/dist/statusline.js --instruct" } ] },
-    { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/dist/tokenline.js --instruct --show req,out,cache,ctx" } ] }
+    { "hooks": [ { "type": "command", "command": "node ~/.claude/claude-gauge/dist/tokenline.js --instruct --show req,out,cache" } ] }
   ]
 }
 ```
@@ -355,10 +355,10 @@ The hook runs when a session starts, resumes, is cleared with `/clear`, or compa
 ```text
 ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓▓░┃░ → 3d
 11:10 │ 1h12m │ jv-k/claude-gauge │ ⎇ main* ↑1 │ Opus 5.5 │ effort high
-4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
+4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M
 ```
 
-Each hook takes its bar's usual switches, such as `--show` and `--segments`, and passes them on to the command it names. The token line hook above shows no `time`, because the status line's second row starts with it. On a 1M-context model, add `--window 1m` to both, for the reason in [Token line options](#token-line-options). Each reply costs one or two short tool calls more.
+Each hook takes its bar's usual switches, such as `--show` and `--segments`, and passes them on to the command it names. The token line hook above shows no `time` and no `ctx`, because the status line shows both: `ctx` starts its first row and `time` starts its second. On a 1M-context model, add `--window 1m` to both, for the reason in [Token line options](#token-line-options). Each reply costs one or two short tool calls more.
 
 `--latest` finds the calling session by the `CLAUDE_CODE_SESSION_ID` variable, which Claude Code sets for the commands it runs. Without that variable, it takes the newest transcript of the current folder. It prints no colours, because a reply shows colour codes as junk.
 

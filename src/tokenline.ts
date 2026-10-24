@@ -5,7 +5,7 @@
 // Reports the tokens spent since your last prompt, from the session
 // transcript, as one compact line:
 //
-//   12:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
+//   12:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 86.0k
 //
 // Two ways to run it:
 //   - as a Stop hook: Claude Code pipes the hook payload on stdin and shows
