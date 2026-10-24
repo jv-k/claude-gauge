@@ -232,7 +232,7 @@ The `claude-gauge` command has four commands:
 | `claude-gauge setup` | Adds the status line and the token line. |
 | `claude-gauge configure` | Changes the switches of a bar that setup added, adds the missing one, or takes one out. |
 | `claude-gauge uninstall` | Takes claude-gauge out of your settings and puts back the status line it replaced. |
-| `claude-gauge update` | Copies the scripts of the version you run into `~/.claude/claude-gauge/runtime/`, and keeps your switches. |
+| `claude-gauge update` | Updates claude-gauge with the tool that installed it, and keeps your switches. See [Update](#update). |
 
 `configure` starts its questions from the bars you set up. The first question keeps them as they are, and each later question offers your current value. Switches that it does not ask about, such as `--text`, stay as they are.
 
@@ -246,6 +246,7 @@ The `claude-gauge` command has four commands:
 | `--no-token-line` | Leaves the token line out, or takes it out. |
 | `--replace` | Replaces a status line that is not claude-gauge's. Without it, a command with bar switches stops rather than replace it. |
 | `--yes` | With `setup` only: adds each bar that the switches above do not name, with the defaults. |
+| `--dry-run` | With `update` only: prints the commands that `update` would run, and runs nothing. |
 
 For example, both bars with the defaults, and then 10-cell bars on the status line:
 
@@ -516,21 +517,24 @@ Unknown switches and part names are ignored, so a typo never breaks your status 
 
 ## Update
 
-As a plugin, claude-gauge updates with `/plugin`, from the **Marketplaces** tab, or with `claude plugin update claude-gauge@claude-gauge` in your shell. The next new session runs the new version, with no setup. Auto-update is off for marketplaces other than Anthropic's, and the **Marketplaces** tab can turn it on.
-
-From npm, run `update` from the newest version:
+Run `update`. It finds the tool that installed claude-gauge, runs that tool's upgrade, and keeps your switches:
 
 ```sh
-npx @jv-k/claude-gauge@latest update
+npx @jv-k/claude-gauge update
 ```
 
-It copies the new scripts over the old ones in `~/.claude/claude-gauge/runtime/` and keeps your switches, so the next render runs the new version. After a global install, run `npm install -g @jv-k/claude-gauge@latest`, then `claude-gauge update`.
+| Installed with | `update` runs | Then |
+| --- | --- | --- |
+| The plugin | `claude plugin update claude-gauge@claude-gauge` | The launcher runs the newest installed version, so the next new session runs it with no setup. |
+| npx | `npx --yes @jv-k/claude-gauge@latest update` | The newest release copies its scripts over the old ones in `~/.claude/claude-gauge/runtime/`, so the next render runs it. |
+| `npm install -g` | `npm install -g @jv-k/claude-gauge@latest`, then the new version's `update` | As for npx. |
+| A git clone | Nothing | It prints `git -C ~/.claude/claude-gauge pull` for you to run. |
 
-From a clone:
+As a plugin, claude-gauge also updates from Claude Code: run `/plugin`, then open the **Marketplaces** tab. Auto-update is off for marketplaces other than Anthropic's, and that tab can turn it on.
 
-```sh
-git -C ~/.claude/claude-gauge pull
-```
+`update --dry-run` prints the commands and runs nothing. `update` exits with 0 when it updated claude-gauge, 1 when a command failed, and 2 when `claude`, `npm` or `npx` is not on your `PATH`. Then run the command that it printed by hand.
+
+From any other folder, such as a checkout that you built, `update` copies the scripts of that folder into `~/.claude/claude-gauge/runtime/`.
 
 If your settings still name `~/.claude/claude-gauge/statusline.js` or `tokenline.js` from before the scripts moved into `dist/`, change each `command` to the `dist/` path shown in [By hand](#by-hand).
 

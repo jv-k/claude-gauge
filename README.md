@@ -115,7 +115,7 @@ Each reply then ends with the bars, as in [How it looks](#how-it-looks). The tok
 | Plugin | npm | Effect |
 | --- | --- | --- |
 | `/claude-gauge:configure` | `npx @jv-k/claude-gauge configure` | Changes the parts and switches of the bars. |
-| `/plugin`, then **Marketplaces** | `npx @jv-k/claude-gauge@latest update` | Updates claude-gauge and keeps your switches. |
+| `/plugin`, then **Marketplaces** | `npx @jv-k/claude-gauge update` | Updates claude-gauge with the tool that installed it, and keeps your switches. |
 | `/claude-gauge:uninstall` | `npx @jv-k/claude-gauge uninstall` | Removes claude-gauge and puts back the status line it replaced. |
 
 ## Upgrading from claude-hud

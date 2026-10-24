@@ -81,4 +81,24 @@ function usageSwitches(source) {
   return [...usage[1].matchAll(new RegExp(`^ +(?:-[a-z0-9], +)?(${SWITCH})`, 'gm'))].map((m) => m[1]);
 }
 
-module.exports = { root, dist, plain, tempDir, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, cliSource, switchesIn, switchAt, usageSwitches };
+// A copy of the built package in `folder`: dist/ and package.json, as npm
+// installs it. Returns the path of its CLI.
+function packageAt(folder) {
+  fs.mkdirSync(path.join(folder, 'dist'), { recursive: true });
+  for (const f of fs.readdirSync(dist)) fs.copyFileSync(path.join(dist, f), path.join(folder, 'dist', f));
+  fs.copyFileSync(path.join(root, 'package.json'), path.join(folder, 'package.json'));
+  return path.join(folder, 'dist', 'cli.js');
+}
+
+// A folder holding a fake `name` that logs each call's arguments, one call a
+// line, and exits with `status`. `body` runs first, as sh, to answer a call
+// the test needs answered. The fakes are shell scripts, so their tests skip
+// on Windows.
+function fakeTool(name, { status = 0, body = '' } = {}) {
+  const bin = tempDir('claude-gauge-bin-');
+  const log = path.join(bin, `${name}.log`);
+  fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\necho "$*" >> '${log}'\nexit ${status}\n`, { mode: 0o755 });
+  return { bin, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []) };
+}
+
+module.exports = { root, dist, plain, tempDir, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, cliSource, switchesIn, switchAt, usageSwitches, packageAt, fakeTool };
