@@ -14,7 +14,7 @@ const path = require('node:path');
 const { commandFor } = require('../dist/settings.js');
 const { colorEnabled } = require('../dist/wordmark.js');
 
-const { root, dist, plain, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, tempDir } = require('./helpers');
+const { root, dist, plain, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, tempDir, packageAt, fakeTool } = require('./helpers');
 
 const backupsIn = (dir) => fs.readdirSync(dir).filter((f) => /^settings\.json\.claude-gauge-.+\.bak$/.test(f)).sort();
 const savedStatusLine = (dir) => path.join(dir, 'claude-gauge', '.state', 'previous-statusline.json');
@@ -186,6 +186,78 @@ test('update refreshes the runtime copy', () => {
   assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(path.join(dist, 'statusline.js'), 'utf8'));
 });
 
+const posixOnly = { skip: process.platform === 'win32' && 'the fake tools are shell scripts' };
+
+// PATH holds only `bin`, so the tools that update runs are the test's fakes.
+const pathOf = (bin) => ({ PATH: bin, Path: bin });
+
+test('update from npx runs the newest release, which copies its scripts in place', posixOnly, () => {
+  const dir = configFolder();
+  const cli = packageAt(path.join(tempDir(), '_npx', 'a1b2', 'node_modules', '@jv-k', 'claude-gauge'));
+  ok(runCli(dir, ['setup', '--yes'], { cli }));
+  const npx = fakeTool('npx', { body: '[ "$1" = --yes ] && echo "in place: $CLAUDE_GAUGE_UPDATE_IN_PLACE" >> "$0.log"' });
+
+  const dry = runCli(dir, ['update', '--dry-run'], { cli, env: pathOf(npx.bin) });
+  ok(dry);
+  assert.match(dry.stdout, /npx installed claude-gauge\. Would run:\n.*npx --yes @jv-k\/claude-gauge@latest update/);
+  assert.deepEqual(npx.calls(), []);
+
+  ok(runCli(dir, ['update'], { cli, env: pathOf(npx.bin) }));
+  assert.deepEqual(npx.calls(), ['--version', 'in place: 1', '--yes @jv-k/claude-gauge@latest update']);
+
+  // The release that npx runs has the variable set, and copies itself.
+  const copy = path.join(runtimeOf(dir), 'statusline.js');
+  fs.writeFileSync(copy, '// an older release\n');
+  ok(runCli(dir, ['update'], { cli, env: { ...pathOf(npx.bin), CLAUDE_GAUGE_UPDATE_IN_PLACE: '1' } }));
+  assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(path.join(dist, 'statusline.js'), 'utf8'));
+  assert.equal(npx.calls().length, 3);
+});
+
+test('update from a global npm install upgrades it, then copies the new scripts in', posixOnly, () => {
+  const dir = configFolder();
+  const modules = path.join(tempDir(), 'lib', 'node_modules');
+  const cli = packageAt(path.join(modules, '@jv-k', 'claude-gauge'));
+  ok(runCli(dir, ['setup', '--yes'], { cli }));
+  const npm = fakeTool('npm', { body: `[ "$1" = root ] && echo '${modules}' && exit 0` });
+  const copy = path.join(runtimeOf(dir), 'statusline.js');
+  fs.writeFileSync(copy, '// an older release\n');
+
+  const r = runCli(dir, ['update'], { cli, env: pathOf(npm.bin) });
+  ok(r);
+  assert.deepEqual(npm.calls(), ['--version', 'install -g @jv-k/claude-gauge@latest']);
+  assert.match(r.stdout, /A global npm install installed claude-gauge\. Running:/);
+  assert.match(r.stdout, /Updated claude-gauge in /);
+  assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(path.join(dist, 'statusline.js'), 'utf8'));
+});
+
+test('update exits 2 when the tool is not on PATH, and 1 when the tool fails', posixOnly, () => {
+  const dir = configFolder();
+  const cli = packageAt(path.join(tempDir(), '_npx', 'a1b2', 'node_modules', '@jv-k', 'claude-gauge'));
+  ok(runCli(dir, ['setup', '--yes'], { cli }));
+
+  const missing = runCli(dir, ['update'], { cli, env: pathOf(tempDir()) });
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /npx is not on PATH, so run npx --yes @jv-k\/claude-gauge@latest update by hand\./);
+  assert.doesNotMatch(missing.stderr, /Usage:/);
+
+  const failing = fakeTool('npx', { status: 1, body: '[ "$1" = --version ] && exit 0' });
+  const failed = runCli(dir, ['update'], { cli, env: pathOf(failing.bin) });
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /npx --yes @jv-k\/claude-gauge@latest update failed\./);
+});
+
+test('update --dry-run from a checkout names the copy and changes nothing', () => {
+  const dir = configFolder();
+  ok(runCli(dir, ['setup', '--yes']));
+  const copy = path.join(runtimeOf(dir), 'statusline.js');
+  fs.writeFileSync(copy, '// an older release\n');
+  const r = runCli(dir, ['update', '--dry-run']);
+  ok(r);
+  assert.match(r.stdout, /Would copy claude-gauge .* into /);
+  assert.equal(fs.readFileSync(copy, 'utf8'), '// an older release\n');
+  assert.equal(runCli(dir, ['setup', '--dry-run']).status, 2);
+});
+
 test('a git clone in the state folder runs from its own dist/, with no copy', () => {
   const dir = configFolder();
   const clone = path.join(dir, 'claude-gauge');
@@ -200,6 +272,13 @@ test('a git clone in the state folder runs from its own dist/, with no copy', ()
   const update = runCli(dir, ['update'], { cli });
   ok(update);
   assert.match(update.stdout, /git -C .* pull/);
+
+  // npx finds the clone in the state folder, and runs nothing either.
+  fs.mkdirSync(path.join(clone, '.git'));
+  const npxCli = packageAt(path.join(tempDir(), '_npx', 'a1b2', 'node_modules', '@jv-k', 'claude-gauge'));
+  const fromNpx = runCli(dir, ['update'], { cli: npxCli });
+  ok(fromNpx);
+  assert.match(fromNpx.stdout, /git -C .* pull/);
 });
 
 test('writes go through a symlinked settings.json to its target', (t) => {

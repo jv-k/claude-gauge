@@ -13,7 +13,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { commandFor } = require('../dist/settings.js');
-const { root, dist, plain, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry } = require('./helpers');
+const { root, dist, plain, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, tempDir, packageAt, fakeTool } = require('./helpers');
 
 const versionsOf = (dir) => path.join(dir, 'plugins', 'cache', 'claude-gauge', 'claude-gauge');
 
@@ -173,12 +173,25 @@ test('configure and uninstall from the plugin cache keep the launcher and restor
   assert.deepEqual(settingsOf(dir), before);
 });
 
-test('update from the plugin cache says the plugin updates itself', () => {
+test('update from the plugin cache, or from npx on a plugin install, runs claude plugin update', { skip: process.platform === 'win32' && 'the fake claude is a shell script' }, () => {
   const dir = configFolder();
   const cli = path.join(installVersion(dir, '1.0.0'), 'dist', 'cli.js');
   ok(runCli(dir, ['setup', '--yes'], { cli }));
-  const r = runCli(dir, ['update'], { cli });
+  const claude = fakeTool('claude');
+  const env = { PATH: claude.bin, Path: claude.bin };
+
+  const dry = runCli(dir, ['update', '--dry-run'], { cli, env });
+  ok(dry);
+  assert.match(dry.stdout, /The Claude Code plugin installed claude-gauge\. Would run:\n.*claude plugin update claude-gauge@claude-gauge/);
+  assert.deepEqual(claude.calls(), []);
+
+  const r = runCli(dir, ['update'], { cli, env });
   ok(r);
-  assert.match(r.stdout, /\/plugin/);
+  assert.deepEqual(claude.calls(), ['--version', 'plugin update claude-gauge@claude-gauge']);
   assert.match(r.stdout, /newest/);
+
+  const npxCli = packageAt(path.join(tempDir(), '_npx', 'a1b2', 'node_modules', '@jv-k', 'claude-gauge'));
+  ok(runCli(dir, ['update'], { cli: npxCli, env }));
+  assert.deepEqual(claude.calls().slice(2), ['--version', 'plugin update claude-gauge@claude-gauge']);
+  assert.ok(!fs.existsSync(runtimeOf(dir)), 'npx made no copy beside the launcher');
 });

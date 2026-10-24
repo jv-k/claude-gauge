@@ -151,8 +151,8 @@ test('the default parts table follows the order of the default rows', () => {
 });
 
 test('a switch added to the USAGE text without a reference row fails the sync', () => {
-  const withFlag = { ...registry, usage: [...registry.usage, '--dry-run'] };
-  assert.deepEqual(drift(reference, withFlag), ['--dry-run has no row in the switch table under "### From npm"']);
+  const withFlag = { ...registry, usage: [...registry.usage, '--verbose'] };
+  assert.deepEqual(drift(reference, withFlag), ['--verbose has no row in the switch table under "### From npm"']);
 });
 
 test('a reference switch row for a switch the USAGE text lacks fails the sync', () => {
@@ -189,8 +189,8 @@ test('a switch line taken out of the USAGE text in the CLI source fails the sync
 
 test('a switch line added to the USAGE text in the CLI source fails the sync, with or without a short name first', () => {
   const after = '  --replace                  replace a status line that is not claude-gauge\'s\n';
-  const usage = usageSwitches(cli.replace(after, after + '  -n, --dry-run              show the settings, and write nothing\n'));
-  assert.deepEqual(drift(reference, { ...registry, usage }), ['--dry-run has no row in the switch table under "### From npm"']);
+  const usage = usageSwitches(cli.replace(after, after + '  -v, --verbose              show the settings, and write nothing\n'));
+  assert.deepEqual(drift(reference, { ...registry, usage }), ['--verbose has no row in the switch table under "### From npm"']);
 });
 
 test('a part name with a hyphen, a capital or an underscore in the migration column fails the sync', () => {
