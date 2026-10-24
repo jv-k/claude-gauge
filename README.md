@@ -34,7 +34,7 @@ ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓
 The token line shows at the end of each turn:
 
 ```text
-11:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 427k
+11:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M │ ctx 43% ▓▓░░░ 86.0k
 ```
 
 In VS Code and the desktop app, Claude ends each reply with the same bars:

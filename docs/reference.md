@@ -172,7 +172,7 @@ A part shows no link when its address is not known, for example a `branch` on an
 | `4 req` | API requests made since your last prompt, subagents included. |
 | `out 3.4k (1.2k think)` | Output tokens, and how many of them were thinking. |
 | `cache w6.5k r1.69M` | Prompt-cache writes and reads. |
-| `ctx 43% ▓▓░░░ 427k` | The context the last request carried, as a share of the window and as a bar. |
+| `ctx 43% ▓▓░░░ 86.0k` | The context the last request carried, as a share of the window and as a bar. |
 
 **Requests.** One request is one model call, so each tool round trip counts as one request. With `--latest`, the count leaves out the request that writes the final reply, because that request is still running. As a Stop hook, the count includes every request.
 
