@@ -16,28 +16,17 @@
     <a href="#how-it-looks"><b>How it looks</b></a> &nbsp;◦&nbsp;
     <a href="#getting-started"><b>Getting started</b></a> &nbsp;◦&nbsp;
     <a href="https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md"><b>Full reference</b></a> &nbsp;◦&nbsp;
-    <a href="#upgrading-from-claude-hud"><b>Upgrading from claude-hud</b></a>
+    <a href="#troubleshooting"><b>Troubleshooting</b></a>
   </p>
 </div>
 
 **claude-gauge** is a compact status line and token line for [Claude Code](https://code.claude.com), in the terminal, the VS Code extension and the desktop app.
 
-## Contents
-
-- [How it looks](#how-it-looks)
-- [Getting started](#getting-started)
-  - [Install the plugin](#install-the-plugin)
-  - [Or install from npm](#or-install-from-npm)
-  - [VS Code and the desktop app](#vs-code-and-the-desktop-app)
-  - [Change or remove the bars](#change-or-remove-the-bars)
-  - [Update](#update)
-- [Upgrading from claude-hud](#upgrading-from-claude-hud)
-- [What the bars show](#what-the-bars-show)
-- [Customise](#customise)
-- [Full reference](#full-reference)
-- [Contributing](#contributing)
-- [Star history](#star-history)
-- [License](#license)
+- **Pace, not only usage.** A marker on the 5-hour and weekly bars shows whether you will reach the limit before the window resets.
+- **No configuration file.** Setup asks which parts you want and writes switches into your settings. You can see each setting in the bar's command.
+- **Everywhere you run Claude Code.** The bars work in the terminal, and Claude adds them to its replies in VS Code and the desktop app.
+- **Local only.** The bars read Claude Code's status line input, git and the session transcript on your machine. They make no network calls.
+- **One step from claude-hud.** Setup finds claude-hud, replaces it, and can put it back.
 
 ## How it looks
 
@@ -78,7 +67,7 @@ In Claude Code, run these three commands:
 
 If Claude Code does not find `/claude-gauge:setup`, run `/reload-plugins` first. Setup asks which bars you want. Then it backs up `~/.claude/settings.json` and adds the bars to it. Start a new session to see them.
 
-### Or install from npm
+### Install from npm
 
 In a terminal, run:
 
@@ -92,11 +81,9 @@ Setup shows the status line and asks which parts you want. In a terminal, it dra
 
 ### VS Code and the desktop app
 
-The VS Code extension and the desktop app show no custom status line and no token line. To see the bars there, add one SessionStart hook for each bar. In those two apps, the hook tells Claude to end each reply with the bars. In the terminal, it does nothing. First install claude-gauge with the plugin or with npm, as above. Then add the hooks in one of two ways.
+The VS Code extension and the desktop app show no custom status line and no token line. Instead, a SessionStart hook for each bar tells Claude to end each reply with the bars. This costs one or two more short tool calls in each reply. In the terminal, the hooks do nothing.
 
-#### Ask Claude
-
-Paste this prompt into a Claude Code session:
+First install claude-gauge with the plugin or with npm, as above. Then paste this prompt into a Claude Code session:
 
 ```text
 Set up claude-gauge for the VS Code extension and the desktop app.
@@ -111,7 +98,8 @@ Test each new command with CLAUDE_CODE_ENTRYPOINT=claude-vscode. It must print a
 Then tell me to start a new session.
 ```
 
-#### Add the hooks by hand
+<details>
+<summary>Add the hooks by hand</summary>
 
 1. Open `~/.claude/settings.json` and find the `statusLine` command that setup wrote. Its folder is `~/.claude/claude-gauge/runtime/` after an npm install, or `~/.claude/claude-gauge/launcher/` after a plugin install.
 2. Add these two entries to the `SessionStart` array under `hooks`, with the folder from step 1. Keep the entries that are there already.
@@ -123,9 +111,9 @@ Then tell me to start a new session.
 
 3. Start a new session.
 
-#### The result
+</details>
 
-Each reply then ends with the bars, as in [How it looks](#how-it-looks). The token line leaves out its time and its context there, because the status line shows them. To change a bar in the replies, put its switches after `--instruct`, for example `--show 5h,7d`. On a 1M-context model, add `--window 1m` to both hooks. Each reply needs one or two more short tool calls. Uninstall also removes these hooks.
+Each reply then ends with the bars, as in [How it looks](#how-it-looks). The token line leaves out its time and its context there, because the status line shows them. To change a bar in the replies, put its switches after `--instruct`, for example `--show 5h,7d`. On a 1M-context model, add `--window 1m` to both hooks. Uninstall also removes these hooks.
 
 ### Change or remove the bars
 
@@ -143,12 +131,6 @@ npx @jv-k/claude-gauge update
 
 It finds how you installed claude-gauge, as the plugin, with npx, with `npm install -g` or as a git clone, and runs that tool's upgrade. Your switches stay. Add `--dry-run` to see the commands first. The reference has [the details for each route](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#update).
 
-## Upgrading from claude-hud
-
-If you use [claude-hud](https://github.com/jarrodwatts/claude-hud), run setup as in [Getting started](#getting-started). Setup finds claude-hud's status line, shows it, and asks before it replaces it. It saves claude-hud's command, so uninstall puts claude-hud back. Keep the claude-hud plugin installed until you are sure, because that command needs it.
-
-claude-gauge has no configuration file. Each claude-hud option becomes a part or a switch in the bar's command. The reference [maps each option](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#upgrading-from-claude-hud) to claude-gauge.
-
 ## What the bars show
 
 The status line shows these parts by default:
@@ -165,7 +147,11 @@ The status line shows these parts by default:
 | `model` | `Opus 5.5` | The model. |
 | `effort` | `effort high` | The reasoning effort. |
 
-The pace marker `┃` shows how much of the window has passed. Its colour shows where your usage goes at the current pace. Green stays well under the limit. Red and purple go over it.
+The pace marker `┃` shows how much of the window has passed. If the marker is ahead of the filled cells, you use less than an even pace. Its colour shows the usage that the current pace gives at the end of the window:
+
+![The 5-hour bar six times, half-way through the window. The pace marker is green below 50% projected usage, teal to 75%, yellow to 90%, orange to 100%, red to 120% and purple above 120%.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/pace.png)
+
+Red means that you will reach the limit a short time before the window resets. Purple means that you will reach it much earlier. In the first minutes of a window, the marker takes the colour of its bar, because the projection is not yet reliable.
 
 Other parts show the tools and subagents in use, todos, git changes, pull requests, the cost per day and week, memory use and more.
 
@@ -190,29 +176,39 @@ jv-k/claude-gauge │ ⎇ main │ #12 approved │ +156 −23
 Opus 5.5 │ effort high │ $1.23 │ cache 91% warm
 ```
 
-Each `--show` is one row.
+Each `--show` is one row. `--theme` picks one of four themes:
+
+![The default status line rows in the default, pastel, high-contrast and mono themes.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/themes.png)
 
 > [!TIP]
-> The reference lists [every switch](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#options), the four [themes](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#themes) and [more examples](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#examples).
+> The reference lists [every switch](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#options), the [themes](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#themes) and [more examples](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#examples).
+
+## Upgrading from claude-hud
+
+If you use [claude-hud](https://github.com/jarrodwatts/claude-hud), run setup as in [Getting started](#getting-started). Setup finds claude-hud's status line, shows it, and asks before it replaces it. It saves claude-hud's command, so uninstall puts claude-hud back. Keep the claude-hud plugin installed until you are sure, because that command needs it.
+
+claude-gauge has no configuration file. Each claude-hud option becomes a part or a switch in the bar's command. The reference [maps each option](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#upgrading-from-claude-hud) to claude-gauge.
+
+## Troubleshooting
+
+**The bars do not show.** Start a new session, because Claude Code reads the status line at the start. After a plugin install, run `/reload-plugins` if Claude Code does not find `/claude-gauge:setup`.
+
+**Setup fails, or the bars print an error.** Make sure that `node --version` gives 18 or later.
+
+**The `5h` and `7d` parts do not show.** Claude Code sends these figures only for claude.ai Pro and Max plans. With an API key, Bedrock or Vertex, the parts stay out of the row.
+
+**Another status line comes back.** A project's `.claude/settings.json` can set its own status line, and it wins over your user settings. Remove it there, or run setup again.
+
+**The bars do not show in VS Code or the desktop app.** These apps need the hooks in [VS Code and the desktop app](#vs-code-and-the-desktop-app).
 
 ## Full reference
 
-[docs/reference.md](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md) has everything this page leaves out:
-
-- [Every status line part](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#what-the-bars-show), and the [token line's parts](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#token-line)
-- [Every switch](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#options), the [themes](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#themes), [colours and bar characters](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#colours-and-bar-characters), and [examples](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#examples)
-- [Other ways to install](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#install): with a Claude prompt, or by hand from a clone
-- [Update](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#update) and [uninstall](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#uninstall) for each install route
-- [The claude-hud option map](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#upgrading-from-claude-hud)
+[docs/reference.md](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md) has everything this page leaves out: all the parts and switches, the themes and colours, more examples, other install routes, and the details of update and uninstall.
 
 ## Contributing
 
 [CONTRIBUTING.md](CONTRIBUTING.md) gives the setup, the tests and the rules for a change. [RELEASING.md](RELEASING.md) gives the release steps.
 
-## Star history
-
-[![Star history of jv-k/claude-gauge](https://api.star-history.com/svg?repos=jv-k/claude-gauge&type=Date)](https://star-history.com/#jv-k/claude-gauge&Date)
-
-## License
+## Licence
 
 [MIT](LICENSE)
