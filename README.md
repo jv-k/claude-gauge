@@ -29,7 +29,7 @@
   - [Install the plugin](#install-the-plugin)
   - [Or install from npm](#or-install-from-npm)
   - [VS Code and the desktop app](#vs-code-and-the-desktop-app)
-  - [Change, update or remove the bars](#change-update-or-remove-the-bars)
+  - [Change or remove the bars](#change-or-remove-the-bars)
   - [Update](#update)
 - [Upgrading from claude-hud](#upgrading-from-claude-hud)
 - [What the bars show](#what-the-bars-show)
@@ -127,13 +127,11 @@ Then tell me to start a new session.
 
 Each reply then ends with the bars, as in [How it looks](#how-it-looks). The token line leaves out its time and its context there, because the status line shows them. To change a bar in the replies, put its switches after `--instruct`, for example `--show 5h,7d`. On a 1M-context model, add `--window 1m` to both hooks. Each reply needs one or two more short tool calls. Uninstall also removes these hooks.
 
-### Change, update or remove the bars
+### Change or remove the bars
 
-| Plugin | npm | Effect |
-| --- | --- | --- |
-| `/claude-gauge:configure` | `npx @jv-k/claude-gauge configure` | Changes the parts and switches of the bars. |
-| `/plugin`, then **Marketplaces** | `npx @jv-k/claude-gauge update` | Updates claude-gauge with the tool that installed it, and keeps your switches. |
-| `/claude-gauge:uninstall` | `npx @jv-k/claude-gauge uninstall` | Removes claude-gauge and puts back the status line it replaced. |
+To change the parts and switches of the bars, run `/claude-gauge:configure` in Claude Code, or `npx @jv-k/claude-gauge configure` in a terminal.
+
+To remove claude-gauge and put back the status line it replaced, run `/claude-gauge:uninstall`, or `npx @jv-k/claude-gauge uninstall`.
 
 ### Update
 
