@@ -22,6 +22,23 @@
 
 **claude-gauge** is a compact status line and token line for [Claude Code](https://code.claude.com), in the terminal, the VS Code extension and the desktop app.
 
+## Contents
+
+- [How it looks](#how-it-looks)
+- [Getting started](#getting-started)
+  - [Install the plugin](#install-the-plugin)
+  - [Or install from npm](#or-install-from-npm)
+  - [VS Code and the desktop app](#vs-code-and-the-desktop-app)
+  - [Change, update or remove the bars](#change-update-or-remove-the-bars)
+  - [Update](#update)
+- [Upgrading from claude-hud](#upgrading-from-claude-hud)
+- [What the bars show](#what-the-bars-show)
+- [Customise](#customise)
+- [Full reference](#full-reference)
+- [Contributing](#contributing)
+- [Star history](#star-history)
+- [License](#license)
+
 ## How it looks
 
 In the terminal, the status line sits under the prompt:
@@ -117,6 +134,16 @@ Each reply then ends with the bars, as in [How it looks](#how-it-looks). The tok
 | `/claude-gauge:configure` | `npx @jv-k/claude-gauge configure` | Changes the parts and switches of the bars. |
 | `/plugin`, then **Marketplaces** | `npx @jv-k/claude-gauge update` | Updates claude-gauge with the tool that installed it, and keeps your switches. |
 | `/claude-gauge:uninstall` | `npx @jv-k/claude-gauge uninstall` | Removes claude-gauge and puts back the status line it replaced. |
+
+### Update
+
+Run:
+
+```sh
+npx @jv-k/claude-gauge update
+```
+
+It finds how you installed claude-gauge, as the plugin, with npx, with `npm install -g` or as a git clone, and runs that tool's upgrade. Your switches stay. Add `--dry-run` to see the commands first. The reference has [the details for each route](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#update).
 
 ## Upgrading from claude-hud
 
