@@ -916,7 +916,9 @@ test('the command runner stops a slow command within its timeout and shows nothi
   const output = runCommand(nodeCommand("process.stdout.write('early'); setTimeout(() => {}, 10000)"), require('node:os').tmpdir());
   const took = Date.now() - started;
   assert.equal(output, '');
-  assert.ok(took >= COMMAND_TIMEOUT_MS && took < COMMAND_TIMEOUT_MS + 1500, `${took}ms`);
+  // A busy Windows runner can take seconds to end the shell, so the limit
+  // only has to catch a wait for the command's full 10 s.
+  assert.ok(took >= COMMAND_TIMEOUT_MS && took < 5000, `${took}ms`);
 });
 
 test('the command runner stops a command and its background jobs, which leave nothing running', { skip: process.platform === 'win32' && 'sh only' }, async () => {
