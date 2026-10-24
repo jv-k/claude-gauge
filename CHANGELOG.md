@@ -1,3 +1,19 @@
+## 1.3.0 (2026-10-24)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.2.0 -> 1.3.0
+- Merge pull request #129 from jv-k/docs/readme-polish
+- docs(readme): add pace and theme pictures, troubleshooting and a shorter VS Code section
+- docs(readme): give the configure and uninstall commands inline
+- docs(readme): add a contents list and an Update section
+- chore(dist): build dist from 71e0b84 [auto]
+- Merge pull request #128 from jv-k/feat/self-update
+- feat(cli): make update run the upgrade of the tool that installed claude-gauge
+- Merge pull request #126 from jv-k/test/command-timeout-slack
+- test: give the command timeout test room for a slow Windows runner
+- chore(dist): build dist from b89ec9b [auto]
+- Merge pull request #125 from jv-k/docs/vscode-no-duplicate-ctx
+- docs: make the token line's ctx example match the status line's
+- docs: leave ctx out of the token line hook in VS Code and the desktop app
+
 ## 1.2.0 (2026-10-23)
 - chore: updated package.json, updated CHANGELOG.md, bumped 1.1.0 -> 1.2.0
 - chore(dist): build dist from a36f438 [auto]
