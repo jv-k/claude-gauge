@@ -135,10 +135,10 @@ test('configure: Enter at every question keeps what is set up, as typed Enters d
     statusLine: ['--text', 'a b', '--show', 'ctx,bogus,5h', '--segments=10', '--frobnicate', '--theme', 'mono', '--no-labels', '--right', 'ctx'],
     tokenLine: ['--window', '1m', '--show', 'req,ctx'],
   };
-  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', '', 'y']), { preview, installed });
+  const typed = await runWizard(scripted(['change', '', '', '', '', '', '', '', '', 'y']), { preview, installed });
   const { io, answer } = await driver();
   const run = runWizard(io, { preview, installed });
-  await answer(KEY.down, KEY.enter); // keep the lines: No
+  await answer(KEY.down, KEY.enter); // the lines set up: change them
   for (let i = 0; i < 8; i++) await answer(KEY.enter);
   await answer(KEY.enter); // write: Yes
   assert.deepEqual(await run, typed);
@@ -146,10 +146,10 @@ test('configure: Enter at every question keeps what is set up, as typed Enters d
 
 test('configure: a changed token line by key presses gives the answers that the same typed answers give, its --window kept', async () => {
   const installed = { statusLine: ['--segments', '10'], tokenLine: ['--window', '1m', '--show', 'req,ctx'] };
-  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', '', 'req,ctx,out', 'y']), { preview, installed });
+  const typed = await runWizard(scripted(['change', '', '', '', '', '', '', '', '', 'req,ctx,out', 'y']), { preview, installed });
   const { io, answer, out } = await driver();
   const run = runWizard(io, { preview, installed });
-  await answer(KEY.down, KEY.enter); // keep the lines: No
+  await answer(KEY.down, KEY.enter); // the lines set up: change them
   for (let i = 0; i < 8; i++) await answer(KEY.enter); // rows, two rows, bar style, cells, theme, labels, token line
   await answer(...toggle(TOKEN_PARTS, 'out')); // req,ctx then out
   const write = await answer(KEY.enter);
@@ -199,7 +199,7 @@ test('a bar style other than classic skips the cells question, and both lines ge
   assert.deepEqual(typed, { statusLine: ['--bar-style', 'steps'], tokenLine: ['--bar-style', 'steps'] });
 });
 
-test('with animate set, a question redraws its preview with the clock, with no key pressed', async () => {
+test('with animate set, a question whose preview moves redraws it with the clock, with no key pressed, and another does not', async () => {
   const ink = await import('ink');
   const React = (await import('react')).default;
   const { render } = await import('ink-testing-library');
@@ -209,7 +209,15 @@ test('with animate set, a question redraws its preview with the clock, with no k
   const io = inkIoWith(deps, { write: () => {} }, false);
   let frame = 0;
   io.choices.preview(() => `frame ${++frame}`);
-  const asked = io.choices.one({ kind: 'CONFIRM', message: 'Go?', options: [{ label: 'Yes', value: true }], initial: 0 });
+  const still = io.choices.one({ kind: 'CONFIRM', message: 'Stay?', options: [{ label: 'Yes', value: true }], initial: 0 });
+  while (!ready) await delay(1);
+  ready = false;
+  const drawn = frame;
+  await delay(300);
+  assert.equal(frame, drawn, 'a preview that does not move is not redrawn');
+  question.stdin.write(KEY.enter);
+  assert.equal(await still, true);
+  const asked = io.choices.one({ kind: 'CONFIRM', message: 'Go?', options: [{ label: 'Yes', value: true }], initial: 0, moving: true });
   while (!ready) await delay(1);
   const first = plain(question.lastFrame());
   await delay(400);

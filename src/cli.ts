@@ -325,9 +325,9 @@ const hasGh = () => spawnSync('gh', ['--version'], { stdio: 'ignore' }).status =
 const starWithGh = () => spawnSync('gh', ['api', '--method', 'PUT', 'user/starred/jv-k/claude-gauge'], { stdio: ['ignore', 'ignore', 'inherit'] }).status === 0;
 
 // setup or configure with no bar switches: asks before it replaces another
-// status line, then asks for the bars, and writes them. configure starts the
-// questions from the bars set up, setup from the defaults. setup ends with
-// the star offer. On a terminal the questions are Ink's choices where Ink
+// status line, then asks for the lines, and writes them. With claude-gauge
+// set up already, setup and configure both offer to keep the lines, change
+// them, or start over from the defaults. setup ends with the star offer. On a terminal the questions are Ink's choices where Ink
 // loads, else typed answers, as for piped ones.
 async function interactive(command: 'setup' | 'configure', replace: boolean): Promise<void> {
   const io = await openIo(process.stdin, process.stdout);
@@ -349,7 +349,7 @@ async function interactive(command: 'setup' | 'configure', replace: boolean): Pr
     }
     // A front end that redraws with the clock gets bars that move.
     const preview = previewer(loadPayload(payloadFile()), { sweep: io.animated === true });
-    const choices = await runWizard(io, { preview, installed: command === 'configure' ? installedSwitches(settings) : undefined });
+    const choices = await runWizard(io, { preview, installed: installedSwitches(settings) });
     if (!choices) {
       say(s.info('Nothing changed.'));
       return;

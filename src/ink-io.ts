@@ -16,8 +16,8 @@
 // The look is VerBump's, from styles.ts, so NO_COLOR turns it off as it does
 // for the readline questions.
 //
-// On a terminal the preview animates: each question redraws it every
-// FRAME_MS, and the preview the wizard gives moves its bars with the clock.
+// On a terminal a question whose preview moves, the bar style's, redraws it
+// every FRAME_MS while it waits, so its bars move with the clock.
 
 import type { ReactElement } from 'react';
 import { Interrupted } from './wizard';
@@ -37,8 +37,8 @@ interface Mounted {
 // the terminal, which a test replaces with ink-testing-library's. `ready`,
 // when set, is called once each question reads keys, so a test presses none
 // before then. A terminal keeps the keys typed before then for the question.
-// `animate`, when set, redraws each question every FRAME_MS, so a preview
-// that moves with the clock animates.
+// `animate`, when set, redraws each question whose preview moves every
+// FRAME_MS, so its preview animates.
 interface InkDeps {
   ink: InkModule;
   React: ReactModule;
@@ -65,6 +65,8 @@ interface View {
   ticked?: number[];
   // The preview with the selection, or the ticks, as they are now.
   preview(cursor: number, ticked: number[]): string;
+  // Set when the preview moves with the clock.
+  moving?: boolean;
 }
 
 // The questions as Ink choices on `deps`, with the text the wizard writes
@@ -135,7 +137,7 @@ function inkIoWith({ ink, React, mount, ready, animate = false }: InkDeps, outpu
       ready?.();
     }, []);
     React.useEffect(() => {
-      if (!animate) return undefined;
+      if (!animate || !view.moving) return undefined;
       const timer = setInterval(() => {
         if (!state.current.answered) redraw((r) => r + 1);
       }, FRAME_MS);
@@ -168,12 +170,13 @@ function inkIoWith({ ink, React, mount, ready, animate = false }: InkDeps, outpu
     });
 
   const choices: ChoiceIo = {
-    one: async ({ kind, message, options, initial, preview: previewFor }) => {
+    one: async ({ kind, message, options, initial, preview: previewFor, moving }) => {
       const { cursor } = await ask({
         kind,
         message,
         labels: options.map((o) => o.label),
         initial,
+        moving,
         preview: (at) => (previewFor ? previewFor(options[at].value) : previewNow()),
       });
       return options[cursor].value;

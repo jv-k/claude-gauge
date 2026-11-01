@@ -1,10 +1,10 @@
 // The questions claude-gauge setup and configure ask when run with no bar
 // switches: take the defaults in one answer, or walk through the status
-// line's rows and parts, its bar size, theme and labels, and the token line
-// and its parts, with a preview of the status line
-// redrawn after each answer. configure starts from the bars set up now: the
-// first answer keeps them, and each question offers the value set up. It
-// returns the switches for each bar, as words, for the CLI to write; it
+// line's rows and parts, its bar style, bar size, theme and labels, and the
+// token line and its parts, with a preview of the status line redrawn after
+// each answer. With lines set up, the first answer keeps them, changes them,
+// each question offering the value set up, or starts over from the defaults.
+// It returns the switches for each line, as words, for the CLI to write; it
 // reads and writes no settings itself.
 //
 // The questions go through a WizardIo, so a test can script the answers. The
@@ -71,13 +71,16 @@ interface Option<T> {
 
 // A question as a choice of one option, the one at `initial` first. The pill
 // before it is CONFIRM for a yes or no, INPUT for any other. `preview`, when
-// set, gives the preview with the option the selection is on.
+// set, gives the preview with the option the selection is on. `moving`, when
+// set, says the preview moves with the clock, so a front end that animates
+// redraws it while the question waits.
 interface PickOne<T> {
   kind: 'CONFIRM' | 'INPUT';
   message: string;
   options: Option<T>[];
   initial: number;
   preview?: (value: T) => string;
+  moving?: boolean;
 }
 
 // A question as a list of parts to tick, with `initial` ticked first. The
@@ -103,8 +106,8 @@ interface ChoiceIo {
 
 interface WizardOptions {
   // The status line's rows when run with these switches, as plain text when
-  // `plain` is set.
-  preview: (statusLineSwitches: readonly string[], plain?: boolean) => string;
+  // `plain` is set, with the bars moving with the clock when `moving` is set.
+  preview: (statusLineSwitches: readonly string[], plain?: boolean, moving?: boolean) => string;
   // The token line when run with these switches, else the sample run's.
   tokenPreview?: (tokenLineSwitches: readonly string[]) => string;
   // The bars configure found. The wizard starts from them, and from the
@@ -254,8 +257,10 @@ const confirm = (io: WizardIo, question: string, fallback: boolean, preview?: (y
   );
 
 // A choice of one of `values`, shown as written, `fallback` first.
-const oneOf = <T extends string | number>(message: string, values: readonly T[], fallback: T, preview?: (value: T) => string) => (c: ChoiceIo) =>
-  c.one({ kind: 'INPUT', message, options: values.map((value) => ({ label: String(value), value })), initial: Math.max(0, values.indexOf(fallback)), preview });
+const oneOf =
+  <T extends string | number>(message: string, values: readonly T[], fallback: T, preview?: (value: T) => string, moving = false) =>
+  (c: ChoiceIo) =>
+    c.one({ kind: 'INPUT', message, options: values.map((value) => ({ label: String(value), value })), initial: Math.max(0, values.indexOf(fallback)), preview, moving });
 
 // Reads a list of parts from `known`, or `fallback` on Enter. An unknown
 // part is asked again, named, with `where` to say which parts there are.
@@ -368,6 +373,16 @@ function screenOf(io: WizardIo) {
   return screen;
 }
 
+// The first question when lines are set up, with the words each typed
+// answer takes: keep them, change them from where they are, or start over
+// from the defaults.
+type Start = 'keep' | 'change' | 'over';
+const START_OPTIONS: (Option<Start> & { words: string[] })[] = [
+  { label: 'Keep them as they are', value: 'keep', words: ['keep', 'k'] },
+  { label: 'Change them', value: 'change', words: ['change', 'c'] },
+  { label: 'Start over from the defaults', value: 'over', words: ['over', 'o', 'start over', 's'] },
+];
+
 // The questions, then the switches for each bar. A front end with choices
 // shows no preview once they end, so a question after them, such as the star
 // offer, comes without one.
@@ -382,15 +397,16 @@ async function runWizard(userIo: WizardIo, options: WizardOptions): Promise<Wiza
 async function askAll(userIo: WizardIo, { preview, tokenPreview = tokenPreviewer(), installed }: WizardOptions): Promise<WizardChoices | null> {
   const io = screenOf(userIo);
   const s = stylesOf(io);
-  const start = startFrom(installed);
+  let start = startFrom(installed);
   let status: StatusChoices = { ...start.status };
   let tokenLine = start.tokenLine;
   let tokenSwitches = start.tokenSwitches;
   // The preview of `choices` in the status line's own colours, or as plain
   // text when the questions take no colour, under `heading` when one is given.
   // With the token line on, its line with `withTokenSwitches` comes under it.
-  const previewOf = (choices: StatusChoices, withTokenLine = tokenLine, heading = '', withTokenSwitches = tokenSwitches) => {
-    const rendered = preview(switchesFor(choices), !io.color);
+  // The bars move with the clock when `moving` is set.
+  const previewOf = (choices: StatusChoices, withTokenLine = tokenLine, heading = '', withTokenSwitches = tokenSwitches, moving = false) => {
+    const rendered = preview(switchesFor(choices), !io.color, moving);
     const rows = io.color ? rendered : stripOwnCodes(rendered);
     const token = withTokenLine ? `on, when each turn ends\n  ${tokenPreview(withBarStyle(withTokenSwitches, choices.barStyle))}` : 'off';
     return `${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${token}\n`;
@@ -405,10 +421,40 @@ async function askAll(userIo: WizardIo, { preview, tokenPreview = tokenPreviewer
   // selection moves.
   const previewWith = (change: Partial<StatusChoices>) => previewOf({ ...status, ...change });
 
+  // With lines set up: keep them, change them from where they are, or start
+  // over from the defaults, as a first setup does.
+  let fresh = !isSetUp(installed);
   if (isSetUp(installed)) {
-    show(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
-    if (await confirm(io, 'Keep the current lines as they are?', true)) return {};
-  } else {
+    const heading = installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n';
+    show(heading);
+    const defaults = startFrom(undefined);
+    const answer = await askFor(
+      io,
+      `Keep the current lines, change them, or start over from the defaults? keep, change or over ${hint(s, 'keep')} `,
+      (typed) => START_OPTIONS.find((o) => o.words.includes(typed.trim().toLowerCase() || 'keep'))?.value ?? { retry: 'Answer keep, change or over.' },
+      'INPUT',
+      (c) =>
+        c.one({
+          kind: 'INPUT',
+          message: 'Keep the current lines, change them, or start over?',
+          options: START_OPTIONS,
+          initial: 0,
+          preview: (value) =>
+            value === 'over'
+              ? previewOf(defaults.status, defaults.tokenLine, 'The status line with the defaults:\n', defaults.tokenSwitches)
+              : previewOf(status, tokenLine, heading),
+        }),
+    );
+    if (answer === 'keep') return {};
+    if (answer === 'over') {
+      start = defaults;
+      status = { ...defaults.status };
+      tokenLine = defaults.tokenLine;
+      tokenSwitches = defaults.tokenSwitches;
+      fresh = true;
+    }
+  }
+  if (fresh) {
     show('The status line with the defaults:\n');
     if (await confirm(io, 'Use the defaults: both lines, with the parts above?', true)) return { statusLine: [], tokenLine: [] };
   }
@@ -458,7 +504,15 @@ async function askAll(userIo: WizardIo, { preview, tokenPreview = tokenPreviewer
       return (BAR_STYLES as readonly string[]).includes(name) ? name : { retry: `Unknown bar style: ${answer}. Answer one of ${BAR_STYLES.join(', ')}.` };
     },
     'INPUT',
-    oneOf('Bar style?', BAR_STYLES as readonly string[], start.status.barStyle, (name) => previewWith({ barStyle: name })),
+    // The one question whose preview moves: its bars sweep, to show how each
+    // style fills and how it marks the pace.
+    oneOf(
+      'Bar style?',
+      BAR_STYLES as readonly string[],
+      start.status.barStyle,
+      (name) => previewOf({ ...status, barStyle: name }, tokenLine, '', tokenSwitches, true),
+      true,
+    ),
   );
   status = { ...status, barStyle };
   show();
@@ -742,7 +796,9 @@ function loadPayload(file: string, nowMs = Date.now()): StatusData {
   return samplePayload(nowMs);
 }
 
-// The preview's options: render's, and `sweep` to animate the bars.
+// The preview's options: render's, and `sweep` to let the bars move with the
+// clock in a preview asked for `moving`. With sweep set, the reads of git and
+// the files are kept, as an animated preview renders many times a second.
 type PreviewOptions = Omit<Parameters<typeof render>[1] & object, 'config' | 'plain'> & { sweep?: boolean };
 
 // The payload with the context, 5h and 7d bars moved to where they are at
@@ -799,12 +855,12 @@ function previewer(payload: StatusData, options: PreviewOptions = {}) {
   const branchOf = keep(options.branchOf ?? headBranch);
   const memoryOf = keep(options.memoryOf ?? readMemory);
   const setupOf = keep(options.setupOf ?? ((cwd: string) => readSetup(cwd, { env: options.env ?? process.env })));
-  return (switches: readonly string[], plain = false) => {
+  return (switches: readonly string[], plain = false, moving = false) => {
     const nowMs = options.nowMs ?? Date.now();
     const config = parseArgs([...switches]);
     const shown = new Set<string>((config.rows ?? DEFAULT_ROWS).flat());
     const data = withSamplePayload(payload, nowMs, shown);
-    return render(sweep ? swept(data, nowMs) : data, {
+    return render(sweep && moving ? swept(data, nowMs) : data, {
       ...renderOptions,
       nowMs,
       plain,
@@ -891,6 +947,6 @@ async function openIo(input: Input, output: Output, load: LoadInk = loadInk): Pr
   return streamIo(input, output, color);
 }
 
-export { runWizard, offerStar, confirm, streamIo, openIo, EndOfAnswers, Interrupted, samplePayload, loadPayload, previewer, tokenPreviewer, switchesFor };
+export { runWizard, offerStar, confirm, streamIo, openIo, EndOfAnswers, Interrupted, samplePayload, SAMPLE_RUN, loadPayload, previewer, tokenPreviewer, switchesFor };
 
 export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, Output, Input, OpenIo };
