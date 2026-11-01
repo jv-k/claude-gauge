@@ -1,6 +1,6 @@
 # Bar styles are separate from themes, and each style sets its own width
 
-- Status: accepted
+- Status: accepted, amended by [0008](0008-bar-style-and-cells-per-bar.md): each bar can have its own style and cells
 - Date: 2026-11-01
 
 ## Context

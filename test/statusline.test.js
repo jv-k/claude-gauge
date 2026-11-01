@@ -222,6 +222,21 @@ test('--bar-style draws every bar in that style, at its own width, and an unknow
   assert.equal(styled('spark', '--no-bars'), 'ctx 43% 86.0k │ 5h 62%');
 });
 
+test('--bar-style and --segments take a list: a bare value for every bar, and <bar>=<value> for one', () => {
+  const data = payload({ five_hour: { used_percentage: 62, resets_at: at(NOW + 2 * HOUR) } });
+  const show = ['--show', 'ctx,5h', '--no-reset'];
+  const styled = (...args) => run(data, [...show, ...args]);
+  assert.equal(styled('--bar-style', 'steps,ctx=hairline'), 'ctx 43% ━━━───── 86.0k │ 5h 62% ▅▅▅▅▁▁');
+  assert.equal(styled('--bar-style', '5h=dots'), 'ctx 43% ▓▓░░░ 86.0k │ 5h 62% ••••|·', 'no bare value: classic for the rest');
+  assert.equal(styled('--bar-style', 'ctx=steps, CTX=dots ,steps'), styled('--bar-style', 'steps,ctx=dots'), 'the last of each wins, in any case');
+  assert.equal(styled('--bar-style', 'steps,ctx=wavy,cpu=dots'), styled('--bar-style', 'steps,ctx=classic'), 'an unknown style is classic, an unknown bar is left out');
+  assert.equal(styled('--segments', '5,ctx=10'), 'ctx 43% ▓▓▓▓░░░░░░ 86.0k │ 5h 62% ▓▓▓┃░');
+  assert.equal(styled('--segments', '10,5h=5'), 'ctx 43% ▓▓▓▓░░░░░░ 86.0k │ 5h 62% ▓▓▓┃░');
+  // The per-model limits follow 7d.
+  const models = payload({ seven_day: { used_percentage: 20 }, seven_day_opus: { used_percentage: 40 } });
+  assert.equal(run(models, ['--show', '7d,models', '--no-reset', '--bar-style', '7d=dots']), '7d 20% •····· │ 7d Opus 40% ••····');
+});
+
 test('--bar-style underline underlines the share used, and colours the character where "now" falls', () => {
   const data = payload({ five_hour: { used_percentage: 62, resets_at: at(NOW + 2 * HOUR) } });
   const raw = (...args) => render(data, { nowMs: NOW, statusOf: onMain, config: parseArgs(['--show', '5h', '--no-reset', '--bar-style', 'underline', ...args]) });

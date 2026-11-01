@@ -525,10 +525,10 @@ test('the setup and configure questions start with the wordmark and a blank line
   const setup = ask(dir, ['setup'], ['y'], { env: { NO_COLOR: '1' } });
   ok(setup);
   assert.ok(setup.stdout.startsWith(`${WORDMARK.join('\n')}\n\nSETUP\nThe status line with the defaults:\n`), setup.stdout);
-  const configure = ask(dir, ['configure'], ['y'], { env: { NO_COLOR: '1' } });
+  const configure = ask(dir, ['configure'], ['keep'], { env: { NO_COLOR: '1' } });
   ok(configure);
   assert.ok(configure.stdout.startsWith(`${WORDMARK.join('\n')}\n\nCONFIGURE\nThe status line as set up now:\n`), configure.stdout);
-  const coloured = ask(dir, ['configure'], ['y'], { env: { NO_COLOR: '', FORCE_COLOR: '1' } });
+  const coloured = ask(dir, ['configure'], ['keep'], { env: { NO_COLOR: '', FORCE_COLOR: '1' } });
   ok(coloured);
   assert.ok(coloured.stdout.startsWith(`${RAINBOW.join('\n')}\n\n${pill('CONFIGURE')}\nThe status line as set up now:\n`), JSON.stringify(coloured.stdout.slice(0, 400)));
 });
@@ -578,7 +578,7 @@ test('the token line parts the wizard is given go into the Stop hook command, an
 
   // configure starts from that --show and keeps the --window set up.
   ok(runCli(fewer, ['configure', '--token-line', '--show req,out,ctx --window 1m']));
-  const again = ask(fewer, ['configure'], ['n', '', '', '', '', '', '', '', '', 'ctx', 'y']);
+  const again = ask(fewer, ['configure'], ['change', '', '', '', '', '', '', '', '', 'ctx', 'y']);
   ok(again);
   assert.match(again.stdout, /Token line parts.*\[req,out,ctx\]/);
   assert.equal(tokenLine(fewer), commandFor(script(fewer), ['--show', 'ctx', '--window', '1m']));
@@ -595,9 +595,9 @@ test('setup asks no context window question, and configure keeps the --window se
 
   // A --window set up by hand stays, as written, whether the parts change or not.
   ok(runCli(dir, ['configure', '--token-line', '--window=1M --show req,out,ctx']));
-  ok(ask(dir, ['configure'], ['n', '', '', '', '', '', '', '', '', '', 'y']));
+  ok(ask(dir, ['configure'], ['change', '', '', '', '', '', '', '', '', '', 'y']));
   assert.equal(tokenLine(dir), commandFor(script(dir), ['--window=1M', '--show', 'req,out,ctx']));
-  const changed = ask(dir, ['configure'], ['n', '', '', '', '', '', '', '', '', 'ctx', 'y']);
+  const changed = ask(dir, ['configure'], ['change', '', '', '', '', '', '', '', '', 'ctx', 'y']);
   ok(changed);
   assert.doesNotMatch(changed.stdout, /context window/i);
   assert.equal(tokenLine(dir), commandFor(script(dir), ['--show', 'ctx', '--window=1M']));
@@ -633,10 +633,10 @@ test('the wizard asks before it replaces a status line that is not claude-gauge'
 
 test('configure with no switches runs the wizard on a set-up config, and offers no star', () => {
   const dir = configFolder();
-  assert.equal(ask(dir, ['configure'], ['y']).status, 1, 'not set up yet');
+  assert.equal(ask(dir, ['configure'], ['keep']).status, 1, 'not set up yet');
   ok(runCli(dir, ['setup', '--yes']));
   const gh = fakeGh();
-  const r = ask(dir, ['configure'], ['n', '1', 'ctx', '', '', '', '', '', '', 'y'], { bin: gh.bin });
+  const r = ask(dir, ['configure'], ['change', '1', 'ctx', '', '', '', '', '', '', 'y'], { bin: gh.bin });
   ok(r);
   assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(runtimeOf(dir), 'statusline.js'), ['--show', 'ctx']));
   assert.doesNotMatch(r.stdout, /Star /);
@@ -647,7 +647,7 @@ test('configure starts from the bars set up: a yes keeps the status line and add
   const dir = configFolder();
   ok(runCli(dir, ['setup', '--status-line', '--segments 10 --theme mono', '--no-token-line']));
   const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
-  const r = ask(dir, ['configure'], ['y']);
+  const r = ask(dir, ['configure'], ['keep']);
   ok(r);
   assert.match(r.stdout, /Keep the current lines/);
   assert.match(r.stdout, /Nothing to change/);
@@ -659,7 +659,7 @@ test('a yes to keeping the bars leaves a command written by hand exactly as it i
   const statusLine = "FORCE_COLOR=1 node ~/.claude/claude-gauge/statusline.js --text 'a b' --segments 10";
   const dir = configFolder({ statusLine: cmd(statusLine), hooks: { Stop: [entry('node ~/.claude/claude-gauge/tokenline.js'), entry('node ~/.claude/claude-gauge/tokenline.js --window 1m')] } });
   const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
-  const r = ask(dir, ['configure'], ['y']);
+  const r = ask(dir, ['configure'], ['keep']);
   ok(r);
   assert.match(r.stdout, /Nothing to change/);
   assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
@@ -676,11 +676,11 @@ test('configure keeps a quoted value and a switch it does not know, whichever pa
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings, null, 2) + '\n');
   const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf8');
 
-  ok(ask(dir, ['configure'], ['y']));
+  ok(ask(dir, ['configure'], ['keep']));
   assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
 
   // One row set up, a bar size changed, the rest kept with Enter.
-  ok(ask(dir, ['configure'], ['n', '', '', '', '10', '', '', '', '', 'y']));
+  ok(ask(dir, ['configure'], ['change', '', '', '', '10', '', '', '', '', 'y']));
   assert.deepEqual(settingsOf(dir), {
     statusLine: cmd(commandFor(script('statusline.js'), ['--show', 'text,ctx', '--segments', '10', '--text', 'my label', '--frobnicate'])),
     hooks: { Stop: [entry(commandFor(script('tokenline.js')))] },

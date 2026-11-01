@@ -24,8 +24,8 @@ First ask one question, with one `AskUserQuestion` call:
 Then ask a second `AskUserQuestion` call with only the questions for the line the user chose, the recommended option first in each. For the status line:
 
 - **Rows?** Keep them (recommended), the default two rows (`ctx,5h,7d` above `time,duration,repo,branch,model,effort`), or one row of usage only (`--show 5h,7d`). The user can also type their own rows: each `--show` is one row, its parts separated by commas, from the parts tables in the claude-gauge README.
-- **Bar style?** Keep it (recommended), or two of `classic` (the default, `▓▓┃░░`), `steps` (`▅▅▅▁▁▁`) and `hairline` (`━━╋───`) that are not the current one (`--bar-style <name>`). The user can also type `rising`, `dots`, `spark` or `underline`. A bar style applies to both lines: when it changes, set the same `--bar-style` in the token line's switches too, if a token line is set up.
-- **Bar size?** Ask only when the bar style is `classic`. Keep it (recommended), 5 cells (the default), or 10 (`--segments 10`).
+- **Bar style?** Keep it (recommended), or two of `classic` (the default, `▓▓┃░░`), `steps` (`▅▅▅▁▁▁`) and `hairline` (`━━╋───`) that are not the current one (`--bar-style <name>`). The user can also type `rising`, `dots`, `spark` or `underline`, or a style for each bar, such as `steps,ctx=rising`: the style for every bar, then `<bar>=<style>` for each of `ctx`, `5h`, `7d` and `ram` that differs. When the style changes, set the `ctx` bar's style as the token line's `--bar-style` too, if a token line is set up (`--bar-style rising` for that example).
+- **Bar size?** Ask only when a bar's style is `classic`. Keep it (recommended), 5 cells (the default), or 10 (`--segments 10`). The user can also type a size for each bar, such as `5,ctx=10`.
 - **Theme?** Keep it (recommended), or one of `default`, `mono`, `high-contrast` and `pastel` (`--theme <name>`) that is not the current one.
 
 For the token line:

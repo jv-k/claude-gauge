@@ -28,6 +28,10 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome lint --error-on-warnings",
     "test": "pnpm build && node scripts/test.js",
+    "try": "pnpm build && node scripts/try.js cli",
+    "try:statusline": "pnpm build && node scripts/try.js statusline",
+    "try:tokenline": "pnpm build && node scripts/try.js tokenline",
+    "try:reset": "node scripts/try.js reset",
     "bump-release": "verbump --push origin"
   },
   "devDependencies": {

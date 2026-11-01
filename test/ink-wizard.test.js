@@ -19,7 +19,7 @@ const { PARTS } = require('../dist/statusline.js');
 const { PARTS: TOKEN_PARTS } = require('../dist/tokenline.js');
 const { plain, tempDir, configFolder, runCli, ok } = require('./helpers');
 
-const KEY = { up: '\x1b[A', down: '\x1b[B', enter: '\r', space: ' ', ctrlC: '\x03' };
+const KEY = { up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D', enter: '\r', space: ' ', ctrlC: '\x03' };
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -135,10 +135,10 @@ test('configure: Enter at every question keeps what is set up, as typed Enters d
     statusLine: ['--text', 'a b', '--show', 'ctx,bogus,5h', '--segments=10', '--frobnicate', '--theme', 'mono', '--no-labels', '--right', 'ctx'],
     tokenLine: ['--window', '1m', '--show', 'req,ctx'],
   };
-  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', '', 'y']), { preview, installed });
+  const typed = await runWizard(scripted(['change', '', '', '', '', '', '', '', '', 'y']), { preview, installed });
   const { io, answer } = await driver();
   const run = runWizard(io, { preview, installed });
-  await answer(KEY.down, KEY.enter); // keep the lines: No
+  await answer(KEY.down, KEY.enter); // the lines set up: change them
   for (let i = 0; i < 8; i++) await answer(KEY.enter);
   await answer(KEY.enter); // write: Yes
   assert.deepEqual(await run, typed);
@@ -146,10 +146,10 @@ test('configure: Enter at every question keeps what is set up, as typed Enters d
 
 test('configure: a changed token line by key presses gives the answers that the same typed answers give, its --window kept', async () => {
   const installed = { statusLine: ['--segments', '10'], tokenLine: ['--window', '1m', '--show', 'req,ctx'] };
-  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', '', 'req,ctx,out', 'y']), { preview, installed });
+  const typed = await runWizard(scripted(['change', '', '', '', '', '', '', '', '', 'req,ctx,out', 'y']), { preview, installed });
   const { io, answer, out } = await driver();
   const run = runWizard(io, { preview, installed });
-  await answer(KEY.down, KEY.enter); // keep the lines: No
+  await answer(KEY.down, KEY.enter); // the lines set up: change them
   for (let i = 0; i < 8; i++) await answer(KEY.enter); // rows, two rows, bar style, cells, theme, labels, token line
   await answer(...toggle(TOKEN_PARTS, 'out')); // req,ctx then out
   const write = await answer(KEY.enter);
@@ -186,7 +186,7 @@ test('a bar style other than classic skips the cells question, and both lines ge
   await answer(KEY.down, KEY.enter); // customise
   for (let i = 0; i < 3; i++) await answer(KEY.enter); // rows, two rows
   const style = await next();
-  assert.match(plain(style.lastFrame()), /INPUT\nBar style\?\n❯ classic\n {2}steps/);
+  assert.match(plain(style.lastFrame()), /INPUT\nBar style\?\n\[All\] +ctx classic +5h classic +7d classic +ram classic *\n❯ classic\n {2}steps/);
   await press(style, KEY.down);
   assert.match(plain(style.lastFrame()), /<--bar-style steps>\n[\s\S]*❯ steps/, 'the preview shows the style the selection is on');
   await press(style, KEY.enter);
@@ -199,7 +199,32 @@ test('a bar style other than classic skips the cells question, and both lines ge
   assert.deepEqual(typed, { statusLine: ['--bar-style', 'steps'], tokenLine: ['--bar-style', 'steps'] });
 });
 
-test('with animate set, a question redraws its preview with the clock, with no key pressed', async () => {
+test('left and right move between the bar style tabs: a choice at All sets every bar, and one at a bar sets that bar', async () => {
+  const { io, next, press, answer } = await driver();
+  const run = runWizard(io, { preview });
+  await answer(KEY.down, KEY.enter); // customise
+  for (let i = 0; i < 3; i++) await answer(KEY.enter); // rows, two rows
+  const style = await next();
+  await press(style, KEY.down); // All: steps
+  assert.match(plain(style.lastFrame()), /\[All\] +ctx steps +5h steps +7d steps +ram steps/);
+  await press(style, KEY.right, KEY.up); // ctx: classic
+  assert.match(plain(style.lastFrame()), / All +\[ctx classic\] +5h steps/);
+  assert.match(plain(style.lastFrame()), /<--bar-style steps,ctx=classic>/, 'the preview shows each bar');
+  assert.match(plain(style.lastFrame()), /←→ to pick a bar/);
+  await press(style, KEY.left, KEY.left, KEY.down); // ram: rising
+  await press(style, KEY.enter);
+  const cells = await next();
+  // Any frame: with CI set, Ink draws no frame after the question unmounts.
+  assert.ok(style.frames.some((f) => /INPUT\nBar style\? steps,ctx=classic,ram=rising/.test(plain(f))), 'the answer as a list');
+  assert.match(plain(cells.lastFrame()), /Cells per classic bar\?\n❯ 5/, 'one classic bar: no tabs');
+  await press(cells, KEY.down, KEY.enter);
+  for (let i = 0; i < 5; i++) await answer(KEY.enter); // theme, labels, token line, token line parts, write
+  const typed = await runWizard(scripted(['n', '', '', '', 'steps,ctx=classic,ram=rising', '10', '', '', '', '', 'y']), { preview });
+  assert.deepEqual(await run, typed);
+  assert.deepEqual(typed, { statusLine: ['--bar-style', 'steps,ctx=classic,ram=rising', '--segments', '10'], tokenLine: [] });
+});
+
+test('with animate set, a question whose preview moves redraws it with the clock, with no key pressed, and another does not', async () => {
   const ink = await import('ink');
   const React = (await import('react')).default;
   const { render } = await import('ink-testing-library');
@@ -209,7 +234,15 @@ test('with animate set, a question redraws its preview with the clock, with no k
   const io = inkIoWith(deps, { write: () => {} }, false);
   let frame = 0;
   io.choices.preview(() => `frame ${++frame}`);
-  const asked = io.choices.one({ kind: 'CONFIRM', message: 'Go?', options: [{ label: 'Yes', value: true }], initial: 0 });
+  const still = io.choices.one({ kind: 'CONFIRM', message: 'Stay?', options: [{ label: 'Yes', value: true }], initial: 0 });
+  while (!ready) await delay(1);
+  ready = false;
+  const drawn = frame;
+  await delay(300);
+  assert.equal(frame, drawn, 'a preview that does not move is not redrawn');
+  question.stdin.write(KEY.enter);
+  assert.equal(await still, true);
+  const asked = io.choices.one({ kind: 'CONFIRM', message: 'Go?', options: [{ label: 'Yes', value: true }], initial: 0, moving: true });
   while (!ready) await delay(1);
   const first = plain(question.lastFrame());
   await delay(400);
@@ -220,6 +253,40 @@ test('with animate set, a question redraws its preview with the clock, with no k
   const after = frame;
   await delay(200);
   assert.equal(frame, after, 'an answered question draws no more frames');
+});
+
+test('Space pauses a moving preview and plays it again, and the io clock stops while it is paused', async () => {
+  const ink = await import('ink');
+  const React = (await import('react')).default;
+  const { render } = await import('ink-testing-library');
+  let question;
+  let ready = false;
+  const deps = { ink, React, mount: (tree) => (question = render(tree)), ready: () => (ready = true), animate: true };
+  const io = inkIoWith(deps, { write: () => {} }, false);
+  let frame = 0;
+  io.choices.preview(() => `frame ${++frame}`);
+  const asked = io.choices.one({ kind: 'INPUT', message: 'Style?', options: [{ label: 'a', value: 'a' }, { label: 'b', value: 'b' }], initial: 0, moving: true });
+  while (!ready) await delay(1);
+  assert.match(plain(question.lastFrame()), /Space to pause, Enter to accept/);
+  question.stdin.write(' ');
+  await delay(50);
+  assert.match(plain(question.lastFrame()), /Space to play, Enter to accept/);
+  const paused = frame;
+  const stopped = io.clock();
+  await delay(300);
+  assert.equal(frame, paused, 'no frames while paused');
+  assert.equal(io.clock(), stopped, 'the clock stops');
+  question.stdin.write(KEY.down);
+  await delay(50);
+  assert.ok(frame > paused, 'a move still redraws');
+  assert.equal(io.clock(), stopped);
+  question.stdin.write(' ');
+  await delay(300);
+  assert.ok(io.clock() > stopped, 'the clock runs again');
+  assert.ok(io.clock() < Date.now() - 250, 'from where it stopped');
+  assert.ok(frame > paused + 2, 'frames again');
+  question.stdin.write(KEY.enter);
+  assert.equal(await asked, 'b');
 });
 
 test('a row with no part ticked is not accepted, and says why', async () => {

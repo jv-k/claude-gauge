@@ -180,7 +180,7 @@ Each `--show` is one row. `--theme` picks one of four themes:
 
 ![The default status line rows in the default, pastel, high-contrast and mono themes.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/themes.png)
 
-`--bar-style` draws every bar another way, on both lines. `--bar-style steps` gives `5h 9% ▅▁▁▁▁▁ → 14:10`, and `--bar-style hairline` gives `5h 9% ━────╋── → 14:10`. There are seven styles; setup shows each one moving before you choose.
+`--bar-style` draws every bar another way, on both lines. `--bar-style steps` gives `5h 9% ▅▁▁▁▁▁ → 14:10`, and `--bar-style hairline` gives `5h 9% ━────╋── → 14:10`. There are seven styles; setup shows each one moving before you choose. A bar can also have its own: `--bar-style steps,ctx=rising` draws `ctx` in `rising` and the other bars in `steps`.
 
 > [!TIP]
 > The reference lists [every switch](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#options), the [themes](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#themes), the [bar styles](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#bar-styles) and [more examples](https://github.com/jv-k/claude-gauge/blob/main/docs/reference.md#examples).

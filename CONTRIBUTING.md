@@ -21,6 +21,20 @@ pnpm test
 
 `pnpm test` builds first, then runs the suites in `test/` against the build with Node's built-in test runner. `pnpm typecheck` checks the sources without a build. `pnpm lint` runs [Biome](https://biomejs.dev)'s linter over the sources, the suites and the scripts. `biome.jsonc` names the rules it turns off, and why.
 
+### Try your change
+
+`pnpm try` builds, then runs the build of claude-gauge with a config folder of its own, `.try/claude`, so it never changes your `~/.claude`. Git ignores `.try/`.
+
+```sh
+pnpm try setup                         # the setup questions
+pnpm try configure                     # the configure questions
+pnpm try:statusline --bar-style steps  # the status line for a sample session, with your switches
+pnpm try:tokenline                     # the token line for a sample turn
+pnpm try:reset                         # delete .try/
+```
+
+`pnpm try:statusline` saves its sample session in `.try/claude`, so the preview in `pnpm try setup` then shows it.
+
 [Bun](https://bun.sh) is optional. When Bun is installed, the parity suite also runs the TypeScript sources under Bun and checks that they print the same bytes as the build. Without Bun, those checks skip. With `REQUIRE_BUN=1` set, they fail instead, with a message that Bun is required but missing. The Bun jobs in the `test` workflow set it.
 
 ## Where things are
@@ -33,7 +47,7 @@ pnpm test
 | `src/wordmark.ts` | The claude-gauge wordmark, which the command prints above its usage and at the start of the wizard, but not for a command run with switches. It is in colour only when the colour gate allows: a non-empty `NO_COLOR` turns colour off, a `FORCE_COLOR` or `CLICOLOR_FORCE` that is neither empty nor `0` turns it on, and otherwise only a terminal gets colour. |
 | `src/styles.ts` | The look of the command's output, after [VerBump](https://github.com/jv-k/VerBump)'s `lib/styles.sh`: the header pills, the ✔ ! ✖ ℹ ↳ status lines, green values and dim defaults, behind the same colour gate as the wordmark. Every line the command prints goes through it, so one edit re-skins the command. The status line and the token line never import it. |
 | `src/errors.ts` | `GaugeError`, the error that `cli.ts` and `settings-file.ts` throw on purpose. It keeps the values in its message, such as paths, commands and switches, apart from the text, so the command prints them green on stderr, as it does in a result. Its `message` is the plain text. |
-| `src/wizard.ts` | The wizard's questions, with a preview of the status line after each answer, which on a terminal replaces the one before it in place, and the offer to star the repo. `configure` starts it from the switches set up now, and `setup` from the defaults. It returns the lines' switches and writes no file. On a terminal, its preview's bars move while a question waits. |
+| `src/wizard.ts` | The wizard's questions, with a preview of the status line after each answer, which on a terminal replaces the one before it in place, and the offer to star the repo. With lines set up, it first offers to keep them, change them from the switches set up now, or start over from the defaults. It returns the lines' switches and writes no file. On a terminal, its preview's bars move while the bar style question waits, and Space pauses them. |
 | `src/ink-io.ts` | The Ink front end of the wizard's questions: each question as a choice made with the arrow keys and Enter, the parts of a row ticked with Space, and the preview redrawn as the selection moves. `cli.ts` loads it with `import()` only when stdin and stdout are both a terminal, and runs the readline questions where Ink cannot be loaded, as in the plugin's checkout. |
 | `src/settings.ts` | `plan()`, which works out the next `settings.json` from the current one and the user's choices, without reading or writing a file. |
 | `src/settings-file.ts` | Reads `settings.json`, and writes it atomically, through a symlink, after a timestamped backup. |
@@ -43,6 +57,7 @@ pnpm test
 | `scripts/release-notes.js` | Prints a version's section of `CHANGELOG.md`, which the `release` workflow uses as the GitHub release notes. It is not part of the package. |
 | `scripts/release-tag.js` | Says whether a release tag such as `v1.0.0-rc.1` is a pre-release, which the `release` workflow publishes to npm under `next` as a GitHub pre-release. It is not part of the package. |
 | `scripts/media.sh` | Makes the pictures in `docs/media/` from the build: the README's pictures of the pace marker and the themes, from the status line with freeze, and the demo GIF of the setup wizard, from `docs/media/demo.tape` with VHS. The wizard runs in a fresh folder in `/tmp`, so the recording never changes your `~/.claude`. Run `pnpm build && bash scripts/media.sh`, with `freeze` and `vhs` on the PATH. It is not part of the package. |
+| `scripts/try.js` | Runs the build with `CLAUDE_CONFIG_DIR` set to `.try/claude`, for `pnpm try`. It is not part of the package. |
 | `scripts/test.js` | Runs every suite in `test/` with Node's test runner, the same way on Node 18, 20, 22 and 24 and on every system. `pnpm test` runs it after the build. It is not part of the package. |
 | `README.md` | The user docs: every part and every switch, both install routes, and the claude-hud migration table. |
 | `docs/reference.md` | The full reference: every part, switch and theme, the other install routes, and the claude-hud option map. The README links to it. |
