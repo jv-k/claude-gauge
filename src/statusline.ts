@@ -2201,6 +2201,9 @@ interface AgentRun {
   endedAt?: number;
   // Ended without finishing its work: it failed, or was stopped.
   failed?: boolean;
+  // When its own transcript last changed, in ms since the epoch, while it
+  // runs and that transcript is found.
+  activeAt?: number;
 }
 
 // A todo of the session's list: what to do, the form Claude Code shows
@@ -2335,8 +2338,9 @@ interface TodoCall {
 }
 
 // A subagent as the reader keeps it: by the id of the call that started it,
-// and whether it runs in the background.
-type AgentEntry = AgentRun & { id: string; background?: boolean };
+// whether it runs in the background, and the agent id that names its own
+// transcript, once found.
+type AgentEntry = AgentRun & { id: string; background?: boolean; agentId?: string };
 
 // The ended calls kept at most, newest first: a call whose result never
 // came must not grow the state for ever. Running calls are all kept, so a
@@ -2358,7 +2362,10 @@ const RECENT_KEPT = 20;
 const SKILL_TEXT = 'Base directory for this skill:';
 
 // The fs calls the reader makes, so a test can count the bytes it reads.
-type TranscriptFs = Pick<typeof fs, 'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync'>;
+type TranscriptFs = Pick<
+  typeof fs,
+  'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'readdirSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync'
+>;
 
 interface TranscriptReadOptions {
   stateDir?: string;
@@ -2432,6 +2439,8 @@ function agentResult(agent: AgentEntry, block: ContentBlock, record: TranscriptR
   const result = isObject(record.toolUseResult) ? record.toolUseResult : {};
   const model = agentModel(result.resolvedModel);
   if (model) agent.model = model;
+  const agentId = stringAt(result, 'agentId');
+  if (agentId) agent.agentId = agentId;
   if (result.isAsync === true || result.status === 'async_launched') {
     agent.background = true;
     return;
@@ -2738,8 +2747,105 @@ function saveTranscriptState(io: TranscriptFs, stateFile: string, state: Transcr
   replaceQuietly(io, stateFile, JSON.stringify(state));
 }
 
+// A subagent's own transcript. Claude Code writes it beside the session
+// transcript <session>.jsonl, as <session>/subagents/agent-<agentId>.jsonl,
+// with agent-<agentId>.meta.json, whose toolUseId is the id of the Agent call
+// in the session transcript that started it. The launch result of a subagent
+// in the background names its agentId as well. A skill that runs in a fork
+// writes a transcript there too, with no toolUseId, and no Agent call names
+// it. The reader keeps a byte offset per subagent transcript, as it does for
+// the session's, in a state file beside the session's, and reads one only
+// while its subagent runs.
+const SUBAGENT_STATE_VERSION = 1;
+
+interface SubagentState {
+  version: number;
+  file: string;
+  dev: number;
+  ino: number;
+  offset: number;
+  // The model of the subagent's latest response, as its id.
+  model?: string;
+}
+
+const subagentsFolder = (file: string): string => path.join(file.replace(/\.jsonl$/, ''), 'subagents');
+
+const stateFileOf = (stateDir: string, file: string): string => path.join(stateDir, `${createHash('sha1').update(file).digest('hex')}.json`);
+
+// The agent id of each running subagent that has none yet, from the meta
+// files in the subagents folder. True when it found one.
+function findAgentIds(io: TranscriptFs, folder: string, agents: AgentEntry[]): boolean {
+  const wanted = agents.filter((a) => a.endedAt === undefined && !a.agentId);
+  if (!wanted.length) return false;
+  let names: string[];
+  try {
+    names = io.readdirSync(folder).map(String);
+  } catch {
+    return false;
+  }
+  const known = new Set(agents.map((a) => a.agentId));
+  let found = false;
+  for (const name of names) {
+    const agentId = /^agent-(.+)\.meta\.json$/.exec(name)?.[1];
+    if (!agentId || known.has(agentId)) continue;
+    let toolUseId: string | undefined;
+    try {
+      toolUseId = stringAt(JSON.parse(String(io.readFileSync(path.join(folder, name), 'utf8'))), 'toolUseId');
+    } catch {
+      continue;
+    }
+    const agent = wanted.find((a) => a.id === toolUseId && !a.agentId);
+    if (agent) {
+      agent.agentId = agentId;
+      found = true;
+    }
+  }
+  return found;
+}
+
+function loadSubagentState(io: TranscriptFs, stateFile: string): SubagentState | undefined {
+  try {
+    const state = JSON.parse(String(io.readFileSync(stateFile, 'utf8'))) as SubagentState;
+    return state?.version === SUBAGENT_STATE_VERSION && Number.isInteger(state.offset) ? state : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// What a subagent's own transcript shows: the model of its latest response,
+// and when the file last changed. Reads only the bytes it gained since the
+// last call. A transcript that does not exist shows nothing.
+function readSubagentTranscript(io: TranscriptFs, file: string, stateDir: string): Pick<AgentRun, 'model' | 'activeAt'> {
+  let stat: fs.Stats;
+  try {
+    stat = io.statSync(file);
+  } catch {
+    return {};
+  }
+  const stateFile = stateFileOf(stateDir, file);
+  const saved = loadSubagentState(io, stateFile);
+  const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
+  const state: SubagentState = unchanged ? saved : { version: SUBAGENT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0 };
+  if (stat.size > state.offset || !unchanged) {
+    state.offset = readLines(io, file, state.offset, stat.size, (line) => {
+      if (!line.includes('"assistant"')) return;
+      try {
+        const record = JSON.parse(line) as TranscriptRecord;
+        const model = record?.type === 'assistant' ? record.message?.model : undefined;
+        if (typeof model === 'string' && model.trim() && model !== '<synthetic>') state.model = model;
+      } catch {
+        /* not a record: skip it */
+      }
+    });
+    replaceQuietly(io, stateFile, JSON.stringify(state));
+  }
+  const model = agentModel(state.model);
+  return { ...(model ? { model } : {}), activeAt: stat.mtimeMs };
+}
+
 // What the transcript shows, reading only what it gained since the last
-// call. A transcript that does not exist shows nothing.
+// call. A transcript that does not exist shows nothing. A running subagent
+// shows the model its own transcript names, when it names one.
 function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(), fs: io = fs }: TranscriptReadOptions = {}): TranscriptActivity {
   let stat: fs.Stats;
   try {
@@ -2747,7 +2853,7 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   } catch {
     return emptyActivity();
   }
-  const stateFile = path.join(stateDir, `${createHash('sha1').update(file).digest('hex')}.json`);
+  const stateFile = stateFileOf(stateDir, file);
   const saved = loadTranscriptState(io, stateFile);
   const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
   const state: TranscriptState = unchanged
@@ -2768,7 +2874,9 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
         compactions: 0,
       };
 
+  let changed = !unchanged;
   if (stat.size > state.offset || !unchanged) {
+    changed = true;
     state.offset = readLines(io, file, state.offset, stat.size, (line) => {
       // Only lines that can hold a tool call, a result, a prompt, a response
       // or a compaction are parsed.
@@ -2779,10 +2887,14 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
         /* not a record: skip it */
       }
     });
-    saveTranscriptState(io, stateFile, state);
   }
+  const folder = subagentsFolder(file);
+  if (findAgentIds(io, folder, state.agents)) changed = true;
+  if (changed) saveTranscriptState(io, stateFile, state);
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
-  const agents = state.agents.map(({ id, background, ...agent }) => agent);
+  const agents = state.agents.map(({ id, background, agentId, ...agent }) =>
+    agent.endedAt === undefined && agentId ? { ...agent, ...readSubagentTranscript(io, path.join(folder, `agent-${agentId}.jsonl`), stateDir) } : agent,
+  );
   const todos = state.todos.map(({ id, ...todo }) => todo);
   const mcp = state.mcp.map((server) => ({ ...server }));
   const lastReplyAt = state.response?.endedAt;
