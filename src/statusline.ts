@@ -1896,8 +1896,9 @@ interface RenderOptions {
   // The machine's name, for the folder's file URL.
   hostname?: string;
   // Reads what a transcript shows; by default incrementally, with its state
-  // in the state folder.
-  transcript?: (file: string) => TranscriptActivity;
+  // in the state folder. subagents is false when no row shows the agents
+  // part, so the transcripts of running subagents are left unread.
+  transcript?: (file: string, options?: { subagents?: boolean }) => TranscriptActivity;
 }
 
 // A terminal width, from render's option or the text of COLUMNS, which
@@ -1996,7 +1997,7 @@ function render(
     const file = data.transcript_path;
     if (typeof file !== 'string' || !file) return emptyActivity();
     try {
-      return sanitiseActivity(transcript(file));
+      return sanitiseActivity(transcript(file, { subagents: config.rows.some((row) => row.includes('agents')) }));
     } catch {
       return emptyActivity();
     }
@@ -2465,6 +2466,9 @@ type TranscriptFs = Pick<
 interface TranscriptReadOptions {
   stateDir?: string;
   fs?: TranscriptFs;
+  // Whether to read the transcripts of running subagents; only the agents
+  // part shows what they give.
+  subagents?: boolean;
 }
 
 const transcriptStateDir = () => path.join(configDir(), 'claude-gauge', '.state', 'transcripts');
@@ -2926,16 +2930,22 @@ function readSubagentTranscript(io: TranscriptFs, file: string, stateDir: string
   const unchanged = cursorHolds(saved, file, stat);
   const state: SubagentState = unchanged ? saved : { version: SUBAGENT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0 };
   if (stat.size > state.offset || !unchanged) {
-    state.offset = readLines(io, file, state.offset, stat.size, (line) => {
+    // A transcript that goes away or cannot be read after the stat shows
+    // nothing, rather than taking the session's activity down with it.
+    try {
+      state.offset = readLines(io, file, state.offset, stat.size, (line) => {
       if (!line.includes('"assistant"')) return;
       try {
         const record = JSON.parse(line) as TranscriptRecord;
         const model = record?.type === 'assistant' ? record.message?.model : undefined;
-        if (typeof model === 'string' && model.trim() && model !== SYNTHETIC_MODEL) state.model = model;
-      } catch {
-        /* not a record: skip it */
-      }
-    });
+          if (typeof model === 'string' && model.trim() && model !== SYNTHETIC_MODEL) state.model = model;
+        } catch {
+          /* not a record: skip it */
+        }
+      });
+    } catch {
+      return {};
+    }
     replaceQuietly(io, stateFile, JSON.stringify(state));
   }
   const model = agentModel(state.model);
@@ -2945,7 +2955,7 @@ function readSubagentTranscript(io: TranscriptFs, file: string, stateDir: string
 // What the transcript shows, reading only what it gained since the last
 // call. A transcript that does not exist shows nothing. A running subagent
 // shows the model its own transcript names, when it names one.
-function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(), fs: io = fs }: TranscriptReadOptions = {}): TranscriptActivity {
+function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(), fs: io = fs, subagents = true }: TranscriptReadOptions = {}): TranscriptActivity {
   let stat: fs.Stats;
   try {
     stat = io.statSync(file);
@@ -2988,13 +2998,13 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
     });
   }
   const folder = subagentsFolder(file);
-  if (linkSubagentTranscripts(io, folder, state)) changed = true;
+  if (subagents && linkSubagentTranscripts(io, folder, state)) changed = true;
   if (changed) saveTranscriptState(io, stateFile, state);
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
   // A running subagent's own transcript names the model it runs on, version
   // and all, so it wins over the alias the Agent call may give.
   const agents = state.agents.map(({ id, background, agentId, ...agent }) =>
-    agent.endedAt === undefined && agentId ? { ...agent, ...readSubagentTranscript(io, path.join(folder, `agent-${agentId}.jsonl`), stateDir) } : agent,
+    subagents && agent.endedAt === undefined && agentId ? { ...agent, ...readSubagentTranscript(io, path.join(folder, `agent-${agentId}.jsonl`), stateDir) } : agent,
   );
   const todos = state.todos.map(({ id, ...todo }) => todo);
   const mcp = state.mcp.map((server) => ({ ...server }));

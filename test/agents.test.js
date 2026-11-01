@@ -315,3 +315,45 @@ test("the reader reads each subagent's meta file once, even one that names no Ag
   readTranscriptActivity(file, { stateDir, fs: second });
   assert.equal(second.metas, 0);
 });
+
+test("a subagent transcript that cannot be read after its stat shows as before, and the session's activity stays", () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const { file, transcript, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5', at(70))] });
+  const io = { ...fs };
+  io.openSync = (target, ...rest) => {
+    if (target === transcript) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+    return fs.openSync(target, ...rest);
+  };
+  const { agents } = readTranscriptActivity(file, { stateDir, fs: io });
+  assert.deepEqual(agents, [{ type: 'Explore', description: 'Map the reader', startedAt: at(72) }]);
+});
+
+test('with no agents part to show, the reader leaves the subagents folder and transcripts unread', () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const { file, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5', at(70))] });
+  const io = countingFs();
+  // The reader catches a listing error, so the test counts the listings.
+  let listings = 0;
+  io.readdirSync = (...args) => {
+    listings += 1;
+    return fs.readdirSync(...args);
+  };
+  const [agent] = readTranscriptActivity(file, { stateDir, fs: io, subagents: false }).agents;
+  assert.equal(listings, 0, 'the subagents folder was listed');
+  assert.deepEqual(agent, { type: 'Explore', description: 'Map the reader', startedAt: at(72) });
+  assert.equal(io.bytes, fs.statSync(file).size);
+
+  let asked;
+  render(
+    { workspace: { current_dir: '/home/me/project' }, transcript_path: file },
+    {
+      config: parseArgs(['--show', 'tools']),
+      nowMs: NOW,
+      transcript: (f, options) => {
+        asked = options;
+        return readTranscriptActivity(f, { stateDir, ...options });
+      },
+    },
+  );
+  assert.deepEqual(asked, { subagents: false });
+});
