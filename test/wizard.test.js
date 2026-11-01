@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { Readable } = require('node:stream');
-const { runWizard, offerStar, streamIo, EndOfAnswers, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
+const { runWizard, offerStar, streamIo, EndOfAnswers, Interrupted, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
 const { DEFAULT_ROWS } = require('../dist/statusline.js');
 
 const { plain } = require('./helpers');
@@ -227,6 +227,58 @@ test('configure: the token line parts start from the installed --show, Enter kee
   assert.match(unknown.questions.at(-3), /\[time,req,out,cache,ctx\] $/);
 });
 
+// An io with choices, as the Ink front end has, that answers each question
+// with the next scripted answer: a function of the question that gives its
+// answer. It keeps each question.
+function choosing(answers) {
+  const left = [...answers];
+  const questions = [];
+  const next = async (question) => {
+    questions.push(question);
+    if (!left.length) throw new EndOfAnswers();
+    return left.shift()(question);
+  };
+  return { questions, ask: async () => undefined, write: () => {}, choices: { one: next, many: next, text: next, preview: () => {} } };
+}
+
+// Enter at a choice: the option it starts on, or the parts ticked first.
+const enter = (q) => (Array.isArray(q.initial) ? [...q.initial] : q.options[q.initial].value);
+// The option with `label`.
+const pick = (label) => (q) => {
+  const option = q.options.find((o) => o.label === label);
+  assert.ok(option, `${label} in ${q.options.map((o) => o.label).join(', ')}`);
+  return option.value;
+};
+// A typed answer, as the question reads it.
+const typed = (answer) => (q) => q.read(answer);
+
+// The status line questions on the customise path, each answered with Enter.
+const enterAtStatusLineChoices = [pick('No'), enter, enter, enter, enter, enter, enter];
+
+test('as a choice, the context window offers another size, which takes any size the token line reads', async () => {
+  const { preview } = fakePreview();
+  const io = choosing([...enterAtStatusLineChoices, enter, enter, pick('Another size'), typed('500K'), enter]);
+  assert.deepEqual(await runWizard(io, { preview }), { statusLine: [], tokenLine: ['--window', '500k'] });
+  const sizes = io.questions.at(-3);
+  assert.deepEqual(sizes.options.map((o) => o.label), ['200k', '1m', 'Another size']);
+  const other = io.questions.at(-2);
+  for (const answer of ['', 'huge', '0']) assert.deepEqual(other.read(answer), { retry: 'Answer a size such as 200k or 1m.' }, JSON.stringify(answer));
+
+  const installed = { statusLine: [], tokenLine: ['--window', '1m', '--show', 'req,ctx'] };
+  const changed = choosing([...enterAtStatusLineChoices, enter, enter, pick('Another size'), typed('500k'), enter]);
+  assert.deepEqual(await runWizard(changed, { preview, installed }), { statusLine: [], tokenLine: ['--show', 'req,ctx', '--window', '500k'] });
+});
+
+test('as a choice, Enter at the context window keeps a --window the token line cannot read, as a typed Enter does', async () => {
+  const { preview } = fakePreview();
+  const installed = { statusLine: [], tokenLine: ['--window', 'huge'] };
+  const kept = choosing([...enterAtStatusLineChoices, enter, enter, enter, enter]);
+  assert.deepEqual(await runWizard(kept, { preview, installed }), { statusLine: [], tokenLine: ['--window', 'huge'] });
+  assert.equal(kept.questions.at(-2).options[kept.questions.at(-2).initial].label, 'Keep --window huge');
+  const dropped = choosing([...enterAtStatusLineChoices, enter, enter, pick('200k'), enter]);
+  assert.deepEqual(await runWizard(dropped, { preview, installed }), { statusLine: [], tokenLine: [] }, '200k drops it, as a typed 200k does');
+});
+
 // configure: the wizard starts from the switches set up now.
 test('configure offers to keep the bars set up now, and a yes leaves both as they are', async () => {
   const io = scripted(['y']);
@@ -328,6 +380,13 @@ test('the star offer defaults to yes, runs the star on a yes or Enter, and is sk
   const io = scripted(['y']);
   await offerStar(io, { hasGh: () => true, star: () => false });
   assert.match(io.output, /could not star/);
+});
+
+test('Ctrl+C at the star offer stops setup, as at any other question, and stars nothing', async () => {
+  const stopped = { ...scripted([]), choices: { one: async () => { throw new Interrupted(); }, many: async () => [], preview: () => {} } };
+  let starred = 0;
+  await assert.rejects(offerStar(stopped, { hasGh: () => true, star: () => { starred++; return true; } }), (err) => err instanceof Interrupted && /settings are written/.test(err.message));
+  assert.equal(starred, 0);
 });
 
 test('the preview uses the payload the status line saved, else a sample', () => {

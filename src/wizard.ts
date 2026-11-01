@@ -73,12 +73,21 @@ interface PickMany<P extends string> {
   preview?: (value: P[]) => string;
 }
 
+// A question answered with typed words, for an answer no list of options
+// holds. `read` takes the answer, or gives a retry that says why it cannot,
+// as for the readline questions.
+interface TypeIn<T> {
+  message: string;
+  read: (answer: string) => T | { retry: string };
+}
+
 // A front end that asks with choices. Each question rejects with
 // EndOfAnswers when it is stopped, such as at Ctrl+C. `preview` sets the
 // preview that the questions after it show, or none for ''.
 interface ChoiceIo {
   one<T>(question: PickOne<T>): Promise<T>;
   many<P extends string>(question: PickMany<P>): Promise<P[]>;
+  text<T>(question: TypeIn<T>): Promise<T>;
   preview(text: string): void;
 }
 
@@ -104,10 +113,10 @@ class EndOfAnswers extends Error {
 }
 
 // Ctrl+C stopped the questions: nothing is written, as at the end of the
-// input.
+// input. The star offer, after the settings are written, says so instead.
 class Interrupted extends EndOfAnswers {
-  constructor() {
-    super('Stopped at Ctrl+C. Nothing changed.');
+  constructor(message = 'Stopped at Ctrl+C. Nothing changed.') {
+    super(message);
   }
 }
 
@@ -299,6 +308,22 @@ const readTokenWindow = (answer: string): string | undefined | { retry: string }
   return parseSize(answer) > 0 ? answer.toLowerCase() : { retry: 'Answer a size such as 200k or 1m.' };
 };
 
+// The context window as a choice: `sizes`, `fallback` first, then another
+// size, typed and read as readTokenWindow reads it, though not empty. A
+// --window the token line cannot read, `unread`, comes first as an option to
+// keep it, which gives undefined, as Enter does for the typed question.
+const pickWindow = (sizes: readonly string[], fallback: string, unread?: string) => async (c: ChoiceIo) => {
+  const options: Option<string | undefined | null>[] = [
+    ...(unread === undefined ? [] : [{ label: `Keep --window ${unread}`, value: undefined }]),
+    ...sizes.map((size) => ({ label: size, value: size })),
+    { label: 'Another size', value: null },
+  ];
+  const initial = unread === undefined ? Math.max(0, sizes.indexOf(fallback)) : 0;
+  const size = await c.one({ kind: 'INPUT', message: 'Context window?', options, initial });
+  if (size !== null) return size;
+  return c.text({ message: 'Context window, such as 500k:', read: (answer) => readTokenWindow(answer) ?? { retry: 'Answer a size such as 200k or 1m.' } });
+};
+
 // The wizard's io, which counts the screen rows written since the last
 // preview: each newline, and each wrap of a line wider than the terminal,
 // with a character counted one column wide, and colour codes and links,
@@ -481,12 +506,14 @@ async function askAll(userIo: WizardIo, { preview, installed }: WizardOptions): 
     io.write(s.info('The token line cannot read the context window, so it assumes 200k until the context grows past it.'));
     const installedWindow = tokenWindowOf(start.tokenSwitches) ?? '200k';
     const windows = [...new Set(['200k', '1m', installedWindow])];
+    const written = parseTokenArgs(start.tokenSwitches).window;
+    const unread = written !== undefined && tokenWindowOf(start.tokenSwitches) === undefined ? written : undefined;
     const window = await askFor(
       io,
       `Context window, 200k or 1m? ${hint(s, installedWindow)} `,
       readTokenWindow,
       'INPUT',
-      oneOf('Context window?', windows, installedWindow),
+      pickWindow(windows, installedWindow, unread),
     );
     if (window !== undefined) tokenSwitches = tokenSwitchesForWindow(window, tokenSwitches);
   }
@@ -505,13 +532,15 @@ interface StarOptions {
 }
 
 // The end of setup: with gh at hand, offers to star the repo, and stars it
-// on a yes or Enter. Without gh it says nothing. The end of the input is a no.
+// on a yes or Enter. Without gh it says nothing. The end of the input is a no,
+// and Ctrl+C stops setup, as at any other question.
 async function offerStar(io: WizardIo, { hasGh, star }: StarOptions): Promise<void> {
   if (!hasGh()) return;
   let yes: boolean;
   try {
     yes = await confirm(io, `Star ${REPO} on GitHub with gh?`, true);
   } catch (err) {
+    if (err instanceof Interrupted) throw new Interrupted('Stopped at Ctrl+C. The settings are written, and the repo is not starred.');
     if (err instanceof EndOfAnswers) return;
     throw err;
   }
@@ -620,4 +649,4 @@ async function openIo(input: Input, output: Output, load: LoadInk = loadInk): Pr
 
 export { runWizard, offerStar, confirm, streamIo, openIo, EndOfAnswers, Interrupted, samplePayload, loadPayload, previewer, switchesFor };
 
-export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, Output, Input, OpenIo };
+export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, TypeIn, Output, Input, OpenIo };

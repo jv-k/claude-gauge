@@ -1,6 +1,7 @@
 // The Ink front end of the setup and configure questions. Each question is a
 // choice: the arrow keys move the selection and Enter accepts it, and the
-// parts of a row are a list to tick with Space. The preview above the
+// parts of a row are a list to tick with Space. An answer no list holds, such
+// as another context window size, is typed. The preview above the
 // question redraws as the selection moves, before the answer is accepted.
 // Ctrl+C stops the questions, and nothing is written.
 //
@@ -18,7 +19,7 @@
 
 import type { ReactElement } from 'react';
 import { Interrupted } from './wizard';
-import type { ChoiceIo, Input, Output, OpenIo } from './wizard';
+import type { ChoiceIo, Input, Output, OpenIo, TypeIn } from './wizard';
 import { styles } from './styles';
 
 type InkModule = typeof import('ink', { with: { 'resolution-mode': 'import' } });
@@ -54,6 +55,9 @@ interface View {
   initial: number;
   // Set for a list to tick, in the order ticked.
   ticked?: number[];
+  // Set for a typed answer, with no labels: the reason the text is not
+  // taken, or '' to take it.
+  check?(text: string): string;
   // The preview with the selection, or the ticks, as they are now.
   preview(cursor: number, ticked: number[]): string;
 }
@@ -67,9 +71,13 @@ function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, '
   let live: Mounted | undefined;
 
   // The frame for `view`: the preview, the pill, the question, the options in
-  // view with the selection marked, a reason the answer is not taken, and the
-  // keys.
-  const frame = (view: View, cursor: number, ticked: number[], warning: string) => {
+  // view with the selection marked, or the text typed, a reason the answer is
+  // not taken, and the keys.
+  const frame = (view: View, cursor: number, ticked: number[], text: string, warning: string) => {
+    if (view.check) {
+      const typed = `${s.value('❯')} ${s.value(text)}\n`;
+      return [view.preview(cursor, ticked), s.pill(view.kind, 'question'), `${view.message}\n`, typed, warning ? s.warn(warning) : '', s.dim('Type the answer, Enter to accept')].join('');
+    }
     const many = view.ticked !== undefined;
     const from = Math.max(0, Math.min(cursor - Math.floor(VISIBLE / 2), view.labels.length - VISIBLE));
     const shown = view.labels.slice(from, from + VISIBLE);
@@ -93,8 +101,8 @@ function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, '
 
   // The question as Ink shows it. The selection and the ticks live in a ref,
   // so a key read before React draws the last one still sees them.
-  const Question = ({ view, done }: { view: View; done(cursor: number, ticked: number[] | null): void }) => {
-    const state = React.useRef({ cursor: view.initial, ticked: [...(view.ticked ?? [])], warning: '', answered: false });
+  const Question = ({ view, done }: { view: View; done(cursor: number, ticked: number[] | null, text: string): void }) => {
+    const state = React.useRef({ cursor: view.initial, ticked: [...(view.ticked ?? [])], text: '', warning: '', answered: false });
     const [, redraw] = React.useState(0);
     ink.useInput((input, key) => {
       const now = state.current;
@@ -102,7 +110,21 @@ function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, '
       const n = view.labels.length;
       if (input === 'c' && key.ctrl) {
         now.answered = true;
-        done(now.cursor, null);
+        done(now.cursor, null, now.text);
+        return;
+      }
+      if (view.check) {
+        if (key.return) {
+          now.warning = view.check(now.text.trim());
+          if (!now.warning) {
+            now.answered = true;
+            done(now.cursor, now.ticked, now.text.trim());
+            return;
+          }
+        } else if (key.backspace || key.delete) now.text = now.text.slice(0, -1);
+        else if (input && !key.ctrl && !key.meta) now.text += input.replace(/[\x00-\x1f\x7f]/g, '');
+        else return;
+        redraw((r) => r + 1);
         return;
       }
       if (key.upArrow) now.cursor = (now.cursor - 1 + n) % n;
@@ -114,7 +136,7 @@ function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, '
         if (view.ticked && !now.ticked.length) now.warning = 'Tick at least one part with Space.';
         else {
           now.answered = true;
-          done(now.cursor, now.ticked);
+          done(now.cursor, now.ticked, now.text);
           return;
         }
       } else return;
@@ -123,24 +145,24 @@ function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, '
     // After useInput's own effect, which starts to read the keys.
     React.useEffect(() => ready?.(), []);
     const now = state.current;
-    return h(ink.Text, null, frame(view, now.cursor, now.ticked, now.warning));
+    return h(ink.Text, null, frame(view, now.cursor, now.ticked, now.text, now.warning));
   };
 
-  // Mounts `view` and resolves to the selection and the ticks once accepted.
-  // The question and its answer replace the frame, then Ink unmounts. Ctrl+C
-  // clears the frame and rejects with Interrupted.
+  // Mounts `view` and resolves to the selection, the ticks and the text typed
+  // once accepted. The question and its answer replace the frame, then Ink
+  // unmounts. Ctrl+C clears the frame and rejects with Interrupted.
   const ask = (view: View) =>
-    new Promise<{ cursor: number; ticked: number[] }>((resolve, reject) => {
-      const done = (cursor: number, ticked: number[] | null) => {
+    new Promise<{ cursor: number; ticked: number[]; text: string }>((resolve, reject) => {
+      const done = (cursor: number, ticked: number[] | null, text: string) => {
         // After the key's update, so the last frame is the one drawn here.
         setImmediate(() => {
-          const answer = ticked ? (view.ticked ? ticked.map((i) => view.labels[i]).join(',') : view.labels[cursor]) : '';
+          const answer = !ticked ? '' : view.check ? text : view.ticked ? ticked.map((i) => view.labels[i]).join(',') : view.labels[cursor];
           question.rerender(h(ink.Text, null, ticked ? `${s.pill(view.kind, 'question')}${view.message} ${s.value(answer)}` : ''));
           question.unmount();
           live = undefined;
           // Ink leaves the cursor at the end of its last line.
           output.write('\n');
-          if (ticked) resolve({ cursor, ticked });
+          if (ticked) resolve({ cursor, ticked, text });
           else reject(new Interrupted());
         });
       };
@@ -170,6 +192,19 @@ function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, '
         preview: (_, now) => (previewFor ? previewFor(now.map((i) => options[i])) : preview),
       });
       return answer.ticked.map((i) => options[i]);
+    },
+    // The answer that `read` takes from the text typed. The text it cannot
+    // take stays, with the reason, to be changed.
+    text: async <T>({ message, read }: TypeIn<T>): Promise<T> => {
+      let value: T | undefined;
+      const check = (text: string) => {
+        const answer = read(text);
+        if (typeof answer === 'object' && answer !== null && 'retry' in answer) return answer.retry;
+        value = answer as T;
+        return '';
+      };
+      await ask({ kind: 'INPUT', message, labels: [], initial: 0, check, preview: () => preview });
+      return value as T;
     },
     preview: (text) => {
       preview = text;
