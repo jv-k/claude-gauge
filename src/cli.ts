@@ -32,9 +32,11 @@ import { readSettings, writeSettings, writeAtomic } from './settings-file';
 import { runWizard, offerStar, confirm, loadPayload, previewer, streamIo } from './wizard';
 import { payloadFile } from './statusline';
 import { wordmark, colorEnabled } from './wordmark';
-import { stylesFor } from './styles';
+import { styles, stylesFor } from './styles';
 
-const USAGE = `Usage: claude-gauge <setup | configure | uninstall | update> [switches]
+// The usage, after its heading. Without colour the heading is `Usage: ` on
+// the first line; in colour it is a USAGE pill on a line of its own.
+const USAGE = `claude-gauge <setup | configure | uninstall | update> [switches]
 
   setup        add the status line and the token line to Claude Code's settings
   configure    change the switches of a bar that setup added, or take it out
@@ -59,13 +61,15 @@ The bars' switches are in README.md, under Options. The settings file is
 $CLAUDE_CONFIG_DIR/settings.json, else ~/.claude/settings.json.
 `;
 
-// The wordmark and a blank line, in colour when `stream` takes colour. The
-// usage and the questions start with it. Scripts and the plugin's slash
-// commands run the commands with switches, and those print no wordmark.
-const banner = (stream: NodeJS.WriteStream) => `${wordmark(colorEnabled(stream))}\n`;
-
-// The usage, under the wordmark, for `stream`.
-const usage = (stream: NodeJS.WriteStream) => banner(stream) + USAGE;
+// The usage, under the wordmark and a blank line, for `stream`. In colour a
+// USAGE pill heads it, as a pill heads each command's result. Without colour
+// the pill would be the bare word USAGE, so the plain usage keeps its
+// `Usage: ` line. Scripts and the plugin's slash commands run the commands
+// with switches, and those print no wordmark.
+const usage = (stream: NodeJS.WriteStream) => {
+  const color = colorEnabled(stream);
+  return wordmark(color) + (color ? styles(color).pill('Usage') : '\nUsage: ') + USAGE;
+};
 
 // A mistake in the command line: exit 2, with the usage.
 class UsageError extends Error {}

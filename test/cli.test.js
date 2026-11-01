@@ -345,7 +345,7 @@ test('FORCE_COLOR or CLICOLOR_FORCE draws the wordmark a colour a letter, the hy
   for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
     const r = runCli(configFolder(), ['--help'], { env: colour });
     ok(r);
-    assert.ok(r.stdout.startsWith(`${RAINBOW.join('\n')}\n\nUsage: claude-gauge `), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
+    assert.ok(r.stdout.startsWith(`${RAINBOW.join('\n')}\n`), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
   }
 });
 
@@ -398,6 +398,25 @@ const OK = icon(SGR.ok, '✔');
 const INFO = icon(SGR.info, 'ℹ');
 const ERROR = icon(SGR.error, '✖');
 
+// In colour the usage sits under a USAGE pill, as a command's result sits
+// under its own, so its first line drops the Usage: that the pill now says.
+const USAGE_PILL = `${RAINBOW.join('\n')}\n\n${pill('USAGE')}\nclaude-gauge <setup | configure | uninstall | update> [switches]\n`;
+
+test('--help in colour puts a USAGE pill between the wordmark and the usage', () => {
+  for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
+    const r = runCli(configFolder(), ['--help'], { env: colour });
+    ok(r);
+    assert.ok(r.stdout.startsWith(USAGE_PILL), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
+    assert.doesNotMatch(r.stdout, /Usage:/);
+  }
+});
+
+test('a bare claude-gauge in colour prints the USAGE pill over the usage, on stderr', () => {
+  const bare = runCli(configFolder(), [], { env: { FORCE_COLOR: '1' } });
+  assert.equal(bare.status, 2);
+  assert.ok(bare.stderr.startsWith(USAGE_PILL), JSON.stringify(bare.stderr.slice(0, 400)));
+});
+
 test('a bare claude-gauge prints the wordmark and the usage, on stderr, and exits 2', () => {
   const bare = runCli(configFolder(), [], { env: { NO_COLOR: '1' } });
   assert.equal(bare.status, 2);
@@ -411,7 +430,7 @@ test('the usage after a mistake starts with the wordmark, coloured by the gate o
   assert.ok(noCommand.stderr.startsWith(`\nERROR\n✖ Name a command.\n\n${WORDMARK.join('\n')}\n\nUsage: claude-gauge `), noCommand.stderr);
   const unknown = runCli(configFolder(), ['launch'], { env: { FORCE_COLOR: '1' } });
   assert.equal(unknown.status, 2);
-  assert.ok(unknown.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}Unknown command: launch\n\n${RAINBOW.join('\n')}\n\nUsage: claude-gauge `), JSON.stringify(unknown.stderr.slice(0, 400)));
+  assert.ok(unknown.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}Unknown command: launch\n\n${USAGE_PILL}`), JSON.stringify(unknown.stderr.slice(0, 400)));
   assert.equal(unknown.stdout, '');
 });
 
