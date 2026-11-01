@@ -214,7 +214,8 @@ test('left and right move between the bar style tabs: a choice at All sets every
   await press(style, KEY.left, KEY.left, KEY.down); // ram: rising
   await press(style, KEY.enter);
   const cells = await next();
-  assert.match(plain(style.lastFrame()), /INPUT\nBar style\? steps,ctx=classic,ram=rising/, 'the answer as a list');
+  // Any frame: with CI set, Ink draws no frame after the question unmounts.
+  assert.ok(style.frames.some((f) => /INPUT\nBar style\? steps,ctx=classic,ram=rising/.test(plain(f))), 'the answer as a list');
   assert.match(plain(cells.lastFrame()), /Cells per classic bar\?\n❯ 5/, 'one classic bar: no tabs');
   await press(cells, KEY.down, KEY.enter);
   for (let i = 0; i < 5; i++) await answer(KEY.enter); // theme, labels, token line, token line parts, write
