@@ -33,6 +33,8 @@ import { runWizard, offerStar, confirm, loadPayload, previewer, openIo, Interrup
 import { payloadFile } from './statusline';
 import { wordmark, colorEnabled } from './wordmark';
 import { styles, stylesFor } from './styles';
+import type { Styles } from './styles';
+import { GaugeError, message, plain } from './errors';
 
 // The usage, after its heading. Without colour the heading is `Usage: ` on
 // the first line; in colour it is a USAGE pill on a line of its own.
@@ -71,11 +73,12 @@ const usage = (stream: NodeJS.WriteStream) => {
   return wordmark(color) + (color ? styles(color).pill('Usage') : '\nUsage: ') + USAGE;
 };
 
-// A mistake in the command line: exit 2, with the usage.
+// A mistake in the command line: exit 2, with the usage. Its message echoes
+// the user's own words, not a value claude-gauge knows, so it stays plain.
 class UsageError extends Error {}
 
 // A tool that update needs is not on PATH: exit 2, with no usage.
-class MissingTool extends Error {}
+class MissingTool extends GaugeError {}
 
 const COMMANDS = ['setup', 'configure', 'uninstall', 'update'] as const;
 type Command = (typeof COMMANDS)[number];
@@ -245,7 +248,7 @@ function savedStatusLine(): StatusLineSetting | null | undefined {
     text = fs.readFileSync(file, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw new Error(`Cannot read ${file}: ${(err as Error).message}. Fix or delete it by hand.`);
+    throw new GaugeError(message`Cannot read ${file}: ${plain((err as Error).message)}. Fix or delete it by hand.`);
   }
   let saved: unknown;
   try {
@@ -255,7 +258,7 @@ function savedStatusLine(): StatusLineSetting | null | undefined {
   }
   const statusLine = (saved as { statusLine?: unknown } | undefined)?.statusLine;
   if (typeof saved !== 'object' || saved === null || !(statusLine === null || (typeof statusLine === 'object' && !Array.isArray(statusLine)))) {
-    throw new Error(`${file} does not hold a saved status line, so claude-gauge cannot tell what to put back. Fix or delete it by hand.`);
+    throw new GaugeError(message`${file} does not hold a saved status line, so claude-gauge cannot tell what to put back. Fix or delete it by hand.`);
   }
   return statusLine as StatusLineSetting | null;
 }
@@ -283,12 +286,8 @@ function apply({ statusLine, tokenLine }: Bars, replace: boolean, heading: strin
   if (next.blocked) {
     const current = (settings.statusLine as StatusLineSetting).command ?? JSON.stringify(settings.statusLine);
     const whose = next.found === 'claude-hud' ? "claude-hud's status line" : 'another status line';
-    throw new Error(
-      [
-        `${file} already runs ${whose}:`,
-        `  ${current}`,
-        'Run again with --replace to replace it. claude-gauge saves it, and claude-gauge uninstall puts it back.',
-      ].join('\n'),
+    throw new GaugeError(
+      message`${file} already runs ${plain(whose)}:\n  ${current}\nRun again with --replace to replace it. claude-gauge saves it, and claude-gauge uninstall puts it back.`,
     );
   }
 
@@ -369,7 +368,7 @@ async function setup(args: Args): Promise<void> {
 async function configure(args: Args): Promise<void> {
   const file = settingsFile();
   if (!installed(readSettings(file).settings).any) {
-    throw new Error(`claude-gauge is not set up in ${file}. Run claude-gauge setup first.`);
+    throw new GaugeError(message`claude-gauge is not set up in ${file}. Run claude-gauge setup first.`);
   }
   if (args.statusLine === undefined && args.tokenLine === undefined) return interactive('configure', args.replace);
   apply(args, args.replace, 'Configure');
@@ -465,11 +464,11 @@ function runSteps(method: string, steps: Step[], dryRun: boolean): void {
   say(s.pill('Update'), s.info(`${method} installed claude-gauge. ${dryRun ? 'Would run:' : 'Running:'}`), ...steps.map((step) => s.trace(s.value(shown(step)))));
   if (dryRun) return;
   const missing = steps.find((step) => !path.isAbsolute(step.argv[0]) && !onPath(step.argv[0]));
-  if (missing) throw new MissingTool(`${missing.argv[0]} is not on PATH, so run ${shown(missing)} by hand.`);
+  if (missing) throw new MissingTool(message`${missing.argv[0]} is not on PATH, so run ${shown(missing)} by hand.`);
   for (const step of steps) {
     const [program, ...rest] = step.argv;
     const r = spawnSync(program, rest, { stdio: 'inherit', env: { ...process.env, ...step.env }, shell: viaShell(program) });
-    if (r.status !== 0) throw new Error(`${shown(step)} failed.`);
+    if (r.status !== 0) throw new GaugeError(message`${shown(step)} failed.`);
   }
 }
 
@@ -502,7 +501,7 @@ function update(dryRun: boolean): void {
     return;
   }
   if (!fs.existsSync(path.join(dir, 'statusline.js'))) {
-    throw new Error(`There is no copy of claude-gauge in ${dir} to update. Run claude-gauge setup first.`);
+    throw new GaugeError(message`There is no copy of claude-gauge in ${dir} to update. Run claude-gauge setup first.`);
   }
   const fetch = copySteps();
   if (fetch) {
@@ -517,11 +516,15 @@ function update(dryRun: boolean): void {
   say(s.pill('Update'), s.ok(`Updated claude-gauge in ${s.value(dir)} to ${s.value(version())}.`));
 }
 
-// An error on stderr: a red pill, then a red ✖ before the first line of
-// `message` and a ↳ before each line after it.
-function failure(message: string): string {
+// The text of `err` for `s`: a GaugeError with its values styled, any other
+// error as its plain message.
+const describe = (err: unknown, s: Styles): string => (err instanceof GaugeError ? err.render(s) : (err as Error).message);
+
+// An error on stderr: a red pill, then a red ✖ before the first line of its
+// text and a ↳ before each line after it.
+function failure(err: unknown): string {
   const s = stylesFor(process.stderr);
-  const [first, ...rest] = message.split('\n');
+  const [first, ...rest] = describe(err, s).split('\n');
   return s.pill('Error', 'error') + s.error(first) + rest.map((line) => s.trace(line.trim())).join('');
 }
 
@@ -547,7 +550,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   } catch (err) {
     if (err instanceof UsageError) {
-      process.stderr.write(`${failure(err.message)}\n${usage(process.stderr)}`);
+      process.stderr.write(`${failure(err)}\n${usage(process.stderr)}`);
       return 2;
     }
     // Ctrl+C at a question: nothing changed, and the shell's code for it.
@@ -556,10 +559,10 @@ async function main(argv: string[]): Promise<number> {
       return 130;
     }
     if (err instanceof MissingTool) {
-      process.stderr.write(failure(err.message));
+      process.stderr.write(failure(err));
       return 2;
     }
-    process.stderr.write(failure((err as Error).message));
+    process.stderr.write(failure(err));
     return 1;
   }
 }

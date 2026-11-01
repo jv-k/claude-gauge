@@ -736,6 +736,32 @@ test('with colour on, each command prints a pill header, icons and green values'
   assert.equal(failed.stdout, '');
 });
 
+// The values in an error are green too, as they are in a result (#119).
+test('an error in colour prints its values green: the folder update cannot find, and a settings file that is not valid JSON', () => {
+  const env = { FORCE_COLOR: '1' };
+  const empty = configFolder();
+  const missing = runCli(empty, ['update'], { env });
+  assert.equal(missing.status, 1);
+  assert.ok(
+    missing.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}There is no copy of claude-gauge in ${green(runtimeOf(empty))} to update. Run claude-gauge setup first.\n`),
+    JSON.stringify(missing.stderr),
+  );
+
+  const dir = configFolder();
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, '{ not json');
+  const broken = runCli(dir, ['setup', '--yes'], { env });
+  assert.equal(broken.status, 1);
+  assert.ok(broken.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}${green(file)} is not valid JSON (`), JSON.stringify(broken.stderr));
+  // Node's own words stay plain: the only green is the path.
+  assert.equal(broken.stderr.split(SGR.ok).length, 2, JSON.stringify(broken.stderr));
+
+  // With colour off the same errors are the plain text.
+  const off = runCli(dir, ['setup', '--yes'], { env: { NO_COLOR: '1' } });
+  assert.ok(off.stderr.startsWith(`\nERROR\n✖ ${file} is not valid JSON (`), off.stderr);
+  assert.ok(!/\x1b/.test(off.stderr), JSON.stringify(off.stderr));
+});
+
 test('with NO_COLOR, or piped with no force variable, the output has no escape codes, and each pill reads as plain text', () => {
   for (const env of [{}, { NO_COLOR: '1', FORCE_COLOR: '1' }]) {
     const dir = configFolder();
