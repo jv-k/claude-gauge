@@ -2482,7 +2482,7 @@ const SKILL_TEXT = 'Base directory for this skill:';
 // The fs calls the reader makes, so a test can count the bytes it reads.
 type TranscriptFs = Pick<
   typeof fs,
-  'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'readdirSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync'
+  'statSync' | 'openSync' | 'readSync' | 'closeSync' | 'readFileSync' | 'readdirSync' | 'writeFileSync' | 'mkdirSync' | 'renameSync' | 'rmSync' | 'utimesSync'
 >;
 
 interface TranscriptReadOptions {
@@ -2914,6 +2914,17 @@ function replaceQuietly(io: TranscriptFs, file: string, text: string): void {
   }
 }
 
+// Marks a state file as used now, so the prune keeps it while its transcript
+// is still shown. Best effort, as a save is.
+function touchQuietly(io: TranscriptFs, file: string): void {
+  try {
+    const now = new Date();
+    io.utimesSync(file, now, now);
+  } catch {
+    /* removed by a prune, or a read-only home: the next save writes it */
+  }
+}
+
 // A state that is not saved makes the next render read from the start.
 function saveTranscriptState(io: TranscriptFs, stateFile: string, state: TranscriptState): void {
   replaceQuietly(io, stateFile, JSON.stringify(state));
@@ -3016,6 +3027,8 @@ function readSubagentTranscript(io: TranscriptFs, file: string, stateDir: string
       return {};
     }
     replaceQuietly(io, stateFile, JSON.stringify(state));
+  } else {
+    touchQuietly(io, stateFile);
   }
   const model = agentModel(state.model);
   return { ...(model ? { model } : {}), activeAt: stat.mtimeMs };
@@ -3069,6 +3082,7 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   const folder = subagentsFolder(file);
   if (subagents && linkSubagentTranscripts(io, folder, state)) changed = true;
   if (changed) saveTranscriptState(io, stateFile, state);
+  else touchQuietly(io, stateFile);
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
   // A running subagent's own transcript names the model it runs on, version
   // and all, so it wins over the alias the Agent call may give. Its last
@@ -3090,6 +3104,59 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
     ...(lastReplyAt !== undefined ? { lastReplyAt } : {}),
     ...(speed !== undefined ? { speed } : {}),
   };
+}
+
+// The prune of the reader's state files (issue #51, ADR 0004). The reader
+// writes one per transcript, session and subagent alike, and a render touches
+// each one it uses, so a file no render has touched for STATE_KEEP_MS belongs
+// to a transcript nobody looks at any more.
+const STATE_KEEP_MS = 30 * 86400 * 1000;
+
+// The prune runs at most once per PRUNE_EVERY_MS. A stamp file beside the
+// reader's folder, transcripts.pruned in the state folder, holds as its last
+// change time when the prune last ran. It stays out of the reader's folder,
+// which holds the reader's state files alone.
+const PRUNE_EVERY_MS = 86400 * 1000;
+const pruneStampOf = (stateDir: string): string => `${path.resolve(stateDir)}.pruned`;
+
+// The reader's state files: the SHA-1 of a transcript's path, then .json.
+const STATE_FILE_NAME = /^[0-9a-f]{40}\.json$/;
+
+// When the stamp file is missing or PRUNE_EVERY_MS old, removes the state
+// files in stateDir, the reader's folder, last changed STATE_KEEP_MS or
+// more before nowMs, then touches the stamp. Otherwise it does nothing past
+// one stat. Best effort: a file another render removed first is skipped, a
+// folder that cannot be listed counts as empty, and nothing is printed.
+function pruneTranscriptStates(stateDir: string, nowMs: number, { fs: io = fs }: { fs?: TranscriptFs } = {}): void {
+  const stamp = pruneStampOf(stateDir);
+  try {
+    // A stamp from the future, after the clock was put back, counts as old.
+    const age = nowMs - io.statSync(stamp).mtimeMs;
+    if (age >= 0 && age < PRUNE_EVERY_MS) return;
+  } catch {
+    /* no stamp yet: prune now */
+  }
+  let names: string[] = [];
+  try {
+    names = io.readdirSync(stateDir).map(String);
+  } catch {
+    /* no reader folder yet: nothing to remove, but stamp it */
+  }
+  for (const name of names) {
+    if (!STATE_FILE_NAME.test(name)) continue;
+    const file = path.join(stateDir, name);
+    try {
+      if (nowMs - io.statSync(file).mtimeMs >= STATE_KEEP_MS) io.rmSync(file, { force: true });
+    } catch {
+      /* gone already, or not ours to remove */
+    }
+  }
+  try {
+    io.writeFileSync(stamp, '');
+    io.utimesSync(stamp, nowMs / 1000, nowMs / 1000);
+  } catch {
+    /* a read-only folder: the next render tries again */
+  }
 }
 
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
@@ -3276,6 +3343,7 @@ export {
   instruction,
   INSTRUCT_HOSTS,
   readTranscriptActivity,
+  pruneTranscriptStates,
   payloadFile,
   readSetup,
   readMemory,
@@ -3309,6 +3377,7 @@ if (isMain) {
     // Plain text: it is pasted into a reply, where colour codes and links
     // show as junk.
     process.stdout.write(stripOwnCodes(render(data, { config, nowMs, ledger: readLedger(ledgerFile()) })) + '\n');
+    pruneTranscriptStates(transcriptStateDir(), nowMs);
   } else {
     const chunks: Buffer[] = [];
     process.stdin.on('data', (c: Buffer) => chunks.push(c));
@@ -3327,6 +3396,8 @@ if (isMain) {
       if (parsed && isObject(data) && Object.keys(data).length) savePayload(data);
       const ledger = recordCost(data, { nowMs });
       process.stdout.write(render(data, { config, nowMs, ledger, columns: columnsOf(process.env.COLUMNS) }) + '\n');
+      // After the render, which touches the state files it uses.
+      pruneTranscriptStates(transcriptStateDir(), nowMs);
     });
   }
 }
