@@ -1458,6 +1458,10 @@ interface SetupOptions {
   platform?: string;
   // The folder of the managed policy files an administrator installs.
   managedDir?: string;
+  // Whether a path that exists belongs to another user, for tests to
+  // replace. The default compares its owner with the current user's id,
+  // and says no where the OS has none.
+  ownedByOther?: (file: string) => boolean;
 }
 
 const MANAGED_DIRS: Record<string, string> = {
@@ -1527,13 +1531,20 @@ function foldersDownTo(cwd: string): string[] {
   }
 }
 
+// Whether a path belongs to another user: its owner is not the current
+// user's id. No path does where the OS has no user ids, as on Windows.
+function ownedByAnotherUser(file: string): boolean {
+  const uid = process.getuid?.();
+  return uid !== undefined && fs.statSync(file).uid !== uid;
+}
+
 // The folder Claude Code reads .claude/settings.local.json from: the root of
 // the git repository the launch folder is in, and inside a linked worktree
 // the main checkout's root, the folder above the .git folder the worktree's
 // .git file names. The launch folder itself outside a repository, where the
 // root is the home folder, on Windows, and where the root, its .git entry or
 // its .claude folder is not the current user's.
-function localSettingsDir(project: string, home: string, platform: string): string {
+function localSettingsDir(project: string, home: string, platform: string, ownedByOther: (file: string) => boolean): string {
   if (platform === 'win32') return project;
   try {
     const entry = gitEntryAbove(project);
@@ -1543,11 +1554,8 @@ function localSettingsDir(project: string, home: string, platform: string): stri
     const linked = entry.gitDir !== path.join(entry.dir, '.git') && path.basename(worktrees) === 'worktrees' && path.basename(path.dirname(worktrees)) === '.git';
     const root = linked ? path.dirname(path.dirname(worktrees)) : entry.dir;
     if (root === path.resolve(home)) return project;
-    const uid = process.getuid?.();
-    if (uid !== undefined) {
-      for (const owned of [root, path.join(root, '.git'), path.join(root, '.claude')]) {
-        if (fs.existsSync(owned) && fs.statSync(owned).uid !== uid) return project;
-      }
+    for (const owned of [root, path.join(root, '.git'), path.join(root, '.claude')]) {
+      if (fs.existsSync(owned) && ownedByOther(owned)) return project;
     }
     return root;
   } catch {
@@ -1627,7 +1635,13 @@ function readPlugins(config: string, enabled: JsonObject): { hooks: number; mcp:
 
 function readSetup(
   cwd: string,
-  { env = process.env, home = os.homedir(), platform = process.platform, managedDir = managedDirOf(platform) }: SetupOptions = {},
+  {
+    env = process.env,
+    home = os.homedir(),
+    platform = process.platform,
+    managedDir = managedDirOf(platform),
+    ownedByOther = ownedByAnotherUser,
+  }: SetupOptions = {},
 ): Setup {
   const config = configDirOf(env, home);
   const project = path.resolve(cwd);
@@ -1651,7 +1665,7 @@ function readSetup(
   // turned on. The local file is the repository root's; one in the launch
   // folder under it is read too, and the root's value applies where both
   // set a key.
-  const localDir = localSettingsDir(project, home, platform);
+  const localDir = localSettingsDir(project, home, platform, ownedByOther);
   const localIn = (dir: string) => readJson(path.join(dir, '.claude', 'settings.local.json'));
   const local = localDir === project ? localIn(project) : { ...localIn(project), ...localIn(localDir) };
   const settings = [path.join(config, 'settings.json'), path.join(project, '.claude', 'settings.json')]
