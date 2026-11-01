@@ -6,7 +6,7 @@
 
 ## Context
 
-The transcript reader keeps one small JSON state file per transcript in `.state/transcripts/` under `$CLAUDE_CONFIG_DIR/claude-gauge/`. Since [ADR 0001, the agents part reads subagent transcripts](0001-agents-part-reads-subagent-transcripts.md), it also keeps one per running subagent's own transcript. Nothing removed them, so the folder gained a file for every session and every subagent, for ever.
+The transcript reader keeps one small JSON state file per transcript in `.state/transcripts/` under `$CLAUDE_CONFIG_DIR/claude-gauge/`. Since [ADR 0005, the agents part reads subagent transcripts](0005-agents-part-reads-subagent-transcripts.md), it also keeps one per running subagent's own transcript. Nothing removed them, so the folder gained a file for every session and every subagent, for ever.
 
 ## Decision
 
