@@ -656,6 +656,29 @@ test('the local settings file stays the launch folder\'s outside a repository, u
   assert.equal(hooksAt(repo, { platform: 'win32' }), 2);
 });
 
+// A test cannot chown a folder, so the owner check is passed in: it says
+// whether a path belongs to another user.
+test('the local settings file stays the launch folder\'s when the root, its .git or its .claude belongs to another user', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const path = require('node:path');
+  // The root's file has one hook and the launch folder's two, so the count
+  // says which file was read.
+  const tree = setupTree({
+    'home/work/project/.git/HEAD': 'ref: refs/heads/main\n',
+    'home/work/project/.claude/settings.local.json': { hooks: hooks(['Stop', 1]) },
+    'home/work/project/packages/app/.claude/settings.local.json': { hooks: hooks(['Stop', 2]) },
+  });
+  const root = path.join(tree.root, 'home/work/project');
+  const hooksWith = (ownedByOther) => readSetup(path.join(root, 'packages/app'), { ...tree.options, ownedByOther }).hooks;
+  // A check that marks nothing reads the root's file, as with no check.
+  assert.equal(hooksWith(() => false), 1);
+  assert.equal(hooksWith(undefined), 1);
+  for (const owned of ['', '.git', '.claude']) {
+    const other = path.join(root, owned);
+    assert.equal(hooksWith((file) => file === other), 2, `${owned || 'the root'} belongs to another user`);
+  }
+});
+
 test('the setup follows CLAUDE_CONFIG_DIR, and names each plan', () => {
   const { readSetup } = require('../dist/statusline.js');
   const plan = (claudeAiOauth) => {
