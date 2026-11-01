@@ -42,15 +42,19 @@ test('bump-release leaves the GitHub release to the release workflow', () => {
 // Runs npm or npx in `cwd` and returns its output. They are npm.cmd and
 // npx.cmd on Windows, which run only through a shell (#3 plans CI there). The
 // shell would split a path with a space in it, so paths go in through `env`
-// as npm config, never as arguments.
-const runNpm = (command, args, { cwd = root, env = {} } = {}) =>
-  execFileSync(command, args, {
+// as npm config, never as arguments. The colour switches are taken out, as
+// runCli does, so a FORCE_COLOR in the shell does not colour the usage.
+const runNpm = (command, args, { cwd = root, env = {} } = {}) => {
+  const base = { ...process.env };
+  for (const name of ['NO_COLOR', 'FORCE_COLOR', 'CLICOLOR_FORCE']) delete base[name];
+  return execFileSync(command, args, {
     cwd,
-    env: { ...process.env, ...env },
+    env: { ...base, ...env },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
   });
+};
 
 // What npm publish would upload, from npm's own report. dist/ is in
 // .gitignore on integration/1.0, so this proves the files field wins.
