@@ -1,11 +1,11 @@
 "use strict";
 // The questions claude-gauge setup and configure ask when run with no bar
 // switches: take the defaults in one answer, or walk through the status
-// line's rows and parts, its bar size, theme and labels, and the token line
-// and its parts, with a preview of the status line
-// redrawn after each answer. configure starts from the bars set up now: the
-// first answer keeps them, and each question offers the value set up. It
-// returns the switches for each bar, as words, for the CLI to write; it
+// line's rows and parts, its bar style, bar size, theme and labels, and the
+// token line and its parts, with a preview of the status line redrawn after
+// each answer. With lines set up, the first answer keeps them, changes them,
+// each question offering the value set up, or starts over from the defaults.
+// It returns the switches for each line, as words, for the CLI to write; it
 // reads and writes no settings itself.
 //
 // The questions go through a WizardIo, so a test can script the answers. The
@@ -20,7 +20,7 @@
 // the selection moves. openIo picks Ink when stdin and stdout are both a
 // terminal and Ink loads, and the readline one otherwise.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Interrupted = exports.EndOfAnswers = exports.confirm = void 0;
+exports.SAMPLE_RUN = exports.Interrupted = exports.EndOfAnswers = exports.confirm = void 0;
 exports.runWizard = runWizard;
 exports.offerStar = offerStar;
 exports.streamIo = streamIo;
@@ -52,8 +52,46 @@ class Interrupted extends EndOfAnswers {
 }
 exports.Interrupted = Interrupted;
 const MAX_ROWS = 3;
-const SEGMENTS = [5, 10];
-const DEFAULT_CHOICES = { rows: statusline_1.DEFAULT_ROWS, barStyle: 'classic', segments: 5, theme: 'default', labels: true, others: [] };
+const SEGMENTS = ['5', '10'];
+const DEFAULT_CHOICES = {
+    rows: statusline_1.DEFAULT_ROWS,
+    barStyle: { all: 'classic', each: {} },
+    segments: { all: '5', each: {} },
+    theme: 'default',
+    labels: true,
+    others: [],
+};
+// A per-bar list read with only the values in `values`: any other reads as
+// `fallback`, as the status line reads an unknown name or size.
+function barValuesOf(list, values, fallback) {
+    const { all, each } = (0, statusline_1.perBarOf)(list);
+    const known = (value) => (values.includes(value) ? value : fallback);
+    return { all: known(all), each: Object.fromEntries(Object.entries(each).map(([bar, value]) => [bar, known(value)])) };
+}
+// The value of `bar`: its own, else the one for every bar.
+const valueAt = ({ all, each }, bar) => each[bar] ?? all;
+// The values for `all` and each of `bars`, keeping only the bars whose value
+// differs from all.
+const barValuesFrom = (all, bars, each) => ({
+    all,
+    each: Object.fromEntries(bars.flatMap((bar, i) => (each[i] === all ? [] : [[bar, each[i]]]))),
+});
+// Reads a typed per-bar list, such as steps,ctx=rising: each entry a value
+// from `values`, bare for every bar or after a bar's name for that bar. A
+// list with no bare value changes only the bars it names in `fallback`;
+// Enter keeps all of it.
+function readBarValues(answer, fallback, values, what, example) {
+    if (!answer.trim())
+        return fallback;
+    for (const item of answer.split(',')) {
+        const [key, value] = item.split(/=(.*)/s).map((word) => word.trim().toLowerCase());
+        const known = value === undefined ? values.includes(key) : statusline_1.BARS.includes(key) && values.includes(value);
+        if (!known)
+            return { retry: `Unknown ${what}: ${item.trim()}. Answer one of ${values.join(', ')}, or a list such as ${example}.` };
+    }
+    const { all, each } = (0, statusline_1.perBarOf)(answer);
+    return all ? { all, each } : { all: fallback.all, each: { ...fallback.each, ...each } };
+}
 // Whether two lists of parts, or of rows of parts, are the same, in order.
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 // The fewest switches that give `choices`: none for the defaults, then the
@@ -64,10 +102,10 @@ function switchesFor({ rows, barStyle, segments, theme, labels, others }) {
     if (!same(chosen, statusline_1.DEFAULT_ROWS))
         for (const row of chosen)
             words.push('--show', row.join(','));
-    if (barStyle !== 'classic')
-        words.push('--bar-style', barStyle);
-    if (segments !== 5)
-        words.push('--segments', String(segments));
+    if ((0, statusline_1.perBarList)(barStyle) !== 'classic')
+        words.push('--bar-style', (0, statusline_1.perBarList)(barStyle));
+    if ((0, statusline_1.perBarList)(segments) !== '5')
+        words.push('--segments', (0, statusline_1.perBarList)(segments));
     if (theme !== 'default')
         words.push('--theme', theme);
     if (!labels)
@@ -87,9 +125,9 @@ function statusChoicesOf(switches) {
                 status.rows.push(row);
         }
         else if (name === '--bar-style')
-            status.barStyle = statusline_1.BAR_STYLES.includes(value.trim()) ? value.trim() : 'classic';
+            status.barStyle = barValuesOf(value, statusline_1.BAR_STYLES, 'classic');
         else if (name === '--segments')
-            status.segments = Number(value) === 10 ? 10 : 5;
+            status.segments = barValuesOf(value, SEGMENTS, '5');
         else if (name === '--theme')
             status.theme = statusline_1.THEMES.includes(value.trim()) ? value.trim() : 'default';
         else if (name === '--no-labels')
@@ -151,7 +189,7 @@ const yesNo = (fallback) => (answer) => {
 const confirm = (io, question, fallback, preview) => askFor(io, `${question} ${hint(stylesOf(io), fallback ? 'Y/n' : 'y/N')} `, yesNo(fallback), 'CONFIRM', (c) => c.one({ kind: 'CONFIRM', message: question, options: [{ label: 'Yes', value: true }, { label: 'No', value: false }], initial: fallback ? 0 : 1, preview }));
 exports.confirm = confirm;
 // A choice of one of `values`, shown as written, `fallback` first.
-const oneOf = (message, values, fallback, preview) => (c) => c.one({ kind: 'INPUT', message, options: values.map((value) => ({ label: String(value), value })), initial: Math.max(0, values.indexOf(fallback)), preview });
+const oneOf = (message, values, fallback, preview, moving = false) => (c) => c.one({ kind: 'INPUT', message, options: values.map((value) => ({ label: String(value), value })), initial: Math.max(0, values.indexOf(fallback)), preview, moving });
 // Reads a list of parts from `known`, or `fallback` on Enter. An unknown
 // part is asked again, named, with `where` to say which parts there are.
 function readParts(fallback, known, where = 'The parts are listed above.') {
@@ -183,12 +221,12 @@ function tokenSwitchesFor(parts, installed) {
     const others = without(installed, '--show');
     return same(parts, tokenline_1.PARTS) ? others : ['--show', parts.join(','), ...others];
 }
-// The token line's `switches` with the status line's bar style, so the two
-// lines draw their bars alike. classic needs no switch.
-const withBarStyle = (switches, barStyle) => [
-    ...without(switches, '--bar-style'),
-    ...(barStyle === 'classic' ? [] : ['--bar-style', barStyle]),
-];
+// The token line's `switches` with the status line's ctx bar style, so the
+// two ctx bars look alike. classic needs no switch.
+const withBarStyle = (switches, barStyle) => {
+    const ctx = valueAt(barStyle, 'ctx');
+    return [...without(switches, '--bar-style'), ...(ctx === 'classic' ? [] : ['--bar-style', ctx])];
+};
 // Reads the token line's parts: `all` for all five, else a list as readParts
 // reads it.
 function readTokenParts(fallback) {
@@ -262,6 +300,11 @@ function screenOf(io) {
     };
     return screen;
 }
+const START_OPTIONS = [
+    { label: 'Keep them as they are', value: 'keep', words: ['keep', 'k'] },
+    { label: 'Change them', value: 'change', words: ['change', 'c'] },
+    { label: 'Start over from the defaults', value: 'over', words: ['over', 'o', 'start over', 's'] },
+];
 // The questions, then the switches for each bar. A front end with choices
 // shows no preview once they end, so a question after them, such as the star
 // offer, comes without one.
@@ -276,15 +319,16 @@ async function runWizard(userIo, options) {
 async function askAll(userIo, { preview, tokenPreview = tokenPreviewer(), installed }) {
     const io = screenOf(userIo);
     const s = stylesOf(io);
-    const start = startFrom(installed);
+    let start = startFrom(installed);
     let status = { ...start.status };
     let tokenLine = start.tokenLine;
     let tokenSwitches = start.tokenSwitches;
     // The preview of `choices` in the status line's own colours, or as plain
     // text when the questions take no colour, under `heading` when one is given.
     // With the token line on, its line with `withTokenSwitches` comes under it.
-    const previewOf = (choices, withTokenLine = tokenLine, heading = '', withTokenSwitches = tokenSwitches) => {
-        const rendered = preview(switchesFor(choices), !io.color);
+    // The bars move with the clock when `moving` is set.
+    const previewOf = (choices, withTokenLine = tokenLine, heading = '', withTokenSwitches = tokenSwitches, moving = false) => {
+        const rendered = preview(switchesFor(choices), !io.color, moving);
         const rows = io.color ? rendered : (0, statusline_1.stripOwnCodes)(rendered);
         const token = withTokenLine ? `on, when each turn ends\n  ${tokenPreview(withBarStyle(withTokenSwitches, choices.barStyle))}` : 'off';
         return `${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${token}\n`;
@@ -298,12 +342,49 @@ async function askAll(userIo, { preview, tokenPreview = tokenPreviewer(), instal
     // The preview with `change` made to the choices so far, for a choice whose
     // selection moves.
     const previewWith = (change) => previewOf({ ...status, ...change });
+    // A value for every bar, and each bar's own, from `values`. Typed, a list
+    // such as steps,ctx=rising, Enter for `fallback`. As a choice, a tab for
+    // All and one for each of `bars`, or one plain choice for a single bar.
+    const askPerBar = (typed, message, values, fallback, bars, previewFor, { what, example, moving = false }) => {
+        const options = values.map((value) => ({ label: value, value }));
+        return askFor(io, `${typed} ${hint(s, (0, statusline_1.perBarList)(fallback))} `, (answer) => readBarValues(answer, fallback, values, what, example), 'INPUT', async (c) => {
+            if (bars.length === 1) {
+                const at = Math.max(0, values.indexOf(valueAt(fallback, bars[0])));
+                const value = await c.one({ kind: 'INPUT', message, options, initial: at, preview: (v) => previewFor({ all: v, each: {} }), moving });
+                return { all: value, each: {} };
+            }
+            const initial = { all: fallback.all, each: bars.map((bar) => valueAt(fallback, bar)) };
+            const chosen = await c.each({ message, targets: bars, options, initial, preview: (all, each) => previewFor(barValuesFrom(all, bars, each)), moving });
+            return barValuesFrom(chosen.all, bars, chosen.each);
+        });
+    };
+    // With lines set up: keep them, change them from where they are, or start
+    // over from the defaults, as a first setup does.
+    let fresh = !isSetUp(installed);
     if (isSetUp(installed)) {
-        show(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
-        if (await confirm(io, 'Keep the current lines as they are?', true))
+        const heading = installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n';
+        show(heading);
+        const defaults = startFrom(undefined);
+        const answer = await askFor(io, `Keep the current lines, change them, or start over from the defaults? keep, change or over ${hint(s, 'keep')} `, (typed) => START_OPTIONS.find((o) => o.words.includes(typed.trim().toLowerCase() || 'keep'))?.value ?? { retry: 'Answer keep, change or over.' }, 'INPUT', (c) => c.one({
+            kind: 'INPUT',
+            message: 'Keep the current lines, change them, or start over?',
+            options: START_OPTIONS,
+            initial: 0,
+            preview: (value) => value === 'over'
+                ? previewOf(defaults.status, defaults.tokenLine, 'The status line with the defaults:\n', defaults.tokenSwitches)
+                : previewOf(status, tokenLine, heading),
+        }));
+        if (answer === 'keep')
             return {};
+        if (answer === 'over') {
+            start = defaults;
+            status = { ...defaults.status };
+            tokenLine = defaults.tokenLine;
+            tokenSwitches = defaults.tokenSwitches;
+            fresh = true;
+        }
     }
-    else {
+    if (fresh) {
         show('The status line with the defaults:\n');
         if (await confirm(io, 'Use the defaults: both lines, with the parts above?', true))
             return { statusLine: [], tokenLine: [] };
@@ -333,15 +414,17 @@ async function askAll(userIo, { preview, tokenPreview = tokenPreviewer(), instal
         status = { ...status, rows: withRow(parts) };
         show();
     }
-    const barStyle = await askFor(io, `Bar style: ${statusline_1.BAR_STYLES.join(', ')}? ${hint(s, start.status.barStyle)} `, (answer) => {
-        const name = answer.toLowerCase() || start.status.barStyle;
-        return statusline_1.BAR_STYLES.includes(name) ? name : { retry: `Unknown bar style: ${answer}. Answer one of ${statusline_1.BAR_STYLES.join(', ')}.` };
-    }, 'INPUT', oneOf('Bar style?', statusline_1.BAR_STYLES, start.status.barStyle, (name) => previewWith({ barStyle: name })));
+    // The bar style: for every bar, and for each bar on its own. The one
+    // question whose preview moves: its bars sweep, to show how each style
+    // fills and how it marks the pace.
+    const barStyle = await askPerBar(`Bar style: ${statusline_1.BAR_STYLES.join(', ')}, or a list such as steps,ctx=rising?`, 'Bar style?', statusline_1.BAR_STYLES, start.status.barStyle, statusline_1.BARS, (values) => previewOf({ ...status, barStyle: values }, tokenLine, '', tokenSwitches, true), { what: 'bar style', example: 'steps,ctx=rising', moving: true });
     status = { ...status, barStyle };
     show();
-    // Only classic takes a number of cells: each other style has its own.
-    if (barStyle === 'classic') {
-        const segments = await askFor(io, `Cells per bar, ${SEGMENTS.join(' or ')}? ${hint(s, start.status.segments)} `, (answer) => SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` }, 'INPUT', oneOf('Cells per bar?', SEGMENTS, start.status.segments, (n) => previewWith({ segments: n })));
+    // Only classic takes a number of cells: each other style has its own. So
+    // the question is for the classic bars only, and none asks none.
+    const classic = statusline_1.BARS.filter((bar) => valueAt(barStyle, bar) === 'classic');
+    if (classic.length) {
+        const segments = await askPerBar(`Cells per classic bar, ${SEGMENTS.join(' or ')}, or a list such as 5,ctx=10?`, 'Cells per classic bar?', SEGMENTS, start.status.segments, classic, (values) => previewWith({ segments: values }), { what: 'number of cells', example: '5,ctx=10' });
         status = { ...status, segments };
         show();
     }
@@ -400,6 +483,7 @@ const SAMPLE_RUN = [
         },
     })),
 ];
+exports.SAMPLE_RUN = SAMPLE_RUN;
 const SAMPLE_WINDOW = 200000;
 // The token line's preview: the sample run's line with the given switches,
 // as the token line reads them.
@@ -591,19 +675,27 @@ function loadPayload(file, nowMs = Date.now()) {
     }
     return samplePayload(nowMs);
 }
+// Where a bar is at `nowMs` in the preview's animation: 0 to 1 and back on
+// `period`, from `phase`, as a triangle wave, and as a percentage that eases
+// at each end.
+const waveAt = (nowMs, period, phase) => {
+    const x = (((nowMs / period + phase) % 1) + 1) % 1;
+    return x < 0.5 ? x * 2 : 2 - x * 2;
+};
+const levelAt = (nowMs, period, phase) => {
+    const x = waveAt(nowMs, period, phase);
+    return Math.round(100 * x * x * (3 - 2 * x));
+};
+// The memory with the ram bar moved to where it is at `nowMs` in the
+// preview's animation, as swept moves the others.
+const sweptMemory = ({ total }, nowMs) => ({ used: (total * levelAt(nowMs, 7000, 0.8)) / 100, total });
 // The payload with the context, 5h and 7d bars moved to where they are at
 // `nowMs` in the preview's animation. Each climbs and falls on its own
 // period, and "now" moves through each window, so the pace marker walks
 // and changes colour. The other fields stay as they are.
 function swept(payload, nowMs) {
-    const wave = (period, phase) => {
-        const x = (((nowMs / period + phase) % 1) + 1) % 1;
-        return x < 0.5 ? x * 2 : 2 - x * 2;
-    };
-    const pct = (period, phase) => {
-        const x = wave(period, phase);
-        return Math.round(100 * x * x * (3 - 2 * x));
-    };
+    const wave = (period, phase) => waveAt(nowMs, period, phase);
+    const pct = (period, phase) => levelAt(nowMs, period, phase);
     const resetsAt = (seconds, period, phase) => Math.floor(nowMs / 1000 + seconds * (0.92 - 0.84 * wave(period, phase)));
     // Without the token counts, ctx counts its tokens from the percentage.
     const context = { context_window_size: 200000, ...payload.context_window, used_percentage: pct(8000, 0.5) };
@@ -644,12 +736,15 @@ function previewer(payload, options = {}) {
     const branchOf = keep(options.branchOf ?? statusline_1.headBranch);
     const memoryOf = keep(options.memoryOf ?? statusline_1.readMemory);
     const setupOf = keep(options.setupOf ?? ((cwd) => (0, statusline_1.readSetup)(cwd, { env: options.env ?? process.env })));
-    return (switches, plain = false) => {
+    return (switches, plain = false, moving = false) => {
         const nowMs = options.nowMs ?? Date.now();
         const config = (0, statusline_1.parseArgs)([...switches]);
         const shown = new Set((config.rows ?? statusline_1.DEFAULT_ROWS).flat());
         const data = withSamplePayload(payload, nowMs, shown);
-        return (0, statusline_1.render)(sweep ? swept(data, nowMs) : data, {
+        // The moving bars show the clock's time, which stops while paused.
+        const move = sweep && moving;
+        const at = move && options.clock ? options.clock() : nowMs;
+        return (0, statusline_1.render)(move ? swept(data, at) : data, {
             ...renderOptions,
             nowMs,
             plain,
@@ -669,7 +764,10 @@ function previewer(payload, options = {}) {
             },
             statusOf: (cwd) => withSampleStatus(statusOf(cwd), () => branchOf(cwd), shown.has('git') || shown.has('files')),
             setupOf: (cwd) => withSampleSetup(setupOf(cwd)),
-            memoryOf: () => memoryOf() ?? SAMPLE_MEMORY,
+            memoryOf: () => {
+                const memory = memoryOf() ?? SAMPLE_MEMORY;
+                return move ? sweptMemory(memory, at) : memory;
+            },
             commandOutputOf: () => SAMPLE_COMMAND_OUTPUT,
             ledger: options.ledger ?? sampleLedger(nowMs),
         });

@@ -26,10 +26,11 @@
 // registry disagree. test/snapshots/themes/ holds the default rows in every
 // theme.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AGENT_LINGER_MS = exports.COMMAND_TIMEOUT_MS = exports.payloadFile = exports.INSTRUCT_HOSTS = exports.SWITCHES = exports.DEFAULT_ROWS = exports.BAR_STYLE_REGISTRY = exports.BAR_STYLES = exports.THEMES = exports.PARTS = exports.stripOwnCodes = void 0;
+exports.AGENT_LINGER_MS = exports.COMMAND_TIMEOUT_MS = exports.payloadFile = exports.INSTRUCT_HOSTS = exports.SWITCHES = exports.DEFAULT_ROWS = exports.perBarList = exports.BARS = exports.BAR_STYLE_REGISTRY = exports.BAR_STYLES = exports.THEMES = exports.PARTS = exports.stripOwnCodes = void 0;
 exports.render = render;
 exports.parseArgs = parseArgs;
 exports.readSwitches = readSwitches;
+exports.perBarOf = perBarOf;
 exports.payloadFromTranscript = payloadFromTranscript;
 exports.recordCost = recordCost;
 exports.withLock = withLock;
@@ -122,7 +123,7 @@ const DEFAULT_ROWS = PARTS.reduce((rows, part) => {
 exports.DEFAULT_ROWS = DEFAULT_ROWS;
 const DEFAULTS = {
     rows: DEFAULT_ROWS,
-    segments: 5,
+    segments: '5',
     labels: true,
     bars: true,
     pace: true,
@@ -151,7 +152,12 @@ const SWITCHES = [
                 (config.rows ??= []).push(parts);
         },
     },
-    { name: '--segments', value: '<5|10>', description: 'cells per bar (default 5)', apply: (config, value) => { config.segments = value; } },
+    {
+        name: '--segments',
+        value: '<5|10>',
+        description: 'cells per classic bar (default 5); add <bar>=<5|10> to set one bar of ctx, 5h, 7d and ram, comma-separated',
+        apply: (config, value) => { config.segments = value; },
+    },
     { name: '--no-labels', description: 'drop the labels in front of values', apply: (config) => { config.labels = false; } },
     { name: '--no-bars', description: 'drop the bars', apply: (config) => { config.bars = false; } },
     { name: '--no-pace', description: 'drop the pace markers', apply: (config) => { config.pace = false; } },
@@ -191,7 +197,7 @@ const SWITCHES = [
     {
         name: '--bar-style',
         value: '<name>',
-        description: 'how every bar is drawn: classic, steps, rising, hairline, dots, spark or underline',
+        description: 'how the bars are drawn: classic, steps, rising, hairline, dots, spark or underline; add <bar>=<name> to set one bar of ctx, 5h, 7d and ram, comma-separated',
         apply: (config, value) => { config.barStyle = value.trim(); },
     },
     { name: '--bar-filled', value: '<char>', description: "the character of a filled bar cell (default: the bar style's)", apply: (config, value) => { if (isBarChar(value))
@@ -399,6 +405,33 @@ const fmt = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(2)}M`
 const capitalised = (word) => word[0].toUpperCase() + word.slice(1);
 // Bars come in 5 or 10 cells; anything else falls back to 5.
 const segmentsOf = (value) => (Number(value) === 10 ? 10 : 5);
+// The bars that --bar-style and --segments can set one by one
+// (docs/adr/0008). The models part's bars follow 7d.
+const BARS = ['ctx', '5h', '7d', 'ram'];
+exports.BARS = BARS;
+const isBar = (name) => BARS.includes(name);
+function perBarOf(list) {
+    const found = { all: '', each: {} };
+    for (const item of String(list).split(',')) {
+        const [key, value] = item.split(/=(.*)/s).map((word) => word.trim().toLowerCase());
+        if (value === undefined) {
+            if (key)
+                found.all = key;
+        }
+        else if (isBar(key) && value)
+            found.each[key] = value;
+    }
+    return found;
+}
+// The value for `bar` in a per-bar list: its own, else the bare one.
+const forBar = (list, bar) => {
+    const { all, each } = perBarOf(list);
+    return each[bar] ?? all;
+};
+// The list for a PerBar: the bare value, then each bar whose own value
+// differs from it, in the order of BARS.
+const perBarList = ({ all, each }) => [all, ...BARS.filter((bar) => each[bar] !== undefined && each[bar] !== all).map((bar) => `${bar}=${each[bar]}`)].join(',');
+exports.perBarList = perBarList;
 const BAR_STYLE_REGISTRY = {
     classic: { description: '▓▓┃░░: shaded cells, 5 or 10 with --segments', filled: '▓', empty: '░', marker: '┃' },
     steps: { description: '▅▅▅▁▁▁: 6 tall cells over a low track, the pace marker a cell in its colour', cells: 6, filled: '▅', empty: '▁', marker: '' },
@@ -411,10 +444,11 @@ const BAR_STYLE_REGISTRY = {
 exports.BAR_STYLE_REGISTRY = BAR_STYLE_REGISTRY;
 const BAR_STYLES = Object.keys(BAR_STYLE_REGISTRY);
 exports.BAR_STYLES = BAR_STYLES;
-// The bar style to draw with. Plain text loses the underline with the other
-// codes, so there underline draws as classic.
-const barStyleOf = (config, plain) => {
-    const name = ownValue(BAR_STYLE_REGISTRY, config.barStyle) ? config.barStyle : 'classic';
+// The bar style to draw `bar` with. Plain text loses the underline with the
+// other codes, so there underline draws as classic.
+const barStyleOf = (config, plain, bar) => {
+    const given = forBar(config.barStyle, bar);
+    const name = ownValue(BAR_STYLE_REGISTRY, given) ? given : 'classic';
     return plain && name === 'underline' ? 'classic' : name;
 };
 // The cells of a bar of `n` cells, filled in proportion to pct.
@@ -616,9 +650,9 @@ const NO_INVERSE = '\x1b[27m';
 // `color`, so the text after it keeps the part's colour. With a pace, the
 // pace marker shows where "now" falls in the window, coloured by the
 // projection.
-function drawBar(pct, color, pace, style, { config, theme, plain }) {
+function drawBar(pct, color, pace, style, bar, { config, theme, plain }) {
     const spec = BAR_STYLE_REGISTRY[style];
-    const n = spec.cells ?? config.segments;
+    const n = spec.cells ?? segmentsOf(forBar(config.segments, bar));
     const muted = (text) => `${RESET}${theme.muted}${text}${RESET}${color}`;
     // A dot after the bar in the pace colour, for the styles with no room for
     // a marker inside. Without colour it says nothing, so it is left out.
@@ -676,16 +710,16 @@ function underlined(text, pct, color, pace) {
     });
     return `${UNDERLINE}${drawn.slice(0, cut).join('')}${NO_UNDERLINE}${drawn.slice(cut).join('')}`;
 }
-// A part with a bar, in `color`: `head`, the label and percentage, then the
+// A part with `bar`, in `color`: `head`, the label and percentage, then the
 // bar, then `tail`, such as a count or a reset time. The underline style
 // draws its bar under head and tail instead.
-function barred(head, tail, pct, color, input, pace) {
+function barred(bar, head, tail, pct, color, input, pace) {
     if (!input.config.bars)
         return `${color}${head}${tail}${RESET}`;
-    const style = barStyleOf(input.config, input.plain);
+    const style = barStyleOf(input.config, input.plain, bar);
     if (style === 'underline')
         return `${color}${underlined(`${head}${tail}`, pct, color, pace)}${RESET}`;
-    return `${color}${head}${drawBar(pct, color, pace, style, input)}${tail}${RESET}`;
+    return `${color}${head}${drawBar(pct, color, pace, style, bar, input)}${tail}${RESET}`;
 }
 // The 5h or 7d part. rate_limits is present only for claude.ai Pro and Max
 // subscribers, after the first response of a session; "~" marks a window
@@ -697,15 +731,15 @@ function windowPart(name, input) {
     const limit = data.rate_limits?.[window.key];
     if (limit?.used_percentage == null)
         return `${theme.accent}${label}~${RESET}`;
-    return usageSegment(label, { ...limit, used_percentage: limit.used_percentage }, window, input);
+    return usageSegment(name, label, { ...limit, used_percentage: limit.used_percentage }, window, input);
 }
 // A reported window's percentage, bar and reset, behind its label.
-function usageSegment(label, limit, window, input) {
+function usageSegment(bar, label, limit, window, input) {
     const { config, theme, nowMs } = input;
     const pct = Math.round(limit.used_percentage);
     const color = levelColor(theme, pct);
     const reset = config.reset && limit.resets_at ? ` → ${window.resetText(limit.resets_at, config, nowMs)}` : '';
-    return barred(`${label}${pct}%`, reset, pct, color, input, paceOf(pct, window, limit.resets_at, config, theme, nowMs));
+    return barred(bar, `${label}${pct}%`, reset, pct, color, input, paceOf(pct, window, limit.resets_at, config, theme, nowMs));
 }
 // The per-model weekly windows Claude Code reports, as seven_day_<model>
 // keys, sorted by key: the model's name and the window. Keys reach the row
@@ -730,7 +764,7 @@ function modelWindows(data) {
 function modelsPart(input) {
     const { data, config, theme } = input;
     return modelWindows(data)
-        .map(({ name, limit }) => usageSegment(`${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], input))
+        .map(({ name, limit }) => usageSegment('7d', `${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], input))
         .join(separatorOf(config, theme));
 }
 // The context in the token line's shape: ctx 43% ▓▓░░░ 86.0k. Both figures
@@ -754,7 +788,7 @@ function contextPart(input) {
     const color = theme.context[pct <= 50 ? 0 : pct <= 75 ? 1 : 2];
     const label = labelOf(config, 'ctx');
     const count = tokens != null ? ` ${fmt(tokens)}` : '';
-    return barred(`${label}${Math.round(pct)}%`, count, pct, color, input);
+    return barred('ctx', `${label}${Math.round(pct)}%`, count, pct, color, input);
 }
 // The current local time, on the same clock as the reset times.
 function timePart({ config, theme, nowMs }) {
@@ -1068,7 +1102,7 @@ function ramPart(input) {
     if (!memory)
         return '';
     const pct = (memory.used * 100) / memory.total;
-    return barred(`${labelOf(config, 'ram')}${Math.round(pct)}%`, ` ${gib(memory.used)}`, pct, levelColor(theme, Math.round(pct)), input);
+    return barred('ram', `${labelOf(config, 'ram')}${Math.round(pct)}%`, ` ${gib(memory.used)}`, pct, levelColor(theme, Math.round(pct)), input);
 }
 // The text and command parts: text from --text or from the command's
 // output. Neither comes through render's sanitised payload, so the part
@@ -1683,7 +1717,7 @@ function joinRow(shown, separator, right, widthOf) {
 }
 function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = gitStatus, branchOf = headBranch, mtimeOf = fileMtime, env = process.env, setupOf, memoryOf = readMemory, commandOutputOf = runCommand, transcript = readTranscriptActivity, columns, ledger, hostname = os.hostname(), plain = false, } = {}) {
     const merged = { ...DEFAULTS, ...overrides };
-    const config = { ...merged, segments: segmentsOf(merged.segments) };
+    const config = { ...merged, segments: String(merged.segments) };
     const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
     const theme = themeOf(config.theme);
     let gitState;

@@ -21,10 +21,13 @@
 //   --show <parts>      parts to show, in order, comma-separated, from
 //                       time,req,out,cache,ctx (default: all of them)
 //   --segments <5|10>   cells in the context bar, with the classic bar style
-//                       (default 5)
+//                       (default 5). A list for the status line's bars,
+//                       such as 5,ctx=10, gives the ctx bar's.
 //   --bar-style <name>  how the context bar is drawn: classic, steps,
 //                       rising, hairline, dots, spark or underline, as on
-//                       the status line (default classic)
+//                       the status line (default classic). A list for the
+//                       status line's bars, such as steps,ctx=rising, gives
+//                       the ctx bar's.
 //   --window <tokens>   context window size, e.g. 200k or 1m, over the size
 //                       the status line saved for the session. Without
 //                       either, the window is 200k, or 1M once the context
@@ -129,6 +132,21 @@ const BAR_STYLES = {
     spark: { cells: 1 },
     underline: { filled: '▓', empty: '░' },
 };
+// The value for the ctx bar in a per-bar list, such as steps,ctx=rising:
+// its own, else the bare one, as the status line reads it. The token line's
+// one bar is a ctx bar.
+const forCtx = (list) => {
+    let all = '';
+    let ctx = '';
+    for (const item of String(list).split(',')) {
+        const [key, own] = item.split(/=(.*)/s).map((word) => word.trim().toLowerCase());
+        if (own === undefined)
+            all = key || all;
+        else if (key === 'ctx' && own)
+            ctx = own;
+    }
+    return ctx || all;
+};
 // The context bar in `style` (classic for an unknown name), with `segments`
 // cells for classic.
 const bar = (pct, segments, style = 'classic') => {
@@ -207,7 +225,7 @@ function summarize(records, { now = new Date(), window, savedWindow, segments, b
             if (!run.ctx)
                 return '';
             const pct = (run.ctx / contextWindow(run.ctx, window, savedWindow)) * 100;
-            return `ctx ${Math.round(pct)}% ${bar(pct, segmentsOf(segments), barStyle)} ${fmt(run.ctx)}`;
+            return `ctx ${Math.round(pct)}% ${bar(pct, segmentsOf(forCtx(segments ?? '')), forCtx(barStyle ?? '') || undefined)} ${fmt(run.ctx)}`;
         },
     };
     // A show list handed in from JavaScript may name parts the registry lacks;
