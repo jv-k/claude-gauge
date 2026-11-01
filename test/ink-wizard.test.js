@@ -19,7 +19,7 @@ const { PARTS } = require('../dist/statusline.js');
 const { PARTS: TOKEN_PARTS } = require('../dist/tokenline.js');
 const { plain, tempDir, configFolder, runCli, ok } = require('./helpers');
 
-const KEY = { up: '\x1b[A', down: '\x1b[B', enter: '\r', space: ' ', ctrlC: '\x03' };
+const KEY = { up: '\x1b[A', down: '\x1b[B', enter: '\r', space: ' ', backspace: '\x7f', ctrlC: '\x03' };
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -157,6 +157,25 @@ test('configure: a changed token line by key presses gives the answers that the 
   assert.deepEqual(await run, typed);
   assert.deepEqual(typed.tokenLine, ['--show', 'req,ctx,out']);
   assert.match(out.text, /assumes 200k/, 'the note before the window question is written as it is');
+});
+
+test('another context window size is typed, asked again when the token line cannot read it, and gives what the typed answer gives', async () => {
+  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', 'y', '', '500k', 'y']), { preview });
+  const { io, next, press, answer } = await driver();
+  const run = runWizard(io, { preview });
+  await answer(KEY.down, KEY.enter); // customise
+  for (let i = 0; i < 8; i++) await answer(KEY.enter); // rows, two rows, cells, theme, labels, token line, its parts
+  const sizes = await answer(KEY.up, KEY.enter); // from 200k up to the last option
+  assert.match(sizes, /❯ Another size/);
+  const other = await next();
+  await press(other, 'h', 'u', 'g', 'e', KEY.enter);
+  assert.match(plain(other.lastFrame()), /❯ huge\n[\s\S]*Answer a size such as 200k or 1m\./);
+  await press(other, KEY.backspace, KEY.backspace, KEY.backspace, KEY.backspace, '5', '0', '0', 'K');
+  assert.match(plain(other.lastFrame()), /❯ 500K\n/);
+  await press(other, KEY.enter);
+  await answer(KEY.enter); // write
+  assert.deepEqual(await run, typed);
+  assert.deepEqual(typed.tokenLine, ['--window', '500k']);
 });
 
 test('the preview redraws as the selection moves, before the answer is accepted', async () => {

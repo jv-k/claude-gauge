@@ -73,12 +73,21 @@ interface PickMany<P extends string> {
   preview?: (value: P[]) => string;
 }
 
+// A question answered with typed words, for an answer no list of options
+// holds. `read` takes the answer, or gives a retry that says why it cannot,
+// as for the readline questions.
+interface TypeIn<T> {
+  message: string;
+  read: (answer: string) => T | { retry: string };
+}
+
 // A front end that asks with choices. Each question rejects with
 // EndOfAnswers when it is stopped, such as at Ctrl+C. `preview` sets the
 // preview that the questions after it show, or none for ''.
 interface ChoiceIo {
   one<T>(question: PickOne<T>): Promise<T>;
   many<P extends string>(question: PickMany<P>): Promise<P[]>;
+  text<T>(question: TypeIn<T>): Promise<T>;
   preview(text: string): void;
 }
 
@@ -299,6 +308,15 @@ const readTokenWindow = (answer: string): string | undefined | { retry: string }
   return parseSize(answer) > 0 ? answer.toLowerCase() : { retry: 'Answer a size such as 200k or 1m.' };
 };
 
+// The context window as a choice: `sizes`, `fallback` first, then another
+// size, typed and read as readTokenWindow reads it, though not empty.
+const pickWindow = (sizes: readonly string[], fallback: string) => async (c: ChoiceIo) => {
+  const options: Option<string | null>[] = [...sizes.map((size) => ({ label: size, value: size })), { label: 'Another size', value: null }];
+  const size = await c.one({ kind: 'INPUT', message: 'Context window?', options, initial: Math.max(0, sizes.indexOf(fallback)) });
+  if (size !== null) return size;
+  return c.text({ message: 'Context window, such as 500k:', read: (answer) => readTokenWindow(answer) ?? { retry: 'Answer a size such as 200k or 1m.' } });
+};
+
 // The wizard's io, which counts the screen rows written since the last
 // preview: each newline, and each wrap of a line wider than the terminal,
 // with a character counted one column wide, and colour codes and links,
@@ -486,7 +504,7 @@ async function askAll(userIo: WizardIo, { preview, installed }: WizardOptions): 
       `Context window, 200k or 1m? ${hint(s, installedWindow)} `,
       readTokenWindow,
       'INPUT',
-      oneOf('Context window?', windows, installedWindow),
+      pickWindow(windows, installedWindow),
     );
     if (window !== undefined) tokenSwitches = tokenSwitchesForWindow(window, tokenSwitches);
   }
@@ -622,4 +640,4 @@ async function openIo(input: Input, output: Output, load: LoadInk = loadInk): Pr
 
 export { runWizard, offerStar, confirm, streamIo, openIo, EndOfAnswers, Interrupted, samplePayload, loadPayload, previewer, switchesFor };
 
-export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, Output, Input, OpenIo };
+export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, TypeIn, Output, Input, OpenIo };
