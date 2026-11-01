@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Renders the README's still pictures in docs/media/ from the built status
-# line, with freeze (https://github.com/charmbracelet/freeze). Run it after
-# `pnpm build` when the bars or the themes change.
+# Renders the README's pictures in docs/media/ from the build: the still
+# pictures from the status line with freeze
+# (https://github.com/charmbracelet/freeze), and the demo GIF of the setup
+# wizard from docs/media/demo.tape with VHS
+# (https://github.com/charmbracelet/vhs). Run it after `pnpm build` when the
+# bars, the themes or the wizard change.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out=docs/media
@@ -38,3 +41,18 @@ shot() {
     echo
   done
 } | sed '$d' | shot themes
+
+# The setup wizard, recorded from docs/media/demo.tape. The wizard runs in a
+# fresh home folder with its own config folder, so it never writes the real
+# ~/.claude, and with only node on the PATH, so setup does not offer to star
+# the repo with gh. The folder has a fixed name, because the result in the
+# GIF shows its path, and a folder left there from before stops the script.
+demo=/tmp/claude-gauge-demo
+if [ -e "$demo" ]; then
+  echo "scripts/media.sh: $demo exists. Remove it, then run the script again." >&2
+  exit 1
+fi
+mkdir -p "$demo/bin" "$demo/my-app" "$demo/.claude"
+trap 'rm -rf "${demo:?}"' EXIT
+ln -s "$(command -v node)" "$demo/bin/node"
+env -u COLUMNS DEMO_HOME="$demo" DEMO_CLI="$PWD/dist/cli.js" vhs docs/media/demo.tape
