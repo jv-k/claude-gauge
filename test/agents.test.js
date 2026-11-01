@@ -74,8 +74,8 @@ test('subagent types, models and descriptions print without their control codes'
 // Issue #60: a background subagent whose own transcript has not changed for
 // 10 minutes shows a dim ? in place of the running mark.
 test('a background subagent whose transcript changed 11 minutes ago shows a dim ?, and one 9 minutes ago still runs', () => {
-  const background = (minutesQuiet) => [
-    { type: 'Plan', description: 'Plan it', startedAt: at(1200), background: true, activeAt: at(minutesQuiet * 60) },
+  const background = (minutesUnchanged) => [
+    { type: 'Plan', description: 'Plan it', startedAt: at(1200), background: true, activeAt: at(minutesUnchanged * 60) },
   ];
   assert.equal(renderAgents(background(9)), '◐ Plan Plan it 20m');
   assert.equal(renderAgents(background(11)), '? Plan Plan it 20m');
@@ -89,13 +89,13 @@ test('a background subagent whose transcript changed 11 minutes ago shows a dim 
 });
 
 test('a stale background subagent goes back to running when its transcript changes, and shows finished once notified', () => {
-  const quiet = { type: 'Plan', description: 'Plan it', startedAt: at(1200), background: true, activeAt: at(660) };
-  assert.equal(renderAgents([quiet]), '? Plan Plan it 20m');
-  assert.equal(renderAgents([{ ...quiet, activeAt: at(5) }]), '◐ Plan Plan it 20m');
-  assert.equal(renderAgents([{ ...quiet, endedAt: at(2) }]), '✓ Plan Plan it 19m');
+  const stale = { type: 'Plan', description: 'Plan it', startedAt: at(1200), background: true, activeAt: at(660) };
+  assert.equal(renderAgents([stale]), '? Plan Plan it 20m');
+  assert.equal(renderAgents([{ ...stale, activeAt: at(5) }]), '◐ Plan Plan it 20m');
+  assert.equal(renderAgents([{ ...stale, endedAt: at(2) }]), '✓ Plan Plan it 19m');
 });
 
-test('a foreground subagent, and a background one with no transcript found, run however long they are quiet', () => {
+test('a foreground subagent, and a background one with no transcript found, run however long their transcript is unchanged', () => {
   const foreground = { type: 'Explore', description: 'Map it', startedAt: at(1200), activeAt: at(660) };
   assert.equal(renderAgents([foreground]), '◐ Explore Map it 20m');
   const unseen = { type: 'Plan', description: 'Plan it', startedAt: at(1200), background: true };
@@ -391,7 +391,7 @@ test('with no agents part to show, the reader leaves the subagents folder and tr
 
 // Issue #60 through the reader: the background flag and the transcript's last
 // change time reach the part, which reads the render clock.
-test("a background subagent whose own transcript changed 11 minutes ago shows a dim ?, and a foreground one still runs", () => {
+test('through the reader, a background subagent whose transcript changed 11 minutes ago shows a dim ?, and a foreground one still runs', () => {
   const renderFrom = ({ file, stateDir }) =>
     plain(
       render(
@@ -399,7 +399,7 @@ test("a background subagent whose own transcript changed 11 minutes ago shows a 
         { config: parseArgs(['--show', 'agents']), nowMs: NOW, transcript: (f) => readTranscriptActivity(f, { stateDir }) },
       ),
     );
-  const quietFor = (session, seconds) => {
+  const unchangedFor = (session, seconds) => {
     fs.utimesSync(session.transcript, at(seconds) / 1000, at(seconds) / 1000);
     return session;
   };
@@ -407,15 +407,15 @@ test("a background subagent whose own transcript changed 11 minutes ago shows a 
   const launched = agentResult('t1', at(1199), { isAsync: true, status: 'async_launched', agentId: 'a1b2c3' });
   const background = () => sessionWithSubagent([call, launched], { subagent: [subagentReply('claude-sonnet-4-5', at(1190))] });
 
-  const stale = quietFor(background(), 660);
+  const stale = unchangedFor(background(), 660);
   const [agent] = readTranscriptActivity(stale.file, { stateDir: stale.stateDir }).agents;
   assert.equal(agent.background, true);
   assert.equal(renderFrom(stale), '? Plan (Sonnet 4.5) Plan it 20m');
-  assert.equal(renderFrom(quietFor(background(), 540)), '◐ Plan (Sonnet 4.5) Plan it 20m');
+  assert.equal(renderFrom(unchangedFor(background(), 540)), '◐ Plan (Sonnet 4.5) Plan it 20m');
 
   const unseen = sessionWithSubagent([call, launched]);
   assert.equal(renderFrom(unseen), '◐ Plan Plan it 20m');
 
   const foreground = agentCall('t1', { subagent_type: 'Explore', description: 'Map it' }, at(1200));
-  assert.equal(renderFrom(quietFor(sessionWithSubagent([foreground], { subagent: [subagentReply('claude-haiku-4-5', at(1190))] }), 660)), '◐ Explore (Haiku 4.5) Map it 20m');
+  assert.equal(renderFrom(unchangedFor(sessionWithSubagent([foreground], { subagent: [subagentReply('claude-haiku-4-5', at(1190))] }), 660)), '◐ Explore (Haiku 4.5) Map it 20m');
 });
