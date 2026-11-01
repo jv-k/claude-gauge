@@ -177,6 +177,99 @@ test("the reader takes a new task's id from the result text when the result has 
   ]);
 });
 
+// A TaskList call and its result, as Claude Code writes it: the tasks in its
+// data, and one line of text for each.
+const taskList = (tasks) =>
+  done('TaskList', {}, { tasks: tasks.map((t) => ({ owner: undefined, blockedBy: [], ...t })) });
+
+test('a TaskList result replaces the list, and later task calls apply on top of it', () => {
+  const listed = taskList([
+    { id: '1', subject: 'Read the reader', status: 'completed' },
+    { id: '2', subject: 'Write the tests', status: 'in_progress' },
+    { id: '3', subject: 'Update the README', status: 'pending' },
+  ]);
+  const before = [...taskCreate('9', { subject: 'Gone from the list' }), ...todoWrite([{ content: 'An old todo', status: 'pending' }])];
+  assert.deepEqual(todosIn([...before, ...listed]), [
+    { content: 'Read the reader', status: 'completed' },
+    { content: 'Write the tests', status: 'in_progress' },
+    { content: 'Update the README', status: 'pending' },
+  ]);
+  assert.equal(renderTodos(todosIn(listed)), '◐ Write the tests 1/3');
+  const after = [...taskUpdate('3', { status: 'completed' }), ...taskCreate('4', { subject: 'Ship it' })];
+  assert.deepEqual(todosIn(listed, { append: [after] }), [
+    { content: 'Read the reader', status: 'completed' },
+    { content: 'Write the tests', status: 'in_progress' },
+    { content: 'Update the README', status: 'completed' },
+    { content: 'Ship it', status: 'pending' },
+  ]);
+  assert.deepEqual(todosIn([...before, ...taskList([])]), []);
+});
+
+test('a TaskList keeps the active form the reader knew for a task', () => {
+  const created = taskCreate('1', { subject: 'Read the reader', activeForm: 'Reading the reader' });
+  const listed = taskList([{ id: '1', subject: 'Read the reader', status: 'in_progress' }]);
+  assert.deepEqual(todosIn([...created, ...listed]), [{ content: 'Read the reader', activeForm: 'Reading the reader', status: 'in_progress' }]);
+});
+
+// A TaskGet call and its result: the task, or null when there is none.
+const taskGet = (taskId, task) =>
+  done('TaskGet', { taskId }, { task: task && { id: taskId, description: 'The details.', blocks: [], blockedBy: [], ...task } });
+
+test('a TaskGet result adds a task the reader did not know, and changes one it did', () => {
+  const created = taskCreate('1', { subject: 'Read the reader', activeForm: 'Reading the reader' });
+  assert.deepEqual(todosIn([...created, ...taskGet('7', { subject: 'Made in an earlier session', status: 'completed' })]), [
+    { content: 'Read the reader', activeForm: 'Reading the reader', status: 'pending' },
+    { content: 'Made in an earlier session', status: 'completed' },
+  ]);
+  assert.deepEqual(todosIn([...created, ...taskGet('1', { subject: 'Read the whole reader', status: 'in_progress' })]), [
+    { content: 'Read the whole reader', activeForm: 'Reading the reader', status: 'in_progress' },
+  ]);
+  assert.deepEqual(todosIn([...created, ...taskGet('8', null)]), [{ content: 'Read the reader', activeForm: 'Reading the reader', status: 'pending' }]);
+});
+
+test('an update to an unknown task applies once a later TaskList or TaskGet names it', () => {
+  const update = taskUpdate('5', { status: 'completed' });
+  assert.deepEqual(todosIn(update), []);
+  assert.deepEqual(todosIn([...update, ...taskGet('5', { subject: 'Made elsewhere', status: 'completed' })]), [
+    { content: 'Made elsewhere', status: 'completed' },
+  ]);
+  const listed = taskList([{ id: '5', subject: 'Made elsewhere', status: 'pending' }]);
+  assert.deepEqual(todosIn([...listed, ...taskUpdate('5', { status: 'completed' })]), [{ content: 'Made elsewhere', status: 'completed' }]);
+});
+
+// A call a subagent makes and its result, both subagent records.
+const inSubagent = (records) => records.map((r) => ({ ...r, isSidechain: true }));
+
+test("a subagent's TaskCreate and TaskUpdate change the list, and its other records do not", () => {
+  const created = [...taskCreate('1', { subject: 'Read the reader' }), ...taskCreate('2', { subject: 'Write the tests' })];
+  const subagent = inSubagent([
+    ...taskUpdate('1', { status: 'completed' }),
+    ...taskCreate('3', { subject: 'Found by the subagent' }),
+    ...taskList([{ id: '9', subject: 'Listed by the subagent', status: 'pending' }]),
+    ...taskGet('8', { subject: 'Read by the subagent', status: 'pending' }),
+    ...todoWrite([{ content: 'Its own todo', status: 'pending' }]),
+  ]);
+  const todos = todosIn(created, { append: [subagent] });
+  assert.deepEqual(todos, [
+    { content: 'Read the reader', status: 'completed' },
+    { content: 'Write the tests', status: 'pending' },
+    { content: 'Found by the subagent', status: 'pending' },
+  ]);
+  assert.equal(renderTodos(todos), 'todos 1/3');
+});
+
+test("a subagent's records leave the other transcript parts as they were", () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'session.jsonl');
+  const records = [...taskCreate('1', { subject: 'Read the reader' })];
+  fs.writeFileSync(file, jsonl(records));
+  const before = readTranscriptActivity(file, { stateDir: path.join(dir, 'before') });
+  fs.writeFileSync(file, jsonl([...records, ...inSubagent([...taskUpdate('1', { status: 'in_progress' }), ...done('Read', { file_path: '/x' })])]));
+  const after = readTranscriptActivity(file, { stateDir: path.join(dir, 'after') });
+  assert.deepEqual({ ...after, todos: before.todos }, before);
+  assert.deepEqual(after.todos, [{ content: 'Read the reader', status: 'in_progress' }]);
+});
+
 test('the program shows the todo in progress from a transcript', () => {
   const dir = tempDir();
   const file = path.join(dir, 'session.jsonl');
@@ -191,6 +284,19 @@ test('the program shows the todo in progress from a transcript', () => {
     },
   );
   assert.equal(plain(out), '◐ Reading the reader 0/1\n');
+});
+
+test('a transcript state from before the reader read TaskList is read again from the start', () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'session.jsonl');
+  const stateDir = path.join(dir, 'state');
+  fs.writeFileSync(file, jsonl(taskList([{ id: '1', subject: 'Read the reader', status: 'completed' }])));
+  readTranscriptActivity(file, { stateDir });
+  // The state as claude-gauge wrote it before: version 5, blind to TaskList.
+  const [name] = fs.readdirSync(stateDir);
+  const saved = JSON.parse(fs.readFileSync(path.join(stateDir, name), 'utf8'));
+  fs.writeFileSync(path.join(stateDir, name), JSON.stringify({ ...saved, version: 5, todos: [] }));
+  assert.deepEqual(readTranscriptActivity(file, { stateDir }).todos, [{ content: 'Read the reader', status: 'completed' }]);
 });
 
 test('a transcript state from before the todos part is read again from the start', () => {

@@ -2294,7 +2294,7 @@ function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [
 
 // What the reader keeps between renders. version changes when the shape
 // does, so a state from an older claude-gauge is rebuilt, not misread.
-const TRANSCRIPT_STATE_VERSION = 5;
+const TRANSCRIPT_STATE_VERSION = 6;
 
 interface TranscriptState {
   version: number;
@@ -2365,9 +2365,13 @@ const ENDED_KEPT = 20;
 // The tool that starts a subagent: Agent, named Task before Claude Code 2.1.
 const AGENT_TOOLS = ['Agent', 'Task'];
 
-// The tools that write the todo list: TodoWrite replaces it whole, and the
-// task tools that replaced it in Claude Code 2.1 add a task and change one.
-const TODO_TOOLS = ['TodoWrite', 'TaskCreate', 'TaskUpdate'];
+// The tools that write or read the todo list: TodoWrite replaces it whole,
+// and the task tools that replaced it in Claude Code 2.1 add a task, change
+// one, list the shared task list and read one task of it.
+const TODO_TOOLS = ['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'];
+
+// The task tools whose calls count from a subagent's records too.
+const SUBAGENT_TODO_TOOLS = ['TaskCreate', 'TaskUpdate'];
 
 // The skills and the MCP servers kept at most, each the most recently used.
 const RECENT_KEPT = 20;
@@ -2513,14 +2517,35 @@ function createdTaskId(block: ContentBlock, record: TranscriptRecord): string | 
   return idAt(task, 'id') ?? /Task #(\S+) created/.exec(textOf(block.content))?.[1];
 }
 
+// A task as a TaskList or TaskGet result names it, with the active form the
+// reader already knew for its id, as neither result names one. One with no
+// id or no subject drops out, and one with a status the part does not know
+// counts as pending.
+function readTask(state: TranscriptState, task: unknown): TodoEntry | undefined {
+  const id = idAt(task, 'id');
+  if (id === undefined) return undefined;
+  const known = state.todos.find((t) => t.id === id);
+  return todoOf(textAt(task, 'subject'), known?.activeForm, (isObject(task) && todoStatus(task.status)) || 'pending', id);
+}
+
 // A todo tool's call applied to the list, once its result says it worked:
 // TodoWrite replaces the list, TaskCreate adds a pending task, and
-// TaskUpdate changes one, or drops it when it is deleted.
+// TaskUpdate changes one, or drops it when it is deleted. A TaskList result
+// replaces the list with the shared task list it names, and a TaskGet result
+// changes or adds the one task it names.
 function applyTodoCall(state: TranscriptState, todoCall: TodoCall, block: ContentBlock, record: TranscriptRecord): void {
   if (resultFailed(block, record)) return;
   const input = isObject(todoCall.input) ? todoCall.input : {};
+  const data = isObject(record.toolUseResult) ? record.toolUseResult : {};
   if (todoCall.name === 'TodoWrite') {
     state.todos = writtenTodos(input);
+  } else if (todoCall.name === 'TaskList') {
+    if (Array.isArray(data.tasks)) state.todos = data.tasks.flatMap((task) => readTask(state, task) ?? []);
+  } else if (todoCall.name === 'TaskGet') {
+    const task = readTask(state, data.task);
+    if (!task) return;
+    const at = state.todos.findIndex((t) => t.id === task.id);
+    state.todos = at < 0 ? [...state.todos, task] : state.todos.map((t, i) => (i === at ? task : t));
   } else if (todoCall.name === 'TaskCreate') {
     const task = todoOf(textAt(input, 'subject'), textAt(input, 'activeForm'), 'pending', createdTaskId(block, record));
     if (task) state.todos = [...state.todos, task];
@@ -2603,20 +2628,44 @@ function speedOf(response: ResponseEntry | undefined): number | undefined {
   return response && response.tokens > 0 && seconds > 0 ? response.tokens / seconds : undefined;
 }
 
+// A todo tool's call kept until its result comes, or its result applied to
+// the list, for the tools named.
+function applyTodoBlock(state: TranscriptState, record: TranscriptRecord, block: ContentBlock, tools: string[]): void {
+  if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+    if (tools.includes(block.name)) state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
+  } else if (record.type === 'user' && block.type === 'tool_result') {
+    const todoCall = state.todoCalls.find((c) => c.id === block.tool_use_id);
+    if (!todoCall) return;
+    state.todoCalls = state.todoCalls.filter((c) => c !== todoCall);
+    applyTodoCall(state, todoCall, block, record);
+  }
+}
+
+// The blocks of a record's message that are objects.
+const blocksOf = (record: TranscriptRecord): ContentBlock[] => {
+  const content = record.message?.content;
+  return Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
+};
+
 // One transcript record applied to the state. Subagent records are left out,
-// as they are for --latest. A prompt from the user ends the turn, so a call
+// as they are for --latest, but for a subagent's calls to TaskCreate and
+// TaskUpdate: the task list they change is the session's too. A prompt from the user ends the turn, so a call
 // still running then was interrupted: it no longer shows as running, and a
 // subagent in the foreground shows as stopped. One in the background runs on
 // until its task notification. A prompt that runs a command names a skill
 // when the next record is the skill's text.
 function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
-  if (!record || typeof record !== 'object' || record.isSidechain) return;
+  if (!record || typeof record !== 'object') return;
+  if (record.isSidechain) {
+    for (const block of blocksOf(record)) applyTodoBlock(state, record, block, SUBAGENT_TODO_TOOLS);
+    return;
+  }
   const at = timeOf(record);
   if (record.type === 'system' && record.subtype === 'compact_boundary') state.compactions++;
   if (record.type === 'assistant') applyResponse(state, record, at);
   if (record.type === 'user' && at !== undefined) state.askedAt = at;
   const content = record.message?.content;
-  const blocks: ContentBlock[] = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
+  const blocks = blocksOf(record);
   const results = blocks.some((b) => b.type === 'tool_result');
   const { command } = state;
   delete state.command;
@@ -2643,6 +2692,7 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
     return;
   }
   for (const block of blocks) {
+    applyTodoBlock(state, record, block, TODO_TOOLS);
     if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
       const target = toolTarget(block.input);
       const skill = block.name === 'Skill' ? skillName(stringAt(block.input, 'skill')) : undefined;
@@ -2650,15 +2700,9 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
       const server = mcpServerOf(block.name);
       if (server) useServer(state, server);
       if (AGENT_TOOLS.includes(block.name)) startAgent(state, block, at);
-      if (TODO_TOOLS.includes(block.name)) state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
     } else if (record.type === 'user' && block.type === 'tool_result') {
       const agent = state.agents.find((a) => a.id === block.tool_use_id);
       if (agent) agentResult(agent, block, record, at);
-      const todoCall = state.todoCalls.find((c) => c.id === block.tool_use_id);
-      if (todoCall) {
-        state.todoCalls = state.todoCalls.filter((c) => c !== todoCall);
-        applyTodoCall(state, todoCall, block, record);
-      }
       const call = state.pending.find((p) => p.id === block.tool_use_id);
       if (!call) continue;
       state.pending = state.pending.filter((p) => p !== call);
