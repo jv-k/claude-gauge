@@ -2,8 +2,8 @@
 
 A release puts a version on `main` and publishes it. Two tools share the work:
 
-- On your machine, [VerBump](https://github.com/jv-k/VerBump) sets the version in `package.json`, adds a section to `CHANGELOG.md` (the first release creates the file), commits, tags the commit `vX.Y.Z`, and pushes the commit and the tag.
-- On GitHub, the `release` workflow (`.github/workflows/release.yml`) starts when the tag arrives. It tests the tagged commit, creates the GitHub release with the tag's `CHANGELOG.md` section as its body, and publishes the package to npm with provenance.
+- On your machine, [VerBump](https://github.com/jv-k/VerBump) sets the version in `package.json`, adds a section to `CHANGELOG.md` (the first release creates the file), commits, tags the commit `vX.Y.Z`, or `vX.Y.Z-<pre-release>` for a [pre-release](#cut-a-pre-release), and pushes the commit and the tag.
+- On GitHub, the `release` workflow (`.github/workflows/release.yml`) starts when the tag arrives. It tests the tagged commit, creates the GitHub release with the tag's `CHANGELOG.md` section as its body, and publishes the package to npm with provenance. A full release goes to npm under the dist-tag `latest`. A pre-release goes under `next`, as a GitHub pre-release.
 
 Installs that clone `main` update with `git pull`, so those users get a change when it merges into `main`, not when a release is cut. npm users get it from the release.
 
@@ -75,11 +75,11 @@ pnpm bump-release
 
 VerBump does not create the GitHub release. The tag starts the `release` workflow, which goes through these steps:
 
-6. It checks that npm is 11.5.1 or later, which trusted publishing needs, and that the tag is `v` followed by the version in `package.json`.
+6. It checks that npm is 11.5.1 or later, which trusted publishing needs, and that the tag is `v` followed by the version in `package.json`. Then `scripts/release-tag.js` reads whether the tag is a pre-release. It fails for a tag that is not `vX.Y.Z` or `vX.Y.Z-<pre-release>`, such as `v1.0.0-rc.1+build.5`.
 7. It runs `pnpm test` on the tagged commit, with a fresh build of `dist/`.
-8. It takes the section for the version from `CHANGELOG.md`. The section starts at the `## X.Y.Z` heading and stops at the next `##` heading. If the section is missing or empty, the workflow fails here.
-9. It creates the GitHub release `vX.Y.Z` with the section as its body. If the release already exists, it leaves the release as it is.
-10. It runs `npm publish --provenance`. npm accepts the publish through the trusted publisher, publishes `dist/`, `README.md`, `LICENSE` and `package.json`, and links the package to the workflow run that built it.
+8. It takes the section for the version from `CHANGELOG.md`. The section starts at the `## X.Y.Z` heading, or the `## X.Y.Z-<pre-release>` heading for a pre-release, and stops at the next `##` heading. If the section is missing or empty, the workflow fails here.
+9. It creates the GitHub release `vX.Y.Z` with the section as its body. For a pre-release, it marks the release as a pre-release. If the release already exists, it leaves the release as it is.
+10. It runs `npm publish --provenance`, and adds `--tag next` for a pre-release. npm accepts the publish through the trusted publisher, publishes `dist/`, `README.md`, `LICENSE` and `package.json`, and links the package to the workflow run that built it.
 
 Watch the run in the **Actions** tab, or with `gh run watch`. When it passes, the release is on the [releases page](https://github.com/jv-k/claude-gauge/releases) and on [npm](https://www.npmjs.com/package/@jv-k/claude-gauge).
 
@@ -92,7 +92,38 @@ pnpm bump-release -v 1.0.0
 
 `--major`, `--minor` and `--patch` force one bump level instead.
 
-The workflow starts only for a tag in the form `vX.Y.Z`. It does not start for a pre-release tag such as `v1.0.0-rc.1`.
+The workflow starts for a tag in the form `vX.Y.Z` or `vX.Y.Z-<pre-release>`. It does not start for a tag such as `v1.0` or `1.0.0`.
+
+## Cut a pre-release
+
+A pre-release, such as `2.0.0-rc.1`, lets testers install a version before it becomes the latest. Cut it as a release, from `main` and with the steps in [Before you start](#before-you-start). The `release` workflow then publishes it in two ways that differ from a full release:
+
+- npm gets it under the dist-tag `next`, not `latest`. So `npm install @jv-k/claude-gauge` still installs the latest full release, and `latest` moves only on a full release. To install the pre-release, run:
+
+  ```sh
+  npm install @jv-k/claude-gauge@next
+  ```
+
+- GitHub marks its release as a pre-release, and does not show it as the latest release.
+
+Give VerBump `--preid` with the pre-release name. With a bump level, VerBump bumps that level and starts the line at `.1`:
+
+```sh
+pnpm bump-release --dry-run --major --preid rc
+pnpm bump-release --major --preid rc
+```
+
+From `1.3.0`, this tags `v2.0.0-rc.1`. The next pre-release in the line takes `--preid` alone, with the same name, and tags `v2.0.0-rc.2`:
+
+```sh
+pnpm bump-release --preid rc
+```
+
+`-v` sets a pre-release version exactly, such as `-v 2.0.0-rc.1`. To end the line with the full release, set the version with `-v 2.0.0`. `--major`, `--minor` or `--patch` without `--preid` bumps past the pre-release's version: from `2.0.0-rc.2`, `--patch` gives `2.0.1`.
+
+Each pre-release has its own `CHANGELOG.md` section, under a heading such as `## 2.0.0-rc.1`, and its GitHub release takes that section as its body. If a step fails, the steps in [If a step fails](#if-a-step-fails) apply, with the next pre-release version in place of the next patch version.
+
+npm keeps one version under `next`, the last pre-release. A full release does not move `next`, so after `2.0.0`, `next` still names `2.0.0-rc.2` until the next pre-release.
 
 ## If a step fails
 
