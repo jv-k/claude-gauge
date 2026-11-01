@@ -1,3 +1,96 @@
+## 1.4.0 (2026-11-01)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.3.0 -> 1.4.0
+- chore(dist): build dist from c5224fb [auto]
+- Merge pull request #130 from jv-k/integration/123-backlog
+- docs: remove the close-out plan for #123
+- Merge pull request #162 from jv-k/docs/demo-gif-token
+- docs(media): record the setup GIF again with the token line preview
+- Merge pull request #161 from jv-k/feat/token-preview
+- feat(wizard): preview the token line under the status line, and redraw it as its parts are ticked
+- Merge pull request #160 from jv-k/docs/demo-gif-rerecord
+- docs(media): record the setup GIF again without the context window question
+- Merge pull request #159 from jv-k/feat/token-window
+- Merge remote-tracking branch 'origin/integration/123-backlog' into feat/token-window
+- Merge pull request #158 from jv-k/feat/preview-samples
+- fix(wizard): keep the sample worktree and changes out of the branch part
+- chore(media): drop the context window step from the demo tape
+- docs: say the token line takes its context window from the status line
+- feat(wizard): show an example for each part the setup preview has no data for
+- feat(wizard): stop asking for the context window
+- feat: show the token line's context share against the window the status line reports
+- Merge pull request #157 from jv-k/docs/adr-links-123
+- docs(adr): link ADRs 0003 and 0004 to the subagent transcripts ADR at its new number
+- Merge pull request #156 from jv-k/docs/adr-numbers-123
+- docs(adr): number the subagent transcripts ADR 0005, after the pre-release ADR took 0001
+- Merge pull request #155 from jv-k/feat/prune-state-51
+- Merge pull request #154 from jv-k/test/instruct-drift-77
+- fix(transcript): stamp the prune even before the reader's folder exists, per review
+- test: mask only true prose lines in the --instruct drift check, per review
+- feat(transcript): prune transcript state files no render has used for 30 days
+- test: fail when the status line's and the token line's --instruct copies drift
+- Merge pull request #153 from jv-k/test/shared-temp-dir-105
+- Merge pull request #151 from jv-k/feat/stale-subagent-60
+- test: give the token line's --latest folders their prefix and one comment
+- test: take every suite's temp folders from the shared tempDir helper
+- refactor(agents): name the quiet subagent state stale throughout, per review
+- feat(agents): show a dim ? for a background subagent quiet for 10 minutes
+- Merge pull request #149 from jv-k/feat/task-sources-62
+- Merge pull request #146 from jv-k/docs/demo-gif-99
+- docs(media): record the setup GIF again with the Another size option
+- Merge remote-tracking branch 'origin/integration/123-backlog' into docs/demo-gif-99
+- docs(media): render every picture with a fresh config folder, and keep gh off the wizard's PATH
+- fix(todos): drop a known task when its TaskGet result names none
+- Merge pull request #150 from jv-k/fix/wizard-review-142
+- Merge pull request #145 from jv-k/fix/subagent-review-59
+- Merge pull request #147 from jv-k/fix/cli-review-144
+- Merge remote-tracking branch 'origin/integration/123-backlog' into feat/task-sources-62
+- fix(wizard): keep a --window the token line cannot read at Enter in the arrow-key questions
+- test(agents): count the subagents folder listings, because the reader catches a listing error
+- fix(cli): print a status line command that is not a string as written when setup refuses to replace it
+- fix(wizard): offer another context window size to type in the arrow-key questions
+- fix(wizard): stop setup with exit code 130 at Ctrl+C on the star offer
+- docs(media): start the setup GIF on the wordmark, and fit the result on one line
+- Merge pull request #132 from jv-k/feat/subagent-model-59
+- docs(media): record the setup GIF from a VHS tape, with the wordmark and the Ink wizard
+- Merge pull request #144 from jv-k/feat/error-values-119
+- feat(cli): print a known command and switch in a command-line mistake in green
+- feat(cli): print the paths and commands in an error in green, as in a result
+- Merge pull request #142 from jv-k/feat/ink-wizard-103
+- docs(adr): number the Ink decision 0002, after the pre-release tags decision
+- fix(cli): document the Ink front end, and prove a checkout with no Ink runs the typed questions
+- feat(cli): choose the setup and configure answers with the arrow keys in a terminal
+- Merge pull request #139 from jv-k/fix/right-padding-45
+- refactor(statusline): name the whole-number check isPositiveInteger
+- test(parity): keep the --right example 60 columns wide after the margin
+- fix(statusline): keep an earlier statusLine.padding when a later status line sets none
+- fix(statusline): end a --right row at the last column Claude Code shows
+- Merge pull request #137 from jv-k/fix/resume-cost-52
+- Merge pull request #136 from jv-k/feat/prerelease-tags-41
+- refactor(statusline): rewrap the ledger write comment and name the counted total in its test
+- fix(statusline): stop counting a resumed session's restored cost twice in today and week
+- Merge pull request #135 from jv-k/feat/usage-pill-118
+- refactor(todos): name the todo block tracker for what it does and rewrap its comments
+- refactor(cli): read the colour gate once for the usage
+- feat(todos): count the shared task list from TaskList, TaskGet and subagent task calls
+- docs(release): list the release tag script in CONTRIBUTING.md and tighten the pre-release docs
+- feat(cli): head the usage with a USAGE pill when colour is on
+- feat(release): publish pre-release tags to npm under next, as GitHub pre-releases
+- Merge pull request #134 from jv-k/fix/plugin-install-scope-116
+- fix(statusline): describe install scopes in the reference and tidy the install choice
+- fix(statusline): count a plugin's hooks and servers from the install that applies to the launch folder
+- fix(agents): keep the session's activity when a subagent transcript fails, and read subagents only for the agents part
+- Merge pull request #131 from jv-k/test/owner-check-112
+- refactor(agents): read each subagent meta file once, and share the transcript cursor
+- refactor(statusline): name the owner check's type and its candidate paths
+- feat(agents): show a running subagent's model from its own transcript
+- test(statusline): cover the local settings file when the root belongs to another user
+- refactor(statusline): let readSetup take the check for a path another user owns
+- docs(plan): point the close-out plan at draft PR #130
+- chore: reopen integration branch integration/123-backlog
+- Merge branch 'integration/123-backlog'
+- docs: add the close-out plan for epic #123
+- chore: open integration branch integration/123-backlog
+
 ## 1.3.0 (2026-10-24)
 - chore: updated package.json, updated CHANGELOG.md, bumped 1.2.0 -> 1.3.0
 - Merge pull request #129 from jv-k/docs/readme-polish
