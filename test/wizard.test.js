@@ -269,6 +269,16 @@ test('as a choice, the context window offers another size, which takes any size 
   assert.deepEqual(await runWizard(changed, { preview, installed }), { statusLine: [], tokenLine: ['--show', 'req,ctx', '--window', '500k'] });
 });
 
+test('as a choice, Enter at the context window keeps a --window the token line cannot read, as a typed Enter does', async () => {
+  const { preview } = fakePreview();
+  const installed = { statusLine: [], tokenLine: ['--window', 'huge'] };
+  const kept = choosing([...enterAtStatusLineChoices, enter, enter, enter, enter]);
+  assert.deepEqual(await runWizard(kept, { preview, installed }), { statusLine: [], tokenLine: ['--window', 'huge'] });
+  assert.equal(kept.questions.at(-2).options[kept.questions.at(-2).initial].label, 'Keep --window huge');
+  const dropped = choosing([...enterAtStatusLineChoices, enter, enter, pick('200k'), enter]);
+  assert.deepEqual(await runWizard(dropped, { preview, installed }), { statusLine: [], tokenLine: [] }, '200k drops it, as a typed 200k does');
+});
+
 // configure: the wizard starts from the switches set up now.
 test('configure offers to keep the bars set up now, and a yes leaves both as they are', async () => {
   const io = scripted(['y']);

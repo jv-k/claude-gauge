@@ -309,10 +309,17 @@ const readTokenWindow = (answer: string): string | undefined | { retry: string }
 };
 
 // The context window as a choice: `sizes`, `fallback` first, then another
-// size, typed and read as readTokenWindow reads it, though not empty.
-const pickWindow = (sizes: readonly string[], fallback: string) => async (c: ChoiceIo) => {
-  const options: Option<string | null>[] = [...sizes.map((size) => ({ label: size, value: size })), { label: 'Another size', value: null }];
-  const size = await c.one({ kind: 'INPUT', message: 'Context window?', options, initial: Math.max(0, sizes.indexOf(fallback)) });
+// size, typed and read as readTokenWindow reads it, though not empty. A
+// --window the token line cannot read, `unread`, comes first as an option to
+// keep it, which gives undefined, as Enter does for the typed question.
+const pickWindow = (sizes: readonly string[], fallback: string, unread?: string) => async (c: ChoiceIo) => {
+  const options: Option<string | undefined | null>[] = [
+    ...(unread === undefined ? [] : [{ label: `Keep --window ${unread}`, value: undefined }]),
+    ...sizes.map((size) => ({ label: size, value: size })),
+    { label: 'Another size', value: null },
+  ];
+  const initial = unread === undefined ? Math.max(0, sizes.indexOf(fallback)) : 0;
+  const size = await c.one({ kind: 'INPUT', message: 'Context window?', options, initial });
   if (size !== null) return size;
   return c.text({ message: 'Context window, such as 500k:', read: (answer) => readTokenWindow(answer) ?? { retry: 'Answer a size such as 200k or 1m.' } });
 };
@@ -499,12 +506,14 @@ async function askAll(userIo: WizardIo, { preview, installed }: WizardOptions): 
     io.write(s.info('The token line cannot read the context window, so it assumes 200k until the context grows past it.'));
     const installedWindow = tokenWindowOf(start.tokenSwitches) ?? '200k';
     const windows = [...new Set(['200k', '1m', installedWindow])];
+    const written = parseTokenArgs(start.tokenSwitches).window;
+    const unread = written !== undefined && tokenWindowOf(start.tokenSwitches) === undefined ? written : undefined;
     const window = await askFor(
       io,
       `Context window, 200k or 1m? ${hint(s, installedWindow)} `,
       readTokenWindow,
       'INPUT',
-      pickWindow(windows, installedWindow),
+      pickWindow(windows, installedWindow, unread),
     );
     if (window !== undefined) tokenSwitches = tokenSwitchesForWindow(window, tokenSwitches);
   }

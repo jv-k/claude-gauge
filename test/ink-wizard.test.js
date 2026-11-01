@@ -159,6 +159,19 @@ test('configure: a changed token line by key presses gives the answers that the 
   assert.match(out.text, /assumes 200k/, 'the note before the window question is written as it is');
 });
 
+test('configure: Enter at the context window keeps a --window the token line cannot read, as a typed Enter does', async () => {
+  const installed = { statusLine: [], tokenLine: ['--window', 'huge'] };
+  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', '', '', 'y']), { preview, installed });
+  const { io, answer } = await driver();
+  const run = runWizard(io, { preview, installed });
+  await answer(KEY.down, KEY.enter); // keep the bars: No
+  for (let i = 0; i < 8; i++) await answer(KEY.enter); // rows, two rows, cells, theme, labels, token line, its parts
+  assert.match(await answer(KEY.enter), /❯ Keep --window huge\n {2}200k\n/);
+  await answer(KEY.enter); // write
+  assert.deepEqual(await run, typed);
+  assert.deepEqual(typed.tokenLine, ['--window', 'huge']);
+});
+
 test('another context window size is typed, asked again when the token line cannot read it, and gives what the typed answer gives', async () => {
   const typed = await runWizard(scripted(['n', '', '', '', '', '', '', 'y', '', '500k', 'y']), { preview });
   const { io, next, press, answer } = await driver();
