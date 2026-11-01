@@ -75,7 +75,7 @@ In a terminal, run:
 npx @jv-k/claude-gauge setup
 ```
 
-Setup shows the status line and asks which parts you want. In a terminal, each question is a choice. Use the arrow keys to move and Enter to accept. For the parts of a row, press Space to tick or untick a part. For a context window size that the list does not hold, choose Another size and type it. The status line redraws as the selection moves, before you accept it. Ctrl+C stops setup and changes nothing:
+Setup shows the status line and asks which parts you want. In a terminal, each question is a choice. Use the arrow keys to move and Enter to accept. For the parts of a row, press Space to tick or untick a part. The status line redraws as the selection moves, before you accept it. Ctrl+C stops setup and changes nothing:
 
 ![claude-gauge setup in a terminal: it shows the claude-gauge wordmark and the default rows, then draws the rows again as the arrow keys and Space change the second row, the bar size and the theme, and ends with the settings it wrote.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/demo.gif)
 

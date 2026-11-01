@@ -2116,6 +2116,30 @@ function savePayload(data: StatusData): void {
   if (text.length <= MAX_SAVED_PAYLOAD) replaceQuietly(fs, payloadFile(), text);
 }
 
+// The context window size of each session, as its payload names it, saved
+// for the token line, which reads neither the payload nor a size in the
+// transcript (ADR 0006). One file per session, named as the reader names its
+// state files, with the session id in place of the transcript's path, so the
+// prune of ADR 0004 keeps this folder too. src/tokenline.ts reads it with its
+// own copy of the name and the folder, because each script runs alone.
+const windowStateDir = () => stateFile('windows');
+
+// Best effort, like savePayload. A size the file holds already writes
+// nothing, so most renders cost one small read.
+function saveWindow(data: StatusData): void {
+  const id = data.session_id;
+  const size = data.context_window?.context_window_size;
+  if (typeof id !== 'string' || !id || typeof size !== 'number' || !Number.isFinite(size) || size <= 0) return;
+  const file = stateFileOf(windowStateDir(), id);
+  const text = JSON.stringify({ context_window_size: size });
+  try {
+    if (fs.readFileSync(file, 'utf8') === text) return;
+  } catch {
+    /* none saved yet */
+  }
+  replaceQuietly(fs, file, text);
+}
+
 // The saved windows, without any that have reset since they were saved.
 function loadUsage(nowMs: number): StatusData['rate_limits'] | undefined {
   try {
@@ -3109,7 +3133,10 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
 // The prune of the reader's state files (issue #51, ADR 0004). The reader
 // writes one per transcript, session and subagent alike, and a render touches
 // each one it uses, so a file no render has touched for STATE_KEEP_MS belongs
-// to a transcript nobody looks at any more.
+// to a transcript nobody looks at any more. The same prune keeps the saved
+// window sizes, in a folder of their own (ADR 0006). Those are not touched:
+// one the prune removes from a session still shown is saved again at the
+// next render.
 const STATE_KEEP_MS = 30 * 86400 * 1000;
 
 // The prune runs at most once per PRUNE_EVERY_MS. A stamp file beside the
@@ -3381,6 +3408,7 @@ if (isMain) {
     // show as junk.
     process.stdout.write(stripOwnCodes(render(data, { config, nowMs, ledger: readLedger(ledgerFile()) })) + '\n');
     pruneTranscriptStates(transcriptStateDir(), nowMs);
+    pruneTranscriptStates(windowStateDir(), nowMs);
   } else {
     const chunks: Buffer[] = [];
     process.stdin.on('data', (c: Buffer) => chunks.push(c));
@@ -3396,11 +3424,15 @@ if (isMain) {
       saveUsage(data, nowMs);
       // Only a payload that holds something replaces the one the wizard
       // previews with.
-      if (parsed && isObject(data) && Object.keys(data).length) savePayload(data);
+      if (parsed && isObject(data) && Object.keys(data).length) {
+        savePayload(data);
+        saveWindow(data);
+      }
       const ledger = recordCost(data, { nowMs });
       process.stdout.write(render(data, { config, nowMs, ledger, columns: columnsOf(process.env.COLUMNS) }) + '\n');
       // After the render, which touches the state files it uses.
       pruneTranscriptStates(transcriptStateDir(), nowMs);
+      pruneTranscriptStates(windowStateDir(), nowMs);
     });
   }
 }

@@ -17,7 +17,8 @@ Ask with one `AskUserQuestion` call, the recommended option first in each questi
 
 - **Which bars?** Both (recommended), the status line only, or the token line only.
 - **Defaults or your own?** The defaults (recommended), or choose the layout, bar size, theme and token line parts.
-- **Context window?** The token line cannot read the window size, so it assumes 200k until the context grows past it. Offer 1M (`--window 1m`) and 200k, the default, with no switch. Name your own context window in the question, and recommend the option that matches it. The answer applies only if the user chooses the token line.
+
+Do not ask for the context window. The token line takes it from the status line.
 
 If the user chose their own, ask a second `AskUserQuestion` call with each question that applies to the bars they chose:
 
@@ -34,10 +35,10 @@ Build each bar's switches from the answers. A default answer adds no switch, so 
 node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" setup --status-line '<status line switches>' --token-line '<token line switches>'
 ```
 
-For a bar the user did not choose, pass `--no-status-line` or `--no-token-line` in place of its pair. For example, both bars with every default, on a 1M-context model:
+For a bar the user did not choose, pass `--no-status-line` or `--no-token-line` in place of its pair. For example, both bars with every default:
 
 ```sh
-node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" setup --status-line '' --token-line '--window 1m'
+node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" setup --status-line '' --token-line ''
 ```
 
 If the command exits 1 because the settings already run another status line, such as claude-hud, show the user the command it printed and ask with `AskUserQuestion` whether to replace it. Recommend replacing it: claude-gauge saves it, and `/claude-gauge:uninstall` puts it back. With consent, run the same command again with `--replace` added. Without it, run it again with `--no-status-line` in place of the status line pair if the user still wants the token line, or stop.

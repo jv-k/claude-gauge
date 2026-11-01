@@ -1,7 +1,7 @@
 // The questions claude-gauge setup and configure ask when run with no bar
 // switches: take the defaults in one answer, or walk through the status
-// line's rows and parts, its bar size, theme and labels, and the token line,
-// its parts and its context window, with a preview of the status line
+// line's rows and parts, its bar size, theme and labels, and the token line
+// and its parts, with a preview of the status line
 // redrawn after each answer. configure starts from the bars set up now: the
 // first answer keeps them, and each question offers the value set up. It
 // returns the switches for each bar, as words, for the CLI to write; it
@@ -36,7 +36,7 @@ import {
   THEMES,
   DEFAULT_ROWS,
 } from './statusline';
-import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, parseSize, contextWindow } from './tokenline';
+import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches } from './tokenline';
 import type { StatusData, Part, TranscriptActivity, Ledger, Setup } from './statusline';
 import type { Part as TokenPart } from './tokenline';
 import type { PerBar, InstalledSwitches } from './settings';
@@ -87,21 +87,12 @@ interface PickMany<P extends string> {
   preview?: (value: P[]) => string;
 }
 
-// A question answered with typed words, for an answer no list of options
-// holds. `read` takes the answer, or gives a retry that says why it cannot,
-// as for the readline questions.
-interface TypeIn<T> {
-  message: string;
-  read: (answer: string) => T | { retry: string };
-}
-
 // A front end that asks with choices. Each question rejects with
 // EndOfAnswers when it is stopped, such as at Ctrl+C. `preview` sets the
 // preview that the questions after it show, or none for ''.
 interface ChoiceIo {
   one<T>(question: PickOne<T>): Promise<T>;
   many<P extends string>(question: PickMany<P>): Promise<P[]>;
-  text<T>(question: TypeIn<T>): Promise<T>;
   preview(text: string): void;
 }
 
@@ -293,51 +284,6 @@ function readTokenParts(fallback: TokenPart[]) {
   return (answer: string) => (/^all$/i.test(answer) ? [...TOKEN_PARTS] : list(answer));
 }
 
-// The context window the token line assumes at the first turn without a
-// --window it can read.
-const DEFAULT_WINDOW = contextWindow(0);
-
-// The context window `switches` name, as the token line reads them: the last
-// --window's value, as written, or undefined without one it can read.
-function tokenWindowOf(switches: readonly string[]): string | undefined {
-  const value = parseTokenArgs(switches).window;
-  return parseSize(value) > 0 ? value : undefined;
-}
-
-// The token line's switches for a context window `size`. The size the
-// installed --window gives keeps those switches as they are. Another size
-// drops the installed --window and keeps the rest, then adds the size as
-// --window <size>, unless it is the 200k the token line assumes without one.
-function tokenSwitchesForWindow(size: string, installed: string[]): string[] {
-  if (parseSize(size) === parseSize(tokenWindowOf(installed))) return installed;
-  const others = without(installed, '--window');
-  return parseSize(size) === DEFAULT_WINDOW ? others : [...others, '--window', size];
-}
-
-// Reads a context window size as the token line reads --window, in lower
-// case: 200k, 1m or a count. Enter gives undefined, which keeps the switches
-// as they are.
-const readTokenWindow = (answer: string): string | undefined | { retry: string } => {
-  if (!answer) return undefined;
-  return parseSize(answer) > 0 ? answer.toLowerCase() : { retry: 'Answer a size such as 200k or 1m.' };
-};
-
-// The context window as a choice: `sizes`, `fallback` first, then another
-// size, typed and read as readTokenWindow reads it, though not empty. A
-// --window the token line cannot read, `unread`, comes first as an option to
-// keep it, which gives undefined, as Enter does for the typed question.
-const pickWindow = (sizes: readonly string[], fallback: string, unread?: string) => async (c: ChoiceIo) => {
-  const options: Option<string | undefined | null>[] = [
-    ...(unread === undefined ? [] : [{ label: `Keep --window ${unread}`, value: undefined }]),
-    ...sizes.map((size) => ({ label: size, value: size })),
-    { label: 'Another size', value: null },
-  ];
-  const initial = unread === undefined ? Math.max(0, sizes.indexOf(fallback)) : 0;
-  const size = await c.one({ kind: 'INPUT', message: 'Context window?', options, initial });
-  if (size !== null) return size;
-  return c.text({ message: 'Context window, such as 500k:', read: (answer) => readTokenWindow(answer) ?? { retry: 'Answer a size such as 200k or 1m.' } });
-};
-
 // The wizard's io, which counts the screen rows written since the last
 // preview: each newline, and each wrap of a line wider than the terminal,
 // with a character counted one column wide, and colour codes and links,
@@ -516,20 +462,9 @@ async function askAll(userIo: WizardIo, { preview, installed }: WizardOptions): 
     const parts = await askFor(io, question, readTokenParts(fallback), 'INPUT', (c) =>
       c.many({ message: 'Token line parts', options: TOKEN_PARTS, initial: fallback }),
     );
+    // The token line reads the context window the status line saves, so
+    // there is no question for it. A --window set up stays as it is.
     tokenSwitches = tokenSwitchesFor(parts, start.tokenSwitches);
-    io.write(s.info('The token line cannot read the context window, so it assumes 200k until the context grows past it.'));
-    const installedWindow = tokenWindowOf(start.tokenSwitches) ?? '200k';
-    const windows = [...new Set(['200k', '1m', installedWindow])];
-    const written = parseTokenArgs(start.tokenSwitches).window;
-    const unread = written !== undefined && tokenWindowOf(start.tokenSwitches) === undefined ? written : undefined;
-    const window = await askFor(
-      io,
-      `Context window, 200k or 1m? ${hint(s, installedWindow)} `,
-      readTokenWindow,
-      'INPUT',
-      pickWindow(windows, installedWindow, unread),
-    );
-    if (window !== undefined) tokenSwitches = tokenSwitchesForWindow(window, tokenSwitches);
   }
 
   if (!(await confirm(io, 'Write these choices?', true))) return null;
@@ -827,4 +762,4 @@ async function openIo(input: Input, output: Output, load: LoadInk = loadInk): Pr
 
 export { runWizard, offerStar, confirm, streamIo, openIo, EndOfAnswers, Interrupted, samplePayload, loadPayload, previewer, switchesFor };
 
-export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, TypeIn, Output, Input, OpenIo };
+export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, Output, Input, OpenIo };

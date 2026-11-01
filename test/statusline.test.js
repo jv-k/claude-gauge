@@ -1498,6 +1498,42 @@ test("the reference's compact and --right example rows are what the status line 
   assert.ok(reference.includes(`\n${right}\n`), right);
 });
 
+test('each terminal render saves the context window size for its session, and writes only when it changes', () => {
+  const { execFileSync } = require('node:child_process');
+  const { createHash } = require('node:crypto');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const script = path.join(__dirname, '..', 'dist', 'statusline.js');
+  const config = tempDir('claude-gauge-');
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
+  const dir = path.join(config, 'claude-gauge', '.state', 'windows');
+  const saved = (id) => path.join(dir, `${createHash('sha1').update(id).digest('hex')}.json`);
+  const statusLine = (data) => execFileSync(process.execPath, [script, '--show', 'model'], { env, input: JSON.stringify(data), encoding: 'utf8' });
+  const payload = (id, size) => ({ session_id: id, context_window: { context_window_size: size, used_percentage: 10 } });
+
+  statusLine(payload('one', 1000000));
+  assert.deepEqual(JSON.parse(fs.readFileSync(saved('one'), 'utf8')), { context_window_size: 1000000 });
+  // The same size again writes nothing.
+  const old = (Date.now() - 3600 * 1000) / 1000;
+  fs.utimesSync(saved('one'), old, old);
+  statusLine(payload('one', 1000000));
+  assert.equal(Math.round(fs.statSync(saved('one')).mtimeMs / 1000), Math.round(old), 'not written again');
+  // Another size replaces it, and another session has a file of its own.
+  statusLine(payload('one', 200000));
+  assert.deepEqual(JSON.parse(fs.readFileSync(saved('one'), 'utf8')), { context_window_size: 200000 });
+  statusLine(payload('two', 1000000));
+  assert.deepEqual(JSON.parse(fs.readFileSync(saved('two'), 'utf8')), { context_window_size: 1000000 });
+  assert.deepEqual(fs.readdirSync(dir).sort(), [path.basename(saved('one')), path.basename(saved('two'))].sort(), 'no temporary file is left');
+
+  // A payload with no session, or no size it can use, saves nothing.
+  fs.rmSync(dir, { recursive: true });
+  for (const data of [{ context_window: { context_window_size: 1000000 } }, payload('one', 0), payload('one', 'big'), { session_id: 'one' }]) statusLine(data);
+  assert.equal(fs.existsSync(dir), false);
+  // --latest renders from a transcript, with no window it knows, and saves none.
+  execFileSync(process.execPath, [script, '--latest'], { env: { ...env, CLAUDE_CODE_SESSION_ID: '' }, encoding: 'utf8' });
+  assert.equal(fs.existsSync(dir), false);
+});
+
 test('each terminal render saves its payload to the state folder, overwriting the last, for the wizard to preview', () => {
   const { execFileSync } = require('node:child_process');
   const fs = require('node:fs');

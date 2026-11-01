@@ -97,6 +97,14 @@ test('assumes 200k, then 1M once the context passes it, unless told', () => {
   assert.equal(contextWindow(150000, '1m'), 1000000);
 });
 
+test('a saved window size beats the guess, and --window beats both', () => {
+  assert.equal(contextWindow(150000, undefined, 1000000), 1000000);
+  assert.equal(contextWindow(250000, undefined, 500000), 500000);
+  assert.equal(contextWindow(150000, '200k', 1000000), 200000);
+  assert.equal(contextWindow(150000, 'huge', 1000000), 1000000, 'a --window the token line cannot read is not set');
+  assert.equal(contextWindow(150000, undefined, 0), 200000, 'no size, no saved window');
+});
+
 test('--instruct prints the reply instruction in hosts without hook messages, and nothing elsewhere', () => {
   const { instruction, INSTRUCT_HOSTS } = require('../dist/tokenline.js');
   const script = '~/.claude/claude-gauge/tokenline.js';
@@ -220,4 +228,62 @@ test('bun runs --latest from source and finds the same transcripts', { skip: wit
   const otherHome = tempDir('claude-gauge-');
   writeTranscript(path.join(otherHome, '.claude'));
   assert.equal(latestRun('bun', { config: undefined, home: otherHome }), LINE);
+});
+
+// The window size the status line saves for each session (ADR 0006): a
+// terminal render of a payload that names the session and its window, under
+// the config folder of the test's own.
+const renderStatusLine = (config, payload) =>
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'dist', 'statusline.js'), '--show', 'model'], {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: config },
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+  });
+
+// Runs the token line as the Stop hook, with `input` on stdin, and gives the
+// line from its system message, or '' when it prints none.
+const stopHook = (config, input, args = []) => {
+  const out = execFileSync(process.execPath, [path.join(__dirname, '..', 'dist', 'tokenline.js'), '--show', 'req,ctx', ...args], {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: config },
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+  });
+  return out ? JSON.parse(out).systemMessage : '';
+};
+
+const transcriptOf = (config) => path.join(config, 'projects', '-some-project', `${SESSION}.jsonl`);
+
+test('the Stop hook takes the window size the status line saved for its session over the guess', () => {
+  const config = tempDir('claude-gauge-');
+  writeTranscript(config);
+  const input = { session_id: SESSION, transcript_path: transcriptOf(config) };
+  assert.equal(stopHook(config, input), '1 req │ ctx 53% ▓▓▓░░ 106k', 'no saved size: the guess');
+
+  renderStatusLine(config, { session_id: SESSION, context_window: { context_window_size: 1000000 } });
+  assert.equal(stopHook(config, input), '1 req │ ctx 11% ▓░░░░ 106k');
+  assert.equal(stopHook(config, input, ['--window', '200k']), '1 req │ ctx 53% ▓▓▓░░ 106k', '--window wins');
+  // Another session's saved size is not this one's.
+  assert.equal(stopHook(config, { ...input, session_id: 'session-2' }), '1 req │ ctx 53% ▓▓▓░░ 106k');
+  // Without a session id, the transcript's name is the session's.
+  assert.equal(stopHook(config, { transcript_path: input.transcript_path }), '1 req │ ctx 11% ▓░░░░ 106k');
+});
+
+test('--latest takes the window size saved for the session it finds', () => {
+  const [home, config] = [tempDir('claude-gauge-'), tempDir('claude-gauge-')];
+  writeTranscript(config);
+  renderStatusLine(config, { session_id: SESSION, context_window: { context_window_size: 1000000 } });
+  assert.equal(latestRun('node', { config, home }), '1 req │ ctx 11% ▓░░░░ 106k\n');
+});
+
+test('a saved window file that cannot be read keeps the guess, and prints nothing else', () => {
+  const config = tempDir('claude-gauge-');
+  writeTranscript(config);
+  renderStatusLine(config, { session_id: SESSION, context_window: { context_window_size: 1000000 } });
+  const dir = path.join(config, 'claude-gauge', '.state', 'windows');
+  const [name] = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+  const input = { session_id: SESSION, transcript_path: transcriptOf(config) };
+  for (const text of ['{"context_window_size":', '{"context_window_size":-5}', '"1m"', 'null']) {
+    fs.writeFileSync(path.join(dir, name), text);
+    assert.equal(stopHook(config, input), '1 req │ ctx 53% ▓▓▓░░ 106k', text);
+  }
 });
