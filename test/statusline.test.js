@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { render, parseArgs } = require('../dist/statusline.js');
-const { plain } = require('./helpers');
+const { plain, tempDir } = require('./helpers');
 
 // The model part names the API provider from the environment, so the suite
 // runs without the caller's provider variables.
@@ -524,7 +524,7 @@ test('plan shows the subscription and the signed-in user', () => {
 function setupTree(files) {
   const fs = require('node:fs');
   const path = require('node:path');
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'claude-gauge-setup-')));
+  const root = fs.realpathSync(tempDir('claude-gauge-setup-'));
   for (const [name, content] of Object.entries(typeof files === 'function' ? files(root) : files)) {
     const file = path.join(root, name);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -1028,8 +1028,7 @@ test('the command runner stops a slow command within its timeout and shows nothi
 test('the command runner stops a command and its background jobs, which leave nothing running', { skip: process.platform === 'win32' && 'sh only' }, async () => {
   const { runCommand, COMMAND_TIMEOUT_MS } = require('../dist/statusline.js');
   const fs = require('node:fs');
-  const path = require('node:path');
-  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'claude-gauge-command-'));
+  const dir = tempDir('claude-gauge-command-');
   // A job that keeps the output open past the timeout, and one that finishes
   // after a command that exits at once.
   const started = Date.now();
@@ -1401,11 +1400,9 @@ test('--right reads the setup only for a row it pads, and other rows do not chan
 
 test('--latest shows the per-model windows a terminal render saved, less those that have reset', () => {
   const { execFileSync } = require('node:child_process');
-  const fs = require('node:fs');
-  const os = require('node:os');
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-')) };
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: tempDir('claude-gauge-') };
   delete env.CLAUDE_CODE_SESSION_ID;
   const now = Math.floor(Date.now() / 1000);
   const statusLine = (args, input = '') => plain(execFileSync(process.execPath, [script, ...args], { env, input, encoding: 'utf8' }));
@@ -1421,12 +1418,10 @@ test('--latest shows the per-model windows a terminal render saved, less those t
 
 test('--latest prints plain text, with no links, where the terminal render links', () => {
   const { execFileSync } = require('node:child_process');
-  const fs = require('node:fs');
-  const os = require('node:os');
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-folder-'));
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-')) };
+  const cwd = tempDir('claude-gauge-folder-');
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: tempDir('claude-gauge-') };
   delete env.CLAUDE_CODE_SESSION_ID;
   const statusLine = (args, input = '') => execFileSync(process.execPath, [script, '--show', 'dir', ...args], { cwd, env, input, encoding: 'utf8' });
   assert.match(statusLine([], JSON.stringify({ workspace: { current_dir: cwd } })), /\x1b\]8;;file:/);
@@ -1435,11 +1430,9 @@ test('--latest prints plain text, with no links, where the terminal render links
 
 test('the status line program takes the terminal width from COLUMNS', () => {
   const { execFileSync } = require('node:child_process');
-  const fs = require('node:fs');
-  const os = require('node:os');
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-')) };
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: tempDir('claude-gauge-') };
   delete env.COLUMNS;
   const statusLine = (columns) =>
     plain(
@@ -1456,12 +1449,11 @@ test('the status line program takes the terminal width from COLUMNS', () => {
 test('the status line program narrows a --right row by the statusLine.padding in the settings', () => {
   const { execFileSync } = require('node:child_process');
   const fs = require('node:fs');
-  const os = require('node:os');
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const config = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+  const config = tempDir('claude-gauge-');
   const env = { ...process.env, CLAUDE_CONFIG_DIR: config, COLUMNS: '100' };
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-project-'));
+  const project = tempDir('claude-gauge-project-');
   const statusLine = () =>
     plain(
       execFileSync(process.execPath, [script, '--show', 'model', '--right', 'model'], {
@@ -1509,10 +1501,9 @@ test("the reference's compact and --right example rows are what the status line 
 test('each terminal render saves its payload to the state folder, overwriting the last, for the wizard to preview', () => {
   const { execFileSync } = require('node:child_process');
   const fs = require('node:fs');
-  const os = require('node:os');
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const config = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+  const config = tempDir('claude-gauge-');
   const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
   const saved = path.join(config, 'claude-gauge', '.state', 'last-payload.json');
   const statusLine = (data) =>

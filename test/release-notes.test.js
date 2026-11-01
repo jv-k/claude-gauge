@@ -9,6 +9,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { tempDir } = require('./helpers');
 const { releaseNotes } = require('../scripts/release-notes.js');
 
 const script = path.join(__dirname, '..', 'scripts', 'release-notes.js');
@@ -97,7 +98,7 @@ function run(args) {
 }
 
 function tempChangelog(text) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-release-'));
+  const dir = tempDir('claude-gauge-release-');
   const file = path.join(dir, 'CHANGELOG.md');
   fs.writeFileSync(file, text);
   return file;

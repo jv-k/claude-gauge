@@ -7,11 +7,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { render, parseArgs, recordCost, withLock } = require('../dist/statusline.js');
 
-const { plain } = require('./helpers');
+const { plain, tempDir } = require('./helpers');
 
 // A fixed local noon on Wednesday 7 October 2026, so the week began on
 // Monday the 5th.
@@ -58,7 +57,7 @@ test('a ledger with values that are not numbers adds nothing for them', () => {
 });
 
 // A ledger file in a folder of its own.
-const tempLedger = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-ledger-')), 'ledger.json');
+const tempLedger = () => path.join(tempDir('claude-gauge-ledger-'), 'ledger.json');
 const readFile = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 const session = (id, usd) => ({ session_id: id, cost: { total_cost_usd: usd } });
 
@@ -254,7 +253,7 @@ test('two sessions rendering at once keep the ledger whole, and lose none of its
 test('the status line program records each session in the state folder, and --latest shows the totals', () => {
   const { execFileSync } = require('node:child_process');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const config = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+  const config = tempDir('claude-gauge-');
   const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
   delete env.CLAUDE_CODE_SESSION_ID;
   const statusLine = (data, args = ['--show', 'today,week']) =>
