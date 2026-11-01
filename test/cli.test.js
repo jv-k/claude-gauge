@@ -548,7 +548,7 @@ test('the wizard previews the payload the status line saved', () => {
   fs.mkdirSync(path.join(dir, 'claude-gauge', '.state'), { recursive: true });
   const saved = { model: { display_name: 'Saved Model' }, context_window: { used_percentage: 77 } };
   fs.writeFileSync(path.join(dir, 'claude-gauge', '.state', 'last-payload.json'), JSON.stringify(saved));
-  const r = ask(dir, ['setup'], ['n', '1', 'model,ctx', '', 'mono', 'n', '', '', '', '']);
+  const r = ask(dir, ['setup'], ['n', '1', 'model,ctx', '', 'mono', 'n', '', '', '']);
   ok(r);
   const out = plain(r.stdout);
   assert.match(out, /Saved Model/);
@@ -567,46 +567,45 @@ test('the token line parts the wizard is given go into the Stop hook command, an
   const tokenLine = (dir) => settingsOf(dir).hooks.Stop[0].hooks[0].command;
   const script = (dir) => path.join(runtimeOf(dir), 'tokenline.js');
   const enter = configFolder();
-  ok(ask(enter, ['setup'], ['n', '', '', '', '', '', '', '', '', '', 'y']));
+  ok(ask(enter, ['setup'], ['n', '', '', '', '', '', '', '', '', 'y']));
   assert.equal(tokenLine(enter), commandFor(script(enter)));
 
   const fewer = configFolder();
-  const r = ask(fewer, ['setup'], ['n', '', '', '', '', '', '', '', 'req,bogus', 'req,out,ctx', '', 'y']);
+  const r = ask(fewer, ['setup'], ['n', '', '', '', '', '', '', '', 'req,bogus', 'req,out,ctx', 'y']);
   ok(r);
   assert.match(r.stdout, /Unknown part: bogus/);
   assert.equal(tokenLine(fewer), commandFor(script(fewer), ['--show', 'req,out,ctx']));
 
   // configure starts from that --show and keeps the --window set up.
   ok(runCli(fewer, ['configure', '--token-line', '--show req,out,ctx --window 1m']));
-  const again = ask(fewer, ['configure'], ['n', '', '', '', '', '', '', '', 'ctx', '', 'y']);
+  const again = ask(fewer, ['configure'], ['n', '', '', '', '', '', '', '', 'ctx', 'y']);
   ok(again);
   assert.match(again.stdout, /Token line parts.*\[req,out,ctx\]/);
   assert.equal(tokenLine(fewer), commandFor(script(fewer), ['--show', 'ctx', '--window', '1m']));
 });
 
-test('the context window the wizard is given goes into the Stop hook command, and configure keeps it on Enter', () => {
+test('setup asks no context window question, and configure keeps the --window set up exactly as it is', () => {
   const tokenLine = (dir) => settingsOf(dir).hooks.Stop[0].hooks[0].command;
   const script = (dir) => path.join(runtimeOf(dir), 'tokenline.js');
   const dir = configFolder();
-  const r = ask(dir, ['setup'], ['n', '', '', '', '', '', '', '', 'req,out,ctx', 'huge', '1M', 'y']);
+  const r = ask(dir, ['setup'], ['n', '', '', '', '', '', '', '', 'req,out,ctx', 'y']);
   ok(r);
-  assert.match(r.stdout, /Context window, 200k or 1m\? \[200k\]/);
-  assert.match(r.stdout, /Answer a size such as 200k or 1m/);
-  assert.equal(tokenLine(dir), commandFor(script(dir), ['--show', 'req,out,ctx', '--window', '1m']));
-
-  // configure offers the window set up, and Enter keeps the other switches too.
-  const kept = ask(dir, ['configure'], ['n', '', '', '', '', '', '', '', '', '', 'y']);
-  ok(kept);
-  assert.match(kept.stdout, /Context window, 200k or 1m\? \[1m\]/);
-  assert.equal(tokenLine(dir), commandFor(script(dir), ['--show', 'req,out,ctx', '--window', '1m']));
-  // 200k drops the --window and nothing else.
-  ok(ask(dir, ['configure'], ['n', '', '', '', '', '', '', '', '', '200k', 'y']));
+  assert.doesNotMatch(r.stdout, /context window/i);
   assert.equal(tokenLine(dir), commandFor(script(dir), ['--show', 'req,out,ctx']));
+
+  // A --window set up by hand stays, as written, whether the parts change or not.
+  ok(runCli(dir, ['configure', '--token-line', '--window=1M --show req,out,ctx']));
+  ok(ask(dir, ['configure'], ['n', '', '', '', '', '', '', '', '', 'y']));
+  assert.equal(tokenLine(dir), commandFor(script(dir), ['--window=1M', '--show', 'req,out,ctx']));
+  const changed = ask(dir, ['configure'], ['n', '', '', '', '', '', '', '', 'ctx', 'y']);
+  ok(changed);
+  assert.doesNotMatch(changed.stdout, /context window/i);
+  assert.equal(tokenLine(dir), commandFor(script(dir), ['--show', 'ctx', '--window=1M']));
 });
 
 test('a no at the last question, or answers that end early, change nothing', () => {
   const dir = configFolder();
-  const declined = ask(dir, ['setup'], ['n', '', '', '', '', '', '', '', '', '', 'n']);
+  const declined = ask(dir, ['setup'], ['n', '', '', '', '', '', '', '', '', 'n']);
   ok(declined);
   assert.match(declined.stdout, /Nothing changed/);
   const ended = ask(dir, ['setup'], []);
@@ -637,7 +636,7 @@ test('configure with no switches runs the wizard on a set-up config, and offers 
   assert.equal(ask(dir, ['configure'], ['y']).status, 1, 'not set up yet');
   ok(runCli(dir, ['setup', '--yes']));
   const gh = fakeGh();
-  const r = ask(dir, ['configure'], ['n', '1', 'ctx', '', '', '', '', '', '', 'y'], { bin: gh.bin });
+  const r = ask(dir, ['configure'], ['n', '1', 'ctx', '', '', '', '', '', 'y'], { bin: gh.bin });
   ok(r);
   assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(runtimeOf(dir), 'statusline.js'), ['--show', 'ctx']));
   assert.doesNotMatch(r.stdout, /Star /);
@@ -681,7 +680,7 @@ test('configure keeps a quoted value and a switch it does not know, whichever pa
   assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), before);
 
   // One row set up, a bar size changed, the rest kept with Enter.
-  ok(ask(dir, ['configure'], ['n', '', '', '10', '', '', '', '', '', 'y']));
+  ok(ask(dir, ['configure'], ['n', '', '', '10', '', '', '', '', 'y']));
   assert.deepEqual(settingsOf(dir), {
     statusLine: cmd(commandFor(script('statusline.js'), ['--show', 'text,ctx', '--segments', '10', '--text', 'my label', '--frobnicate'])),
     hooks: { Stop: [entry(commandFor(script('tokenline.js')))] },
@@ -813,7 +812,7 @@ test('with NO_COLOR, or piped with no force variable, the output has no escape c
       runCli(dir, ['uninstall'], { env }),
       runCli(dir, ['update', '--bogus'], { env }),
       runCli(configFolder(), ['update'], { env }),
-      ask(configFolder(), ['setup'], ['maybe', 'n', '', '', '', '', '', '', '', '', '', 'y'], { env }),
+      ask(configFolder(), ['setup'], ['maybe', 'n', '', '', '', '', '', '', '', '', 'y'], { env }),
     ];
     for (const r of runs) assert.ok(!/\x1b/.test(r.stdout + r.stderr), JSON.stringify(r.stdout + r.stderr));
     assert.match(runs[1].stdout, /^\nUPDATE\n✔ Updated claude-gauge in /);

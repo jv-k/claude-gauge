@@ -19,7 +19,7 @@ const { PARTS } = require('../dist/statusline.js');
 const { PARTS: TOKEN_PARTS } = require('../dist/tokenline.js');
 const { plain, tempDir, configFolder, runCli, ok } = require('./helpers');
 
-const KEY = { up: '\x1b[A', down: '\x1b[B', enter: '\r', space: ' ', backspace: '\x7f', ctrlC: '\x03' };
+const KEY = { up: '\x1b[A', down: '\x1b[B', enter: '\r', space: ' ', ctrlC: '\x03' };
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -134,61 +134,28 @@ test('configure: Enter at every question keeps what is set up, as typed Enters d
     statusLine: ['--text', 'a b', '--show', 'ctx,bogus,5h', '--segments=10', '--frobnicate', '--theme', 'mono', '--no-labels', '--right', 'ctx'],
     tokenLine: ['--window', '1m', '--show', 'req,ctx'],
   };
-  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', '', 'y']), { preview, installed });
+  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', 'y']), { preview, installed });
   const { io, answer } = await driver();
   const run = runWizard(io, { preview, installed });
   await answer(KEY.down, KEY.enter); // keep the bars: No
-  for (let i = 0; i < 8; i++) await answer(KEY.enter);
+  for (let i = 0; i < 7; i++) await answer(KEY.enter);
   await answer(KEY.enter); // write: Yes
   assert.deepEqual(await run, typed);
 });
 
-test('configure: a changed token line by key presses gives the answers that the same typed answers give', async () => {
+test('configure: a changed token line by key presses gives the answers that the same typed answers give, its --window kept', async () => {
   const installed = { statusLine: ['--segments', '10'], tokenLine: ['--window', '1m', '--show', 'req,ctx'] };
-  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', 'req,ctx,out', '200k', 'y']), { preview, installed });
+  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', 'req,ctx,out', 'y']), { preview, installed });
   const { io, answer, out } = await driver();
   const run = runWizard(io, { preview, installed });
   await answer(KEY.down, KEY.enter); // keep the bars: No
   for (let i = 0; i < 7; i++) await answer(KEY.enter); // rows, two rows, cells, theme, labels, token line
   await answer(...toggle(TOKEN_PARTS, 'out')); // req,ctx then out
-  const window = await answer(KEY.up, KEY.enter); // from 1m up to 200k
-  assert.match(window, /❯ 200k/);
-  await answer(KEY.enter);
+  const write = await answer(KEY.enter);
+  assert.match(write, /Write these choices/, 'no context window question');
   assert.deepEqual(await run, typed);
-  assert.deepEqual(typed.tokenLine, ['--show', 'req,ctx,out']);
-  assert.match(out.text, /assumes 200k/, 'the note before the window question is written as it is');
-});
-
-test('configure: Enter at the context window keeps a --window the token line cannot read, as a typed Enter does', async () => {
-  const installed = { statusLine: [], tokenLine: ['--window', 'huge'] };
-  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', '', '', 'y']), { preview, installed });
-  const { io, answer } = await driver();
-  const run = runWizard(io, { preview, installed });
-  await answer(KEY.down, KEY.enter); // keep the bars: No
-  for (let i = 0; i < 8; i++) await answer(KEY.enter); // rows, two rows, cells, theme, labels, token line, its parts
-  assert.match(await answer(KEY.enter), /❯ Keep --window huge\n {2}200k\n/);
-  await answer(KEY.enter); // write
-  assert.deepEqual(await run, typed);
-  assert.deepEqual(typed.tokenLine, ['--window', 'huge']);
-});
-
-test('another context window size is typed, asked again when the token line cannot read it, and gives what the typed answer gives', async () => {
-  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', 'y', '', '500k', 'y']), { preview });
-  const { io, next, press, answer } = await driver();
-  const run = runWizard(io, { preview });
-  await answer(KEY.down, KEY.enter); // customise
-  for (let i = 0; i < 8; i++) await answer(KEY.enter); // rows, two rows, cells, theme, labels, token line, its parts
-  const sizes = await answer(KEY.up, KEY.enter); // from 200k up to the last option
-  assert.match(sizes, /❯ Another size/);
-  const other = await next();
-  await press(other, 'h', 'u', 'g', 'e', KEY.enter);
-  assert.match(plain(other.lastFrame()), /❯ huge\n[\s\S]*Answer a size such as 200k or 1m\./);
-  await press(other, KEY.backspace, KEY.backspace, KEY.backspace, KEY.backspace, '5', '0', '0', 'K');
-  assert.match(plain(other.lastFrame()), /❯ 500K\n/);
-  await press(other, KEY.enter);
-  await answer(KEY.enter); // write
-  assert.deepEqual(await run, typed);
-  assert.deepEqual(typed.tokenLine, ['--window', '500k']);
+  assert.deepEqual(typed.tokenLine, ['--show', 'req,ctx,out', '--window', '1m']);
+  assert.doesNotMatch(out.text, /context window/i);
 });
 
 test('the preview redraws as the selection moves, before the answer is accepted', async () => {
@@ -208,7 +175,6 @@ test('the preview redraws as the selection moves, before the answer is accepted'
   await press(labels, KEY.up, KEY.enter);
   await answer(KEY.enter); // token line
   await answer(KEY.enter); // token line parts
-  await answer(KEY.enter); // window
   await answer(KEY.enter); // write
   assert.deepEqual(await run, { statusLine: ['--theme', 'pastel'], tokenLine: [] });
 });
@@ -222,7 +188,7 @@ test('a row with no part ticked is not accepted, and says why', async () => {
   await press(row, KEY.space, KEY.down, KEY.space, KEY.down, KEY.space, KEY.enter); // untick ctx, 5h, 7d
   assert.match(plain(row.lastFrame()), /Tick at least one part/);
   await press(row, KEY.space, KEY.enter); // tick 7d
-  for (let i = 0; i < 7; i++) await answer(KEY.enter);
+  for (let i = 0; i < 6; i++) await answer(KEY.enter);
   assert.deepEqual(await run, { statusLine: ['--show', '7d'], tokenLine: [] });
 });
 
