@@ -294,6 +294,12 @@ function latestTranscript(cwd: string): string | null {
 // it prints nothing. Claude Code names the host in CLAUDE_CODE_ENTRYPOINT,
 // which hooks inherit; an unknown or missing value counts as a host that
 // needs nothing.
+//
+// src/statusline.ts holds a copy of INSTRUCT_HOSTS, shellWord and
+// instruction(), because each script runs alone and imports no shared
+// module. Change both copies together. The test "the token line's
+// --instruct code is the status line's, apart from the prose" in
+// test/tokenline.test.js fails when they differ.
 const INSTRUCT_HOSTS = ['claude-vscode', 'claude-desktop', 'claude-desktop-3p'];
 
 // A shell word: as is when plain, else in single quotes. ~ stays bare so the
