@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { tempDir } = require('./helpers');
+const { root, tempDir } = require('./helpers');
 const { summarize, parseArgs, parseSize, contextWindow } = require('../dist/tokenline.js');
 
 const NOW = new Date(2026, 9, 7, 12, 5);
@@ -119,11 +119,11 @@ test('--instruct prints the reply instruction in hosts without hook messages, an
 // the copies drift apart. INSTRUCT_HOSTS, shellWord and the code of
 // instruction() must be the same text. Only the prose lines of the text that
 // instruction() returns may differ: each names its own bar and says what that
-// bar prints. A prose line is a line that holds only a string literal with a
-// space in it. The comments above the copies may differ too, as each names
-// the other copy.
+// bar prints. A prose line holds one string literal with a space in it and
+// no quote mark of its own kind, then a comma, and nothing else. The comments
+// above the copies may differ too, as each names the other copy.
 test("the token line's --instruct code is the status line's, apart from the prose", () => {
-  const source = (name) => fs.readFileSync(path.join(__dirname, '..', 'src', `${name}.ts`), 'utf8');
+  const source = (name) => fs.readFileSync(path.join(root, 'src', `${name}.ts`), 'utf8');
   // The lines from the first that starts with `start` up to the first, from
   // there, that `end` matches.
   const block = (text, name, start, end) => {
@@ -134,7 +134,7 @@ test("the token line's --instruct code is the status line's, apart from the pros
     assert.notEqual(to, -1, `${name}: ${start} has no end`);
     return lines.slice(from, to + 1).join('\n');
   };
-  const prose = /^(\s*)(['"]).* .*\2,$/;
+  const prose = /^(\s*)(?:'[^']* [^']*'|"[^"]* [^"]*"),$/;
   const parts = (name) => {
     const text = source(name);
     return {
