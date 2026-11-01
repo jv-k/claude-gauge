@@ -7,8 +7,8 @@ This plan takes the sixteen sub-issues of #123 from `ready-for-agent` to a relea
 The sub-issues, in order: #105, #77, #122, #112, #116, #52, #45, #62, #59, #60, #51, #118, #119, #41, #103, #99. These pairs wait for each other through GitHub issue dependencies: #122 → #112 → #116, #59 → #60 and #51, #118 → #119, #103 → #99.
 
 - [x] **1. Triage and set up the epic**
-  - Touches: the GitHub issues, the project board, `integration/123-backlog`, PR #124.
-  - Done when: each sub-issue has an agent brief, the `ready-for-agent` label and a card in "Ready for Agent". The integration branch is on origin, a ruleset blocks its deletion, and the draft PR #124 goes into `main`.
+  - Touches: the GitHub issues, the project board, `integration/123-backlog`, PR #130.
+  - Done when: each sub-issue has an agent brief, the `ready-for-agent` label and a card in "Ready for Agent". The integration branch is on origin, a ruleset blocks its deletion, and the draft PR #130 goes into `main`.
 
 - [ ] **2. Preflight**
   - Touches: nothing. The dry run spends nothing.
@@ -87,19 +87,19 @@ The sub-issues, in order: #105, #77, #122, #112, #116, #52, #45, #62, #59, #60, 
   - Done when: each check shows what its comment says. File an issue for each check that fails, and fix it before step 7.
 
 - [ ] **7. Merge the epic into `main`**
-  - Touches: `PLAN.md` (removed), PR #124, `main`.
+  - Touches: `PLAN.md` (removed), PR #130, `main`.
   - Commands:
 
     ```sh
     git rm PLAN.md && git commit -m "docs: remove the close-out plan for #123" && git push
-    gh pr edit 124 --body-file <body that lists each sub-issue's pull request>
-    gh pr ready 124
-    gh pr checks 124 --watch
-    gh pr merge 124 --merge
+    gh pr edit 130 --body-file <body that lists each sub-issue's pull request>
+    gh pr ready 130
+    gh pr checks 130 --watch
+    gh pr merge 130 --merge
     ```
 
     Write the body in the form of #121: one line per merged pull request, then an "After the merge" section.
-  - Done when: PR #124 is merged with a merge commit, and the `test` workflow passed on its head.
+  - Done when: PR #130 is merged with a merge commit, and the `test` workflow passed on its head.
 
 - [ ] **8. Wait for the `dist` build on `main`**
   - Touches: `dist/` on `main`, through the `dist` workflow.
@@ -119,7 +119,7 @@ The sub-issues, in order: #105, #77, #122, #112, #116, #52, #45, #62, #59, #60, 
   - Commands:
 
     ```sh
-    gh issue close 123 --comment "All sixteen sub-issues are closed, and #124 merged integration/123-backlog into main."
+    gh issue close 123 --comment "All sixteen sub-issues are closed, and #130 merged integration/123-backlog into main."
     project=$(gh project view 21 --owner jv-k --format json --jq .id)
     item=$(gh project item-list 21 --owner jv-k --limit 300 --format json \
       --jq '.items[] | select(.content.number==123) | .id')
