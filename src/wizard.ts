@@ -11,6 +11,13 @@
 // preview renders the payload the status line saved last, else a sample. On
 // a terminal each preview replaces the one before it, in place; with piped
 // output each preview prints below the last.
+//
+// Two front ends ask the same questions, with the same defaults, and give the
+// same answers. The readline one reads a typed line for each question. The
+// Ink one (ink-io.ts) offers each as a choice: the arrow keys and Enter for
+// one option, Space to tick the parts of a row, and the preview redrawn as
+// the selection moves. openIo picks Ink when stdin and stdout are both a
+// terminal and Ink loads, and the readline one otherwise.
 
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
@@ -33,6 +40,46 @@ interface WizardIo {
   // Set when the output is a terminal, so that each preview can replace the
   // one before it. `columns` is its width, for the rows a long line wraps to.
   terminal?: { columns?: number };
+  // Set by a front end that offers each question as a choice. The wizard then
+  // asks through it, and `ask` goes unused.
+  choices?: ChoiceIo;
+}
+
+// One option of a choice: the words it shows, and the answer it gives.
+interface Option<T> {
+  label: string;
+  value: T;
+}
+
+// A question as a choice of one option, the one at `initial` first. The pill
+// before it is CONFIRM for a yes or no, INPUT for any other. `preview`, when
+// set, gives the preview with the option the selection is on.
+interface PickOne<T> {
+  kind: 'CONFIRM' | 'INPUT';
+  message: string;
+  options: Option<T>[];
+  initial: number;
+  preview?: (value: T) => string;
+}
+
+// A question as a list of parts to tick, with `initial` ticked first. The
+// answer is the ticked parts: those of `initial` still ticked, in their
+// order, then each part ticked since, in the order it was ticked. `preview`,
+// when set, gives the preview with the parts ticked now.
+interface PickMany<P extends string> {
+  message: string;
+  options: readonly P[];
+  initial: readonly P[];
+  preview?: (value: P[]) => string;
+}
+
+// A front end that asks with choices. Each question rejects with
+// EndOfAnswers when it is stopped, such as at Ctrl+C. `preview` sets the
+// preview that the questions after it show, or none for ''.
+interface ChoiceIo {
+  one<T>(question: PickOne<T>): Promise<T>;
+  many<P extends string>(question: PickMany<P>): Promise<P[]>;
+  preview(text: string): void;
 }
 
 interface WizardOptions {
@@ -51,8 +98,16 @@ type WizardChoices = PerBar<string[], string[] | null>;
 
 // The input ended before the last question: nothing is written.
 class EndOfAnswers extends Error {
+  constructor(message = 'The answers ended before the last question. Nothing changed.') {
+    super(message);
+  }
+}
+
+// Ctrl+C stopped the questions: nothing is written, as at the end of the
+// input.
+class Interrupted extends EndOfAnswers {
   constructor() {
-    super('The answers ended before the last question. Nothing changed.');
+    super('Stopped at Ctrl+C. Nothing changed.');
   }
 }
 
@@ -134,8 +189,16 @@ const hint = (s: Styles, value: string | number) => s.dim(`[${value}]`);
 // Asks until `read` takes the answer: it returns the value, or a retry that
 // says why it cannot. Each `read` says what an empty answer, Enter, gives.
 // A magenta pill comes before the question, as VerBump's prompts have one:
-// CONFIRM for a yes or no, INPUT for any other answer.
-async function askFor<T>(io: WizardIo, question: string, read: (answer: string) => T | { retry: string }, kind: 'CONFIRM' | 'INPUT' = 'INPUT'): Promise<T> {
+// CONFIRM for a yes or no, INPUT for any other answer. A front end with
+// choices asks with `pick` instead, the same question as a choice.
+async function askFor<T>(
+  io: WizardIo,
+  question: string,
+  read: (answer: string) => T | { retry: string },
+  kind: 'CONFIRM' | 'INPUT' = 'INPUT',
+  pick?: (choices: ChoiceIo) => Promise<T>,
+): Promise<T> {
+  if (io.choices && pick) return pick(io.choices);
   const s = stylesOf(io);
   io.write(s.pill(kind, 'question'));
   for (;;) {
@@ -157,8 +220,16 @@ const yesNo = (fallback: boolean) => (answer: string) => {
   return { retry: 'Answer y or n.' };
 };
 
-const confirm = (io: WizardIo, question: string, fallback: boolean) =>
-  askFor(io, `${question} ${hint(stylesOf(io), fallback ? 'Y/n' : 'y/N')} `, yesNo(fallback), 'CONFIRM');
+// A yes or no, `fallback` on Enter. As a choice, Yes and No, with `preview`
+// for the preview each gives.
+const confirm = (io: WizardIo, question: string, fallback: boolean, preview?: (yes: boolean) => string) =>
+  askFor(io, `${question} ${hint(stylesOf(io), fallback ? 'Y/n' : 'y/N')} `, yesNo(fallback), 'CONFIRM', (c) =>
+    c.one({ kind: 'CONFIRM', message: question, options: [{ label: 'Yes', value: true }, { label: 'No', value: false }], initial: fallback ? 0 : 1, preview }),
+  );
+
+// A choice of one of `values`, shown as written, `fallback` first.
+const oneOf = <T extends string | number>(message: string, values: readonly T[], fallback: T, preview?: (value: T) => string) => (c: ChoiceIo) =>
+  c.one({ kind: 'INPUT', message, options: values.map((value) => ({ label: String(value), value })), initial: Math.max(0, values.indexOf(fallback)), preview });
 
 // Reads a list of parts from `known`, or `fallback` on Enter. An unknown
 // part is asked again, named, with `where` to say which parts there are.
@@ -258,6 +329,7 @@ function screenOf(io: WizardIo) {
     count(text);
   };
   const clear = () => {
+    io.choices?.preview('');
     if (io.terminal && live) io.write(`\r${rows ? `\x1b[${rows}A` : ''}\x1b[J`);
     rows = 0;
     column = 0;
@@ -266,6 +338,7 @@ function screenOf(io: WizardIo) {
   const screen: WizardIo & { keep(text: string): void; preview(text: string): void; clear(): void } = {
     color: io.color,
     terminal: io.terminal,
+    choices: io.choices,
     write,
     // The answer's line ends before the next write, so the cursor is at the
     // start of the row after the question.
@@ -278,7 +351,9 @@ function screenOf(io: WizardIo) {
       write(text);
       live = false;
     },
+    // A front end with choices shows the preview with its questions.
     preview: (text) => {
+      if (io.choices) return io.choices.preview(text);
       clear();
       live = true;
       write(text);
@@ -288,19 +363,34 @@ function screenOf(io: WizardIo) {
   return screen;
 }
 
-async function runWizard(userIo: WizardIo, { preview, installed }: WizardOptions): Promise<WizardChoices | null> {
+// The questions, then the switches for each bar. A front end with choices
+// shows no preview once they end, so a question after them, such as the star
+// offer, comes without one.
+async function runWizard(userIo: WizardIo, options: WizardOptions): Promise<WizardChoices | null> {
+  try {
+    return await askAll(userIo, options);
+  } finally {
+    userIo.choices?.preview('');
+  }
+}
+
+async function askAll(userIo: WizardIo, { preview, installed }: WizardOptions): Promise<WizardChoices | null> {
   const io = screenOf(userIo);
   const s = stylesOf(io);
   const start = startFrom(installed);
   let status: StatusChoices = { ...start.status };
   let tokenLine = start.tokenLine;
-  // The preview in the status line's own colours, or as plain text when the
-  // questions take no colour, under `heading` when one is given.
-  const show = (heading = '') => {
-    const rendered = preview(switchesFor(status));
+  // The preview of `choices` in the status line's own colours, or as plain
+  // text when the questions take no colour, under `heading` when one is given.
+  const previewOf = (choices: StatusChoices, withTokenLine = tokenLine, heading = '') => {
+    const rendered = preview(switchesFor(choices));
     const rows = io.color ? rendered : stripOwnCodes(rendered);
-    io.preview(`${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${tokenLine ? 'on, when each turn ends' : 'off'}\n`);
+    return `${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${withTokenLine ? 'on, when each turn ends' : 'off'}\n`;
   };
+  const show = (heading = '') => io.preview(previewOf(status, tokenLine, heading));
+  // The preview with `change` made to the choices so far, for a choice whose
+  // selection moves.
+  const previewWith = (change: Partial<StatusChoices>) => previewOf({ ...status, ...change });
 
   if (isSetUp(installed)) {
     show(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
@@ -312,6 +402,7 @@ async function runWizard(userIo: WizardIo, { preview, installed }: WizardOptions
 
   // A row set up, else the default row there.
   const rowAt = (i: number): Part[] | undefined => start.status.rows[i] ?? DEFAULT_ROWS[i];
+  const rowsFor = (n: number) => Array.from({ length: n }, (_, i) => rowAt(i) ?? []);
   // More rows than the wizard offers stay possible when that many are set up.
   const rowsNow = start.status.rows.length;
   const maxRows = Math.max(MAX_ROWS, rowsNow);
@@ -321,38 +412,61 @@ async function runWizard(userIo: WizardIo, { preview, installed }: WizardOptions
   io.keep(
     `${s.pill('Status line')}The parts: ${PARTS.map(s.value).join(', ')}.\nREADME.md says what each shows. Press Enter to keep the value in brackets.\n`,
   );
-  const count = await askFor(io, `How many status line rows, 1 to ${maxRows}? ${hint(s, rowsNow)} `, (answer) => {
-    const n = answer ? Number(answer) : rowsNow;
-    return Number.isInteger(n) && n >= 1 && n <= maxRows ? n : { retry: `Answer a number from 1 to ${maxRows}.` };
-  });
-  status = { ...status, rows: Array.from({ length: count }, (_, i) => rowAt(i) ?? []) };
+  const counts = Array.from({ length: maxRows }, (_, i) => i + 1);
+  const count = await askFor(
+    io,
+    `How many status line rows, 1 to ${maxRows}? ${hint(s, rowsNow)} `,
+    (answer) => {
+      const n = answer ? Number(answer) : rowsNow;
+      return Number.isInteger(n) && n >= 1 && n <= maxRows ? n : { retry: `Answer a number from 1 to ${maxRows}.` };
+    },
+    'INPUT',
+    oneOf('How many status line rows?', counts, rowsNow, (n) => previewWith({ rows: rowsFor(n) })),
+  );
+  status = { ...status, rows: rowsFor(count) };
   show();
 
   for (let i = 0; i < count; i++) {
     const fallback = rowAt(i);
     const brackets = fallback ? ` ${hint(s, fallback.join(','))}` : '';
-    const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${brackets} `, readParts(fallback, PARTS));
-    status = { ...status, rows: status.rows.map((row, j) => (j === i ? parts : row)) };
+    const withRow = (parts: Part[]) => status.rows.map((row, j) => (j === i ? parts : row));
+    const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${brackets} `, readParts(fallback, PARTS), 'INPUT', (c) =>
+      c.many({ message: `Row ${i + 1}: the parts`, options: PARTS, initial: fallback ?? [], preview: (ticked) => previewWith({ rows: withRow(ticked) }) }),
+    );
+    status = { ...status, rows: withRow(parts) };
     show();
   }
 
-  const segments = await askFor(io, `Cells per bar, ${SEGMENTS.join(' or ')}? ${hint(s, start.status.segments)} `, (answer) =>
-    SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` },
+  const segments = await askFor(
+    io,
+    `Cells per bar, ${SEGMENTS.join(' or ')}? ${hint(s, start.status.segments)} `,
+    (answer) => SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` },
+    'INPUT',
+    oneOf('Cells per bar?', SEGMENTS, start.status.segments, (n) => previewWith({ segments: n })),
   );
   status = { ...status, segments };
   show();
 
-  const theme = await askFor(io, `Theme: ${THEMES.join(', ')}? ${hint(s, start.status.theme)} `, (answer) => {
-    const name = answer.toLowerCase() || start.status.theme;
-    return THEMES.includes(name) ? name : { retry: `Unknown theme: ${answer}. Answer one of ${THEMES.join(', ')}.` };
-  });
+  const theme = await askFor(
+    io,
+    `Theme: ${THEMES.join(', ')}? ${hint(s, start.status.theme)} `,
+    (answer) => {
+      const name = answer.toLowerCase() || start.status.theme;
+      return THEMES.includes(name) ? name : { retry: `Unknown theme: ${answer}. Answer one of ${THEMES.join(', ')}.` };
+    },
+    'INPUT',
+    oneOf('Theme?', THEMES, start.status.theme, (name) => previewWith({ theme: name })),
+  );
   status = { ...status, theme };
   show();
 
-  status = { ...status, labels: await confirm(io, 'Labels in front of the values, such as ctx and 5h?', start.status.labels) };
+  status = {
+    ...status,
+    labels: await confirm(io, 'Labels in front of the values, such as ctx and 5h?', start.status.labels, (yes) => previewWith({ labels: yes })),
+  };
   show();
 
-  tokenLine = await confirm(io, 'Add the token line, shown when each turn ends?', start.tokenLine);
+  tokenLine = await confirm(io, 'Add the token line, shown when each turn ends?', start.tokenLine, (yes) => previewOf(status, yes));
   show();
 
   let tokenSwitches = start.tokenSwitches;
@@ -360,9 +474,20 @@ async function runWizard(userIo: WizardIo, { preview, installed }: WizardOptions
     io.keep(s.pill('Token line'));
     const fallback = tokenPartsOf(start.tokenSwitches);
     const question = `Token line parts: all, req,out,ctx, or your own list from ${TOKEN_PARTS.map(s.value).join(', ')}? ${hint(s, fallback.join(','))} `;
-    tokenSwitches = tokenSwitchesFor(await askFor(io, question, readTokenParts(fallback)), start.tokenSwitches);
+    const parts = await askFor(io, question, readTokenParts(fallback), 'INPUT', (c) =>
+      c.many({ message: 'Token line parts', options: TOKEN_PARTS, initial: fallback }),
+    );
+    tokenSwitches = tokenSwitchesFor(parts, start.tokenSwitches);
     io.write(s.info('The token line cannot read the context window, so it assumes 200k until the context grows past it.'));
-    const window = await askFor(io, `Context window, 200k or 1m? ${hint(s, tokenWindowOf(start.tokenSwitches) ?? '200k')} `, readTokenWindow);
+    const installedWindow = tokenWindowOf(start.tokenSwitches) ?? '200k';
+    const windows = [...new Set(['200k', '1m', installedWindow])];
+    const window = await askFor(
+      io,
+      `Context window, 200k or 1m? ${hint(s, installedWindow)} `,
+      readTokenWindow,
+      'INPUT',
+      oneOf('Context window?', windows, installedWindow),
+    );
     if (window !== undefined) tokenSwitches = tokenSwitchesForWindow(window, tokenSwitches);
   }
 
@@ -465,6 +590,30 @@ function streamIo(input: NodeJS.ReadableStream & { isTTY?: boolean }, output: Ou
   };
 }
 
-export { runWizard, offerStar, confirm, streamIo, EndOfAnswers, samplePayload, loadPayload, previewer, switchesFor };
+type Input = NodeJS.ReadableStream & { isTTY?: boolean };
 
-export type { WizardIo, WizardOptions, WizardChoices, StarOptions };
+// Loads the Ink front end for the two streams. It rejects where Ink cannot be
+// loaded, such as the plugin's checkout, which has no node_modules. The
+// import() stays an import() in the build, which loads Ink, an ES module, on
+// every Node the package runs on; a require() would not.
+type LoadInk = (input: Input, output: Output, color: boolean) => Promise<WizardIo & { close(): void }>;
+const loadInk: LoadInk = async (input, output, color) => (await import('./ink-io.js')).loadInkIo(input, output, color);
+
+// The questions on a pair of streams: the Ink front end when both are a
+// terminal and Ink loads, else the readline one, with no warning, as for
+// piped answers.
+async function openIo(input: Input, output: Output, load: LoadInk = loadInk): Promise<WizardIo & { close(): void }> {
+  const color = colorEnabled(output);
+  if (input.isTTY && output.isTTY) {
+    try {
+      return await load(input, output, color);
+    } catch {
+      /* no Ink here: the readline questions ask instead */
+    }
+  }
+  return streamIo(input, output, color);
+}
+
+export { runWizard, offerStar, confirm, streamIo, openIo, EndOfAnswers, Interrupted, samplePayload, loadPayload, previewer, switchesFor };
+
+export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, PickOne, PickMany, Option, Output, Input };
