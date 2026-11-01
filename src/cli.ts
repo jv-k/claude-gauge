@@ -34,7 +34,9 @@ import { payloadFile } from './statusline';
 import { wordmark, colorEnabled } from './wordmark';
 import { stylesFor } from './styles';
 
-const USAGE = `Usage: claude-gauge <setup | configure | uninstall | update> [switches]
+// The usage, after its heading. Without colour the heading is `Usage: ` on
+// the first line; in colour it is a USAGE pill on a line of its own.
+const USAGE = `claude-gauge <setup | configure | uninstall | update> [switches]
 
   setup        add the status line and the token line to Claude Code's settings
   configure    change the switches of a bar that setup added, or take it out
@@ -64,8 +66,11 @@ $CLAUDE_CONFIG_DIR/settings.json, else ~/.claude/settings.json.
 // commands run the commands with switches, and those print no wordmark.
 const banner = (stream: NodeJS.WriteStream) => `${wordmark(colorEnabled(stream))}\n`;
 
-// The usage, under the wordmark, for `stream`.
-const usage = (stream: NodeJS.WriteStream) => banner(stream) + USAGE;
+// The usage, under the wordmark, for `stream`. In colour a USAGE pill heads
+// it, as a pill heads each command's result. Without colour the pill would
+// be the bare word USAGE, so the plain usage keeps its `Usage: ` line.
+const usage = (stream: NodeJS.WriteStream) =>
+  colorEnabled(stream) ? wordmark(true) + stylesFor(stream).pill('Usage') + USAGE : `${banner(stream)}Usage: ${USAGE}`;
 
 // A mistake in the command line: exit 2, with the usage.
 class UsageError extends Error {}
