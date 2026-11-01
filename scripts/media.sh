@@ -43,10 +43,9 @@ shot() {
 } | sed '$d' | shot themes
 
 # The setup wizard, recorded from docs/media/demo.tape. The wizard runs in a
-# fresh home folder with its own config folder, so it never writes the real
-# ~/.claude, and with only node on the PATH, so setup does not offer to star
-# the repo with gh. The folder has a fixed name, because the result in the
-# GIF shows its path, and a folder left there from before stops the script.
+# fresh home folder with its own config folder. So it never writes the real
+# ~/.claude. The folder has a fixed name, because the GIF shows its path. If
+# the folder exists, the script stops.
 demo=/tmp/claude-gauge-demo
 if [ -e "$demo" ]; then
   echo "scripts/media.sh: $demo exists. Remove it, then run the script again." >&2
@@ -55,4 +54,4 @@ fi
 mkdir -p "$demo/bin" "$demo/my-app" "$demo/.claude"
 trap 'rm -rf "${demo:?}"' EXIT
 ln -s "$(command -v node)" "$demo/bin/node"
-env -u COLUMNS DEMO_HOME="$demo" DEMO_CLI="$PWD/dist/cli.js" vhs docs/media/demo.tape
+env -u COLUMNS DEMO_HOME="$demo" DEMO_CLI="$PWD/dist/cli.js" vhs "$out/demo.tape"
