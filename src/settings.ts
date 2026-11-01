@@ -240,6 +240,13 @@ function installedSwitches(settings: Json): InstalledSwitches {
 // when it holds only spaces or other characters both bash and cmd.exe read
 // literally there, else in single quotes. Claude Code runs the command
 // through a shell on every OS.
+//
+// The status line and the token line have their own shellWord, which uses
+// single quotes only. That rule is different on purpose: their --instruct
+// command goes to Claude's Bash tool, and bash reads it on every OS. A
+// settings command can go to cmd.exe on Windows, where single quotes are
+// not quotes, so a word goes in double quotes where both shells read it the
+// same way.
 const shellWord = (s: string) =>
   /^[\w@%+=:,./~-]+$/.test(s) ? s : /^[^"$`\\!']*$/.test(s) ? `"${s}"` : `'${s.replace(/'/g, `'\\''`)}'`;
 

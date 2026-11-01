@@ -113,6 +113,46 @@ test('--instruct prints the reply instruction in hosts without hook messages, an
   }
 });
 
+// The status line and the token line each hold a copy of the --instruct
+// code, because each script runs alone from the copy that setup makes and
+// cannot import a shared module. This test reads both sources and fails when
+// the copies drift apart. INSTRUCT_HOSTS, shellWord and the code of
+// instruction() must be the same text. Only the prose lines of the text that
+// instruction() returns may differ: each names its own bar and says what that
+// bar prints. A prose line is a line that holds only a string literal with a
+// space in it. The comments above the copies may differ too, as each names
+// the other copy.
+test("the token line's --instruct code is the status line's, apart from the prose", () => {
+  const source = (name) => fs.readFileSync(path.join(__dirname, '..', 'src', `${name}.ts`), 'utf8');
+  // The lines from the first that starts with `start` up to the first, from
+  // there, that `end` matches.
+  const block = (text, name, start, end) => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((line) => line.startsWith(start));
+    assert.notEqual(from, -1, `${name}: no line starts with ${start}`);
+    const to = lines.findIndex((line, i) => i >= from && end.test(line));
+    assert.notEqual(to, -1, `${name}: ${start} has no end`);
+    return lines.slice(from, to + 1).join('\n');
+  };
+  const prose = /^(\s*)(['"]).* .*\2,$/;
+  const parts = (name) => {
+    const text = source(name);
+    return {
+      INSTRUCT_HOSTS: block(text, name, 'const INSTRUCT_HOSTS = ', /;$/),
+      shellWord: block(text, name, 'const shellWord = ', /;$/),
+      'instruction()': block(text, name, 'function instruction(', /^}$/)
+        .split('\n')
+        .map((line) => line.replace(prose, '$1<prose>,'))
+        .join('\n'),
+    };
+  };
+  const status = parts('statusline');
+  const token = parts('tokenline');
+  for (const name of Object.keys(status)) {
+    assert.equal(token[name], status[name], `${name} differs between src/tokenline.ts and src/statusline.ts`);
+  }
+});
+
 test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () => {
   const { execFileSync } = require('node:child_process');
   const script = require('node:path').join(__dirname, '..', 'dist', 'tokenline.js');
