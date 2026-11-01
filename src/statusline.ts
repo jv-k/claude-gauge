@@ -1603,25 +1603,52 @@ function declaredIn(root: string, manifest: JsonObject, key: string, first: stri
 // A plugin's own name from its enabledPlugins key, name@marketplace.
 const pluginNameOf = (id: string) => id.split('@')[0];
 
+// The install folder of a plugin from its records in
+// plugins/installed_plugins.json. A project or local install applies only
+// where its projectPath is one of installFolders: the launch folder and the
+// repository root the local settings file is read from. A user or managed
+// install, or one with no scope, applies everywhere. The docs give no order
+// for install records when several apply, so this follows the order they
+// give for enabledPlugins and takes the most specific: managed, then local,
+// then project, then user. An install with no installPath is passed over.
+const INSTALL_SCOPES = ['managed', 'local', 'project', 'user'];
+function installPathOf(installs: unknown[], installFolders: string[]): string | undefined {
+  const rankOf = (scope: string) => {
+    const i = INSTALL_SCOPES.indexOf(scope);
+    return i === -1 ? INSTALL_SCOPES.length : i;
+  };
+  return installs
+    .map((install) => ({
+      scope: stringAt(install, 'scope') ?? 'user',
+      installPath: stringAt(install, 'installPath'),
+      projectPath: stringAt(install, 'projectPath'),
+    }))
+    .filter(({ scope, installPath, projectPath }) => {
+      if (!installPath) return false;
+      if (scope !== 'project' && scope !== 'local') return true;
+      return projectPath !== undefined && installFolders.includes(path.resolve(projectPath));
+    })
+    .sort((a, b) => rankOf(a.scope) - rankOf(b.scope))[0]?.installPath;
+}
+
 // The hooks and MCP servers of the plugins turned on: each plugin that
 // enabledPlugins sets to true, read from the install folder that
-// plugins/installed_plugins.json in the config folder names for it. Hooks
-// come from hooks/hooks.json and from the hook files and inline event maps
-// the manifest's hooks field names. Servers come from .mcp.json and the
+// plugins/installed_plugins.json in the config folder names for it, as
+// installPathOf picks it for installFolders. Hooks come from hooks/hooks.json
+// and from the hook files and inline event maps the manifest's hooks field
+// names. Servers come from .mcp.json and the
 // .json files and inline maps the manifest's mcpServers field names, each
 // named plugin:<plugin>:<server> as Claude Code names it, so a plugin's
 // github is not the user's. A bundle the field names, .mcpb or .dxt, is not
 // opened. A plugin, manifest or file that is missing or not JSON adds
 // nothing.
-function readPlugins(config: string, enabled: JsonObject): { hooks: number; mcp: string[] } {
+function readPlugins(config: string, enabled: JsonObject, installFolders: string[]): { hooks: number; mcp: string[] } {
   const installed = objectAt(readJson(path.join(config, 'plugins', 'installed_plugins.json')), 'plugins');
   let hooks = 0;
   const mcp: string[] = [];
   for (const [id, on] of Object.entries(enabled)) {
     if (on !== true) continue;
-    const installPath = listAt(installed, id)
-      .map((install) => stringAt(install, 'installPath'))
-      .find(Boolean);
+    const installPath = installPathOf(listAt(installed, id), installFolders);
     if (!installPath) continue;
     const root = path.resolve(installPath);
     const manifest = readJson(path.join(root, '.claude-plugin', 'plugin.json'));
@@ -1676,7 +1703,7 @@ function readSetup(
     .filter((file, i, all) => all.indexOf(file) === i)
     .map(readJson)
     .concat(local, readJson(path.join(managedDir, 'managed-settings.json')));
-  const plugins = readPlugins(config, Object.assign({}, ...settings.map((s) => objectAt(s, 'enabledPlugins'))));
+  const plugins = readPlugins(config, Object.assign({}, ...settings.map((s) => objectAt(s, 'enabledPlugins'))), [project, localDir]);
 
   // MCP servers: user and local scope in .claude.json, the project's
   // .mcp.json and the managed file, each name once, less the project servers

@@ -727,7 +727,12 @@ const PLUGIN_ID = 'tools@acme';
 const PLUGIN_DIR = 'config/plugins/cache/acme/tools/1.0.0';
 const pluginTree = (files, { enabled = true, installs = [{ scope: 'user', installPath: PLUGIN_DIR }] } = {}) =>
   setupTree((root) => {
-    const at = (install) => ({ ...install, installPath: path.join(root, install.installPath) });
+    // The paths an install record gives are relative to the tree.
+    const at = (install) => ({
+      ...install,
+      ...(install.installPath ? { installPath: path.join(root, install.installPath) } : {}),
+      ...(install.projectPath ? { projectPath: path.join(root, install.projectPath) } : {}),
+    });
     return {
       'config/settings.json': { enabledPlugins: { [PLUGIN_ID]: enabled } },
       'config/plugins/installed_plugins.json': { version: 2, plugins: { [PLUGIN_ID]: installs.map(at) } },
@@ -801,6 +806,59 @@ test('a plugin turned off, not installed, or with files that are not JSON adds n
     'config/plugins/cache/acme/tools/outside.json': { hooks: hooks(['Stop', 5]) },
   });
   assert.deepEqual(pluginSetup(outside), { claudeMd: 0, rules: 0, mcp: 1, hooks: 2 });
+});
+
+// One plugin installed more than once, at different versions: the user's
+// install has one hook, the others two, three and four, so the count says
+// which install was read.
+const USER_DIR = 'config/plugins/cache/acme/tools/1.0.0';
+const PROJECT_DIR = 'config/plugins/cache/acme/tools/2.0.0';
+const LOCAL_DIR = 'config/plugins/cache/acme/tools/3.0.0';
+const MANAGED_DIR = 'config/plugins/cache/acme/tools/4.0.0';
+const versions = {
+  [`${USER_DIR}/hooks/hooks.json`]: { hooks: hooks(['Stop', 1]) },
+  [`${PROJECT_DIR}/hooks/hooks.json`]: { hooks: hooks(['Stop', 2]) },
+  [`${LOCAL_DIR}/hooks/hooks.json`]: { hooks: hooks(['Stop', 3]) },
+  [`${MANAGED_DIR}/hooks/hooks.json`]: { hooks: hooks(['Stop', 4]) },
+};
+const userInstall = { scope: 'user', installPath: USER_DIR, projectPath: null };
+const hooksOf = (installs) => pluginSetup(pluginTree(versions, { installs })).hooks;
+
+test('a plugin\'s project or local install counts only in the folder it was installed for', () => {
+  const here = 'home/work/project';
+  // The user's install is first, and the project's for the launch folder wins.
+  assert.equal(hooksOf([userInstall, { scope: 'project', installPath: PROJECT_DIR, projectPath: here }]), 2);
+  // A project install for another folder counts nothing, alone or beside the user's.
+  const other = { scope: 'project', installPath: PROJECT_DIR, projectPath: 'home/work/other' };
+  assert.equal(hooksOf([other]), 0);
+  assert.equal(hooksOf([other, userInstall]), 1);
+  assert.equal(hooksOf([{ scope: 'local', installPath: LOCAL_DIR, projectPath: 'home/work/other' }, userInstall]), 1);
+});
+
+test('where several installs apply, the most specific counts: managed, local, project, then user', () => {
+  const here = 'home/work/project';
+  const project = { scope: 'project', installPath: PROJECT_DIR, projectPath: here };
+  const local = { scope: 'local', installPath: LOCAL_DIR, projectPath: here };
+  const managed = { scope: 'managed', installPath: MANAGED_DIR };
+  assert.equal(hooksOf([userInstall, local, project]), 3);
+  assert.equal(hooksOf([local, managed, project, userInstall]), 4);
+  // An install with no scope applies everywhere, as a user install does.
+  assert.equal(hooksOf([{ installPath: USER_DIR }]), 1);
+  // The most specific install with no installPath is passed over.
+  assert.equal(hooksOf([userInstall, { scope: 'local', projectPath: here }]), 1);
+});
+
+test('a local install for the repository root counts in a folder under it', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const fs = require('node:fs');
+  const repo = 'home/work/project';
+  const tree = pluginTree(
+    { ...versions, [`${repo}/.git/HEAD`]: 'ref: refs/heads/main\n' },
+    { installs: [userInstall, { scope: 'local', installPath: LOCAL_DIR, projectPath: repo }] },
+  );
+  const launch = path.join(tree.root, repo, 'packages/app');
+  fs.mkdirSync(launch, { recursive: true });
+  assert.equal(readSetup(launch, { ...tree.options, env: configEnv(tree) }).hooks, 3);
 });
 
 const GIB = 1024 ** 3;
