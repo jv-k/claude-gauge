@@ -8,8 +8,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
+const { tempDir } = require('./helpers');
 
 const root = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -98,16 +98,12 @@ test('the bin names stay claude-gauge, claude-gauge-statusline and claude-gauge-
 // command name, and a cache of its own. npx fetches the dependencies, Ink and
 // React, from the registry, as it does for a user.
 test('npx of the packed package runs the claude-gauge command', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-pack-'));
-  try {
-    const env = { npm_config_pack_destination: dir, npm_config_cache: path.join(dir, 'cache') };
-    const tarball = JSON.parse(runNpm('npm', ['pack', '--json', '--ignore-scripts'], { env }))[0].filename;
-    const help = runNpm('npx', ['--yes', `./${tarball}`, '--help'], { cwd: dir, env });
-    // The usage follows the wordmark, so it starts a line, not the output.
-    assert.match(help, /^Usage: claude-gauge <setup \| configure \| uninstall \| update>/m);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  const dir = tempDir('claude-gauge-pack-');
+  const env = { npm_config_pack_destination: dir, npm_config_cache: path.join(dir, 'cache') };
+  const tarball = JSON.parse(runNpm('npm', ['pack', '--json', '--ignore-scripts'], { env }))[0].filename;
+  const help = runNpm('npx', ['--yes', `./${tarball}`, '--help'], { cwd: dir, env });
+  // The usage follows the wordmark, so it starts a line, not the output.
+  assert.match(help, /^Usage: claude-gauge <setup \| configure \| uninstall \| update>/m);
 });
 
 // An npm or npx command that names the package without its scope. The plugin

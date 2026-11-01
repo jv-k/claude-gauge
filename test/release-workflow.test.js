@@ -12,8 +12,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
+const { tempDir } = require('./helpers');
 
 const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
 
@@ -103,7 +103,7 @@ test('the release and publish steps read whether the tag is a pre-release', () =
 // log their arguments, and returns the logged commands. `gh release view`
 // fails unless `existing` is set, as it does for a release not yet made.
 function runStep(name, env, { existing = false } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-release-step-'));
+  const dir = tempDir('claude-gauge-release-step-');
   const bin = path.join(dir, 'bin');
   const log = path.join(dir, 'commands.log');
   fs.mkdirSync(bin);

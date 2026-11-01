@@ -7,13 +7,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { Readable } = require('node:stream');
 const { runWizard, offerStar, streamIo, EndOfAnswers, Interrupted, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
 const { DEFAULT_ROWS } = require('../dist/statusline.js');
 
-const { plain } = require('./helpers');
+const { plain, tempDir } = require('./helpers');
 
 // An io that answers each question with the next scripted answer, then with
 // the end of input, and keeps the questions and everything written.
@@ -390,30 +389,26 @@ test('Ctrl+C at the star offer stops setup, as at any other question, and stars 
 });
 
 test('the preview uses the payload the status line saved, else a sample', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-wizard-'));
-  try {
-    const file = path.join(dir, 'last-payload.json');
-    const now = new Date(2026, 9, 7, 12, 0, 0).getTime();
-    assert.deepEqual(loadPayload(file, now), samplePayload(now), 'no file');
-    fs.writeFileSync(file, '{"model":');
-    assert.deepEqual(loadPayload(file, now), samplePayload(now), 'half a file');
-    fs.writeFileSync(file, '[1]');
-    assert.deepEqual(loadPayload(file, now), samplePayload(now), 'not an object');
-    fs.writeFileSync(file, '{}');
-    assert.deepEqual(loadPayload(file, now), samplePayload(now), 'an empty object');
-    const saved = { model: { display_name: 'Saved Model' }, context_window: { used_percentage: 12 } };
-    fs.writeFileSync(file, JSON.stringify(saved));
-    assert.deepEqual(loadPayload(file, now), saved);
+  const dir = tempDir('claude-gauge-wizard-');
+  const file = path.join(dir, 'last-payload.json');
+  const now = new Date(2026, 9, 7, 12, 0, 0).getTime();
+  assert.deepEqual(loadPayload(file, now), samplePayload(now), 'no file');
+  fs.writeFileSync(file, '{"model":');
+  assert.deepEqual(loadPayload(file, now), samplePayload(now), 'half a file');
+  fs.writeFileSync(file, '[1]');
+  assert.deepEqual(loadPayload(file, now), samplePayload(now), 'not an object');
+  fs.writeFileSync(file, '{}');
+  assert.deepEqual(loadPayload(file, now), samplePayload(now), 'an empty object');
+  const saved = { model: { display_name: 'Saved Model' }, context_window: { used_percentage: 12 } };
+  fs.writeFileSync(file, JSON.stringify(saved));
+  assert.deepEqual(loadPayload(file, now), saved);
 
-    const preview = previewer(loadPayload(file, now), { nowMs: now, env: {} });
-    assert.equal(plain(preview(['--show', 'model,ctx', '--no-bars'])), 'Saved Model │ ctx 12%');
-    assert.equal(plain(preview(['--show', 'text', '--text', 'a label'])), 'a label', 'a value with a space stays one word');
-    const sample = previewer(samplePayload(now), { nowMs: now, env: {} });
-    assert.match(plain(sample(['--show', 'ctx,5h,7d'])), /^ctx \d+% .+ │ 5h \d+% .+ │ 7d \d+% /);
-    assert.match(plain(sample(['--show', 'ctx', '--segments', '10'])), /^ctx \d+% [▓░]{10} /);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  const preview = previewer(loadPayload(file, now), { nowMs: now, env: {} });
+  assert.equal(plain(preview(['--show', 'model,ctx', '--no-bars'])), 'Saved Model │ ctx 12%');
+  assert.equal(plain(preview(['--show', 'text', '--text', 'a label'])), 'a label', 'a value with a space stays one word');
+  const sample = previewer(samplePayload(now), { nowMs: now, env: {} });
+  assert.match(plain(sample(['--show', 'ctx,5h,7d'])), /^ctx \d+% .+ │ 5h \d+% .+ │ 7d \d+% /);
+  assert.match(plain(sample(['--show', 'ctx', '--segments', '10'])), /^ctx \d+% [▓░]{10} /);
 });
 
 // A stand-in for the output stream: a terminal of `columns` when `isTTY`,
