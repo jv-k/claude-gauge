@@ -719,7 +719,7 @@ test('the setup is empty where there is nothing to read, and skips files that ar
   assert.deepEqual(readSetup(broken.project, broken.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
 });
 
-test("the setup takes statusLine.padding from the settings Claude Code applies last", () => {
+test('the setup takes statusLine.padding from the settings Claude Code applies last', () => {
   const { readSetup } = require('../dist/statusline.js');
   const project = 'home/work/project';
   const paddingOf = (files) => {
@@ -732,8 +732,11 @@ test("the setup takes statusLine.padding from the settings Claude Code applies l
   assert.equal(paddingOf({ 'home/.claude/settings.json': padded(2), [`${project}/.claude/settings.json`]: padded(3) }), 3);
   assert.equal(paddingOf({ [`${project}/.claude/settings.json`]: padded(3), [`${project}/.claude/settings.local.json`]: padded(1) }), 1);
   assert.equal(paddingOf({ [`${project}/.claude/settings.local.json`]: padded(1), 'managed/managed-settings.json': padded(4) }), 4);
-  // A later statusLine without padding sets it back to none.
-  assert.equal(paddingOf({ 'home/.claude/settings.json': padded(2), [`${project}/.claude/settings.json`]: { statusLine: { type: 'command', command: 'x' } } }), undefined);
+  // A later statusLine without padding keeps the earlier padding, so the row
+  // ends short of the edge rather than past it.
+  assert.equal(paddingOf({ 'home/.claude/settings.json': padded(2), [`${project}/.claude/settings.json`]: { statusLine: { type: 'command', command: 'x' } } }), 2);
+  // A later padding that does not count sets it back to none.
+  assert.equal(paddingOf({ 'home/.claude/settings.json': padded(2), [`${project}/.claude/settings.json`]: padded(0) }), undefined);
   // Only a whole number above 0 counts; anything else is no padding.
   for (const value of [0, -1, 1.5, '2', null]) assert.equal(paddingOf({ 'home/.claude/settings.json': padded(value) }), undefined, String(value));
   assert.equal(paddingOf({ 'home/.claude/settings.json': { statusLine: 'not an object' } }), undefined);

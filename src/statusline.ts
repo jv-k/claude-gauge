@@ -1497,6 +1497,9 @@ function readJson(file: string): JsonObject {
   }
 }
 
+// Whether a value is a whole number above 0.
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value > 0;
+
 const objectAt = (value: unknown, key: string): JsonObject => (isObject(value) && isObject(value[key]) ? value[key] : {});
 const stringAt = (value: unknown, key: string): string | undefined => {
   const field = isObject(value) ? value[key] : undefined;
@@ -1737,14 +1740,15 @@ function readSetup(
     planName(/^claude_(\w+)$/.exec(stringAt(account, 'organizationType') ?? '')?.[1], stringAt(account, 'organizationRateLimitTier'));
   const user = stringAt(account, 'emailAddress');
 
-  // statusLine.padding, from the last settings file that sets a status line,
-  // as Claude Code applies a later file's statusLine over an earlier one's.
-  // Only a whole number above 0 counts.
-  const statusLine = settings
-    .map((s) => (isObject(s) ? s.statusLine : undefined))
-    .filter(isObject)
-    .pop();
-  const padding = statusLine?.padding;
+  // statusLine.padding, from the last settings file that sets one, as
+  // Claude Code applies a later file over an earlier one. A later statusLine
+  // that sets no padding leaves the earlier padding in place: were Claude
+  // Code to drop it instead, the row would only end short of the edge, where
+  // the other way round it would be cut. Only a whole number above 0 counts.
+  const padding = settings
+    .map((s) => objectAt(s, 'statusLine'))
+    .filter((line) => 'padding' in line)
+    .pop()?.padding;
 
   return {
     claudeMd: claudeMd.size,
@@ -1753,7 +1757,7 @@ function readSetup(
     hooks: settings.reduce((n, s) => n + hooksIn(s), 0) + plugins.hooks,
     ...(plan ? { plan } : {}),
     ...(user ? { user } : {}),
-    ...(typeof padding === 'number' && Number.isInteger(padding) && padding > 0 ? { padding } : {}),
+    ...(isCount(padding) ? { padding } : {}),
   };
 }
 
@@ -1901,7 +1905,7 @@ interface RenderOptions {
 // number above 0.
 const columnsOf = (value: number | string | undefined): number | undefined => {
   const n = Number(value);
-  return Number.isInteger(n) && n > 0 ? n : undefined;
+  return isCount(n) ? n : undefined;
 };
 
 // The columns Claude Code keeps free on each side of the status line, before
@@ -2032,7 +2036,7 @@ function render(
   // The width a --right row fills: the terminal's, less Claude Code's margins
   // and statusLine.padding on both sides. The settings are read only for a
   // row with parts to move.
-  const width = () => (terminal === undefined ? undefined : usableColumns(terminal, input.setup().padding ?? 0));
+  const widthOf = () => (terminal === undefined ? undefined : usableColumns(terminal, input.setup().padding ?? 0));
 
   // One output line per row. A part with nothing to show drops out of its
   // row, and a row left with no parts drops out of the status line.
@@ -2053,7 +2057,7 @@ function render(
           .filter((p) => p.text),
         separator,
         config.right,
-        width,
+        widthOf,
       ),
     )
     .filter(Boolean)
