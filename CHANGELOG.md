@@ -1,3 +1,20 @@
+## 1.5.0 (2026-11-01)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.4.1 -> 1.5.0
+- chore(dist): build dist from 7453404 [auto]
+- test: give the command runner's output tests time for Node to start
+- chore(dist): build dist from 3ffd035 [auto]
+- Merge pull request #167 from jv-k/feat/setup-keep-or-start-over
+- feat: move the ram bar in the bar style preview, and pause it with Space
+- test: find the bar style answer in any frame, not the one after unmount
+- feat: set the bar style and cells per bar, with a tab for each bar in setup
+- chore: add pnpm try scripts that run the build on a config folder of its own
+- feat: offer to keep, change or start over, and move only the bar style preview
+- chore(dist): build dist from 09b56fa [auto]
+- Merge pull request #166 from jv-k/feat/bar-styles
+- feat: ask for the bar style in setup, with a preview whose bars move
+- feat: draw every bar in one of seven styles with --bar-style
+- docs: add the glossary, and ADR 0007 on bar styles
+
 ## 1.4.1 (2026-11-01)
 - chore: updated package.json, updated CHANGELOG.md, bumped 1.4.0 -> 1.4.1
 - chore(dist): build dist from 45839d3 [auto]
