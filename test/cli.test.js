@@ -117,6 +117,12 @@ test('a status line that is not claude-gauge is replaced only with --replace, an
   ok(runCli(hud, ['setup', '--yes', '--replace']));
   assert.match(settingsOf(hud).statusLine.command, /runtime\/statusline\.js$/);
   assert.deepEqual(JSON.parse(fs.readFileSync(savedStatusLine(hud), 'utf8')), { statusLine: cmd(CLAUDE_HUD) });
+
+  // A command that is not a string still prints as it was written.
+  const odd = configFolder({ statusLine: { type: 'command', command: 42 } });
+  const oddRefused = runCli(odd, ['setup', '--yes']);
+  assert.equal(oddRefused.status, 1);
+  assert.match(oddRefused.stderr, /another status line:\n {2}.*42\n/);
 });
 
 test('re-running setup changes nothing and keeps the status line saved the first time', () => {
