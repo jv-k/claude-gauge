@@ -8,9 +8,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const { Readable } = require('node:stream');
 const { runWizard, offerStar, streamIo, EndOfAnswers, Interrupted, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
-const { DEFAULT_ROWS } = require('../dist/statusline.js');
+const { DEFAULT_ROWS, PARTS } = require('../dist/statusline.js');
 
 const { plain, tempDir } = require('./helpers');
 
@@ -348,11 +349,45 @@ test('the preview uses the payload the status line saved, else a sample', () => 
   assert.deepEqual(loadPayload(file, now), saved);
 
   const preview = previewer(loadPayload(file, now), { nowMs: now, env: {} });
-  assert.equal(plain(preview(['--show', 'model,ctx', '--no-bars'])), 'Saved Model │ ctx 12%');
+  assert.equal(plain(preview(['--show', 'model,ctx', '--no-bars'])), 'Saved Model │ ctx 12% 24.0k', "the sample's window size under the saved percentage");
   assert.equal(plain(preview(['--show', 'text', '--text', 'a label'])), 'a label', 'a value with a space stays one word');
   const sample = previewer(samplePayload(now), { nowMs: now, env: {} });
   assert.match(plain(sample(['--show', 'ctx,5h,7d'])), /^ctx \d+% .+ │ 5h \d+% .+ │ 7d \d+% /);
   assert.match(plain(sample(['--show', 'ctx', '--segments', '10'])), /^ctx \d+% [▓░]{10} /);
+});
+
+test('the preview shows every part, alone, from a fresh config folder outside git', () => {
+  const dir = tempDir('claude-gauge-wizard-');
+  const now = new Date(2026, 9, 7, 12, 0, 0).getTime();
+  const options = { nowMs: now, env: { CLAUDE_CONFIG_DIR: dir } };
+  const fresh = previewer({ ...samplePayload(now), workspace: { current_dir: dir } }, options);
+  const saved = previewer({ model: { display_name: 'Saved Model' }, workspace: { current_dir: dir }, transcript_path: path.join(dir, 'gone.jsonl'), fast_mode: false }, options);
+  for (const part of PARTS) {
+    assert.notEqual(plain(fresh(['--show', part])), '', `${part} shows nothing from the sample`);
+    assert.notEqual(plain(saved(['--show', part])), '', `${part} shows nothing from a saved payload`);
+  }
+});
+
+test("the samples for the git and worktree parts stay out of the branch part's real branch", () => {
+  const dir = tempDir('claude-gauge-wizard-');
+  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+  execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x']);
+  const now = new Date(2026, 9, 7, 12, 0, 0).getTime();
+  const preview = previewer({ ...samplePayload(now), workspace: { current_dir: dir } }, { nowMs: now, env: { CLAUDE_CONFIG_DIR: dir } });
+  assert.equal(plain(preview(['--show', 'branch'])), '⎇ main', 'a clean folder in no worktree');
+  assert.match(plain(preview(['--show', 'git'])), /\S/, 'the git part shows the sample changes');
+  assert.match(plain(preview(['--show', 'worktree'])), /^wt \S/, 'the worktree part shows the sample worktree');
+});
+
+test('the preview keeps what the payload holds, and never runs the command', () => {
+  const dir = tempDir('claude-gauge-wizard-');
+  const now = new Date(2026, 9, 7, 12, 0, 0).getTime();
+  const preview = previewer({ model: { display_name: 'Saved Model' }, cost: { total_cost_usd: 9.5 }, workspace: { current_dir: dir } }, { nowMs: now, env: { CLAUDE_CONFIG_DIR: dir } });
+  assert.equal(plain(preview(['--show', 'model,cost'])), 'Saved Model │ $9.50');
+  assert.match(plain(preview(['--show', 'lines'])), /^\+\d+ −\d+$/, 'a gap in an object the payload has');
+  const marker = path.join(dir, 'ran');
+  assert.notEqual(plain(preview(['--show', 'command', '--command', `touch ${JSON.stringify(marker)}`])), '');
+  assert.equal(fs.existsSync(marker), false, 'the command did not run');
 });
 
 // A stand-in for the output stream: a terminal of `columns` when `isTTY`,
