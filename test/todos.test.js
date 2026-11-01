@@ -178,7 +178,7 @@ test("the reader takes a new task's id from the result text when the result has 
 });
 
 // A TaskList call and its result, as Claude Code writes it: the tasks in its
-// data, and one line of text for each.
+// data, which is all the reader reads.
 const taskList = (tasks) =>
   done('TaskList', {}, { tasks: tasks.map((t) => ({ owner: undefined, blockedBy: [], ...t })) });
 

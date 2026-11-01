@@ -2629,10 +2629,10 @@ function speedOf(response: ResponseEntry | undefined): number | undefined {
 }
 
 // A todo tool's call kept until its result comes, or its result applied to
-// the list, for the tools named.
-function applyTodoBlock(state: TranscriptState, record: TranscriptRecord, block: ContentBlock, tools: string[]): void {
+// the list, for the tools counted.
+function trackTodoBlock(state: TranscriptState, record: TranscriptRecord, block: ContentBlock, counted: string[]): void {
   if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
-    if (tools.includes(block.name)) state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
+    if (counted.includes(block.name)) state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
   } else if (record.type === 'user' && block.type === 'tool_result') {
     const todoCall = state.todoCalls.find((c) => c.id === block.tool_use_id);
     if (!todoCall) return;
@@ -2649,15 +2649,16 @@ const blocksOf = (record: TranscriptRecord): ContentBlock[] => {
 
 // One transcript record applied to the state. Subagent records are left out,
 // as they are for --latest, but for a subagent's calls to TaskCreate and
-// TaskUpdate: the task list they change is the session's too. A prompt from the user ends the turn, so a call
-// still running then was interrupted: it no longer shows as running, and a
-// subagent in the foreground shows as stopped. One in the background runs on
-// until its task notification. A prompt that runs a command names a skill
-// when the next record is the skill's text.
+// TaskUpdate: the task list they change is the session's too. A prompt from
+// the user ends the turn, so a call still running then was interrupted: it
+// no longer shows as running, and a subagent in the foreground shows as
+// stopped. One in the background runs on until its task notification. A
+// prompt that runs a command names a skill when the next record is the
+// skill's text.
 function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
   if (!record || typeof record !== 'object') return;
   if (record.isSidechain) {
-    for (const block of blocksOf(record)) applyTodoBlock(state, record, block, SUBAGENT_TODO_TOOLS);
+    for (const block of blocksOf(record)) trackTodoBlock(state, record, block, SUBAGENT_TODO_TOOLS);
     return;
   }
   const at = timeOf(record);
@@ -2692,7 +2693,7 @@ function applyRecord(state: TranscriptState, record: TranscriptRecord): void {
     return;
   }
   for (const block of blocks) {
-    applyTodoBlock(state, record, block, TODO_TOOLS);
+    trackTodoBlock(state, record, block, TODO_TOOLS);
     if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
       const target = toolTarget(block.input);
       const skill = block.name === 'Skill' ? skillName(stringAt(block.input, 'skill')) : undefined;
