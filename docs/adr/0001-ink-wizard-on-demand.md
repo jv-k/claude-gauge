@@ -30,7 +30,7 @@ The owner chose option 1 on 2026-10-11:
 
 ## Consequences
 
-- An npm install of claude-gauge fetches Ink, React and their dependencies.
+- Installing `@jv-k/claude-gauge` from npm also fetches Ink, React and their dependencies.
 - The command has two front ends. A change to a question changes its typed form and its choice form, in the same place in `src/wizard.ts`.
 - The plugin's checkout and piped input always get the typed questions.
 - The tests drive the Ink front end with `ink-testing-library`, a dev dependency, on every Node version in the matrix and on Bun.

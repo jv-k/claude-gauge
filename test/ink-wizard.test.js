@@ -17,7 +17,7 @@ const { runWizard, openIo, confirm, EndOfAnswers, Interrupted } = require('../di
 const { inkIoWith } = require('../dist/ink-io.js');
 const { PARTS } = require('../dist/statusline.js');
 const { PARTS: TOKEN_PARTS } = require('../dist/tokenline.js');
-const { plain, tempDir } = require('./helpers');
+const { plain, tempDir, configFolder, runCli, ok } = require('./helpers');
 
 const KEY = { up: '\x1b[A', down: '\x1b[B', enter: '\r', space: ' ', ctrlC: '\x03' };
 
@@ -245,6 +245,23 @@ test('a copy of dist/ with no node_modules, as the plugin checkout runs it, fall
   const io = await copied(terminal(), terminal());
   assert.equal(io.choices, undefined);
   io.close();
+});
+
+test('dist/cli.js from a copy with no node_modules runs the readline wizard, with no warning', () => {
+  const dist = path.join(__dirname, '..', 'dist');
+  // A checkout as the plugin has one: package.json and dist/, with no node_modules.
+  const checkout = tempDir('claude-gauge-no-ink-cli-');
+  const copy = path.join(checkout, 'dist');
+  fs.mkdirSync(copy);
+  fs.copyFileSync(path.join(__dirname, '..', 'package.json'), path.join(checkout, 'package.json'));
+  for (const name of fs.readdirSync(dist).filter((n) => n.endsWith('.js'))) fs.copyFileSync(path.join(dist, name), path.join(copy, name));
+  const dir = configFolder();
+  const bin = tempDir('claude-gauge-bin-');
+  const r = runCli(dir, ['setup'], { cli: path.join(copy, 'cli.js'), input: 'y\n', env: { NO_COLOR: '1', PATH: bin, Path: bin } });
+  ok(r);
+  assert.match(r.stdout, /Use the defaults: both bars, with the parts above\? \[Y\/n\] y\n/, 'the typed question');
+  assert.equal(r.stderr, '');
+  assert.ok(fs.existsSync(path.join(dir, 'settings.json')));
 });
 
 test('the build loads Ink with a real import(), not a require()', () => {

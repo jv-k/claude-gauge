@@ -10,14 +10,15 @@
 // has no node_modules, still runs: the readline questions ask there instead.
 //
 // Each question mounts Ink on its own and unmounts it once answered, leaving
-// the question and its answer on the screen, its line ended. Between questions Ink is not
-// mounted, so what the wizard and the CLI write goes straight to the output.
+// the question and its answer on the screen, its line ended. Between
+// questions Ink is not mounted, so what the wizard and the CLI write goes
+// straight to the output.
 // The look is VerBump's, from styles.ts, so NO_COLOR turns it off as it does
 // for the readline questions.
 
 import type { ReactElement } from 'react';
 import { Interrupted } from './wizard';
-import type { WizardIo, ChoiceIo, Input, Output } from './wizard';
+import type { ChoiceIo, Input, Output, OpenIo } from './wizard';
 import { styles } from './styles';
 
 type InkModule = typeof import('ink', { with: { 'resolution-mode': 'import' } });
@@ -57,7 +58,9 @@ interface View {
   preview(cursor: number, ticked: number[]): string;
 }
 
-function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, 'write'>, color: boolean): WizardIo & { close(): void } {
+// The questions as Ink choices on `deps`, with the text the wizard writes
+// between them going to `output`, in colour when `color` is set.
+function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, 'write'>, color: boolean): OpenIo {
   const s = styles(color);
   const h = React.createElement;
   let preview = '';
@@ -91,14 +94,14 @@ function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, '
   // The question as Ink shows it. The selection and the ticks live in a ref,
   // so a key read before React draws the last one still sees them.
   const Question = ({ view, done }: { view: View; done(cursor: number, ticked: number[] | null): void }) => {
-    const state = React.useRef({ cursor: view.initial, ticked: [...(view.ticked ?? [])], warning: '', over: false });
+    const state = React.useRef({ cursor: view.initial, ticked: [...(view.ticked ?? [])], warning: '', answered: false });
     const [, redraw] = React.useState(0);
     ink.useInput((input, key) => {
       const now = state.current;
-      if (now.over) return;
+      if (now.answered) return;
       const n = view.labels.length;
       if (input === 'c' && key.ctrl) {
-        now.over = true;
+        now.answered = true;
         done(now.cursor, null);
         return;
       }
@@ -110,7 +113,7 @@ function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, '
       } else if (key.return) {
         if (view.ticked && !now.ticked.length) now.warning = 'Tick at least one part with Space.';
         else {
-          now.over = true;
+          now.answered = true;
           done(now.cursor, now.ticked);
           return;
         }
@@ -190,7 +193,7 @@ function inkIoWith({ ink, React, mount, ready }: InkDeps, output: Pick<Output, '
 
 // The Ink front end on the two streams, once Ink and React load. It rejects
 // where they cannot, such as the plugin's checkout.
-async function loadInkIo(input: Input, output: Output, color: boolean): Promise<WizardIo & { close(): void }> {
+async function loadInkIo(input: Input, output: Output, color: boolean): Promise<OpenIo> {
   const [ink, react] = await Promise.all([import('ink'), import('react')]);
   const React = (react as ReactModule & { default?: ReactModule }).default ?? react;
   const mount = (tree: ReactElement) =>

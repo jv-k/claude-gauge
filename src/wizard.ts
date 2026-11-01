@@ -556,6 +556,12 @@ function previewer(payload: StatusData, options: Omit<Parameters<typeof render>[
   return (switches: readonly string[]) => render(payload, { ...options, config: parseArgs([...switches]) });
 }
 
+// What the questions read from: a terminal, or a pipe or file.
+type Input = NodeJS.ReadableStream & { isTTY?: boolean };
+
+// An io for the questions on a pair of streams, which `close` lets go of.
+type OpenIo = WizardIo & { close(): void };
+
 // What streamIo writes to: a terminal, or a pipe or file.
 interface Output {
   isTTY?: boolean;
@@ -571,7 +577,7 @@ interface Output {
 // on from the question. The questions are in
 // colour when the colour gate allows, and redraw the preview in place when
 // `output` is a terminal.
-function streamIo(input: NodeJS.ReadableStream & { isTTY?: boolean }, output: Output, color = colorEnabled(output)): WizardIo & { close(): void } {
+function streamIo(input: Input, output: Output, color = colorEnabled(output)): OpenIo {
   const rl = readline.createInterface({ input, crlfDelay: Infinity });
   const lines = rl[Symbol.asyncIterator]();
   return {
@@ -590,19 +596,17 @@ function streamIo(input: NodeJS.ReadableStream & { isTTY?: boolean }, output: Ou
   };
 }
 
-type Input = NodeJS.ReadableStream & { isTTY?: boolean };
-
 // Loads the Ink front end for the two streams. It rejects where Ink cannot be
 // loaded, such as the plugin's checkout, which has no node_modules. The
 // import() stays an import() in the build, which loads Ink, an ES module, on
 // every Node the package runs on; a require() would not.
-type LoadInk = (input: Input, output: Output, color: boolean) => Promise<WizardIo & { close(): void }>;
+type LoadInk = (input: Input, output: Output, color: boolean) => Promise<OpenIo>;
 const loadInk: LoadInk = async (input, output, color) => (await import('./ink-io.js')).loadInkIo(input, output, color);
 
 // The questions on a pair of streams: the Ink front end when both are a
 // terminal and Ink loads, else the readline one, with no warning, as for
 // piped answers.
-async function openIo(input: Input, output: Output, load: LoadInk = loadInk): Promise<WizardIo & { close(): void }> {
+async function openIo(input: Input, output: Output, load: LoadInk = loadInk): Promise<OpenIo> {
   const color = colorEnabled(output);
   if (input.isTTY && output.isTTY) {
     try {
@@ -616,4 +620,4 @@ async function openIo(input: Input, output: Output, load: LoadInk = loadInk): Pr
 
 export { runWizard, offerStar, confirm, streamIo, openIo, EndOfAnswers, Interrupted, samplePayload, loadPayload, previewer, switchesFor };
 
-export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, PickOne, PickMany, Option, Output, Input };
+export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, Output, Input, OpenIo };
