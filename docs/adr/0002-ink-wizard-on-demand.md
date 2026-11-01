@@ -1,4 +1,4 @@
-# 1. The setup questions use Ink 5 on demand, with the readline wizard as the fallback
+# The setup questions use Ink 5 on demand, with the readline wizard as the fallback
 
 - Status: accepted
 - Date: 2026-10-11
