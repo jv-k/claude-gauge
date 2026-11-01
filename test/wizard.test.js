@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { Readable } = require('node:stream');
-const { runWizard, offerStar, streamIo, EndOfAnswers, Interrupted, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
+const { runWizard, offerStar, streamIo, EndOfAnswers, Interrupted, loadPayload, samplePayload, previewer, tokenPreviewer } = require('../dist/wizard.js');
 const { DEFAULT_ROWS, PARTS } = require('../dist/statusline.js');
 
 const { plain, tempDir } = require('./helpers');
@@ -83,6 +83,28 @@ test('the customise path covers rows, parts, segments, theme, labels and the tok
   // Each question comes after the preview of the answer before it.
   assert.equal(io.questions.length, 10);
   assert.match(io.questions.at(-1), /Write these choices/);
+});
+
+test('the token line shows under the status line, and redraws with the parts answered', async () => {
+  const io = scripted(['n', '1', 'ctx', '', '', 'y', 'y', 'req,ctx', 'y']);
+  const { preview } = fakePreview();
+  const tokenCalls = [];
+  const tokenPreview = (switches) => {
+    tokenCalls.push(switches.join(' '));
+    return `[${switches.join(' ')}]`;
+  };
+  const result = await runWizard(io, { preview, tokenPreview });
+  assert.deepEqual(result.tokenLine, ['--show', 'req,ctx']);
+  assert.match(io.output, /Token line: on, when each turn ends\n {2}\[\]\n/, 'the line with the switches set up');
+  assert.match(io.output, /Token line: on, when each turn ends\n {2}\[--show req,ctx\]\n/, 'the line with the parts answered');
+  assert.equal(tokenCalls.at(-1), '--show req,ctx');
+});
+
+test("the token line's sample run shows each part, and follows its switches", () => {
+  const preview = tokenPreviewer(new Date(2026, 10, 1, 12, 10).getTime());
+  assert.equal(preview([]), '12:10 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r324k │ ctx 43% ▓▓░░░ 86.0k');
+  assert.equal(preview(['--show', 'req,ctx', '--segments', '10']), '4 req │ ctx 43% ▓▓▓▓░░░░░░ 86.0k');
+  assert.equal(preview(['--show', 'ctx', '--window', '1m']), 'ctx 9% ░░░░░ 86.0k');
 });
 
 test('customising with Enter at every question keeps the defaults, which need no switches', async () => {
@@ -422,28 +444,30 @@ test('on a terminal, each preview after an answer moves up over the last one and
   assert.deepEqual(result, { statusLine: ['--show', 'ctx'], tokenLine: null });
   assert.equal(calls.length, 7);
   // A no to the defaults clears the first preview with its heading and the
-  // question under it: the heading, the preview's blank line, its row and
-  // the token line row, the CONFIRM pill and its blank line, then the
-  // question and its answer, seven rows. The STATUS LINE pill takes their
+  // question under it: the heading, the preview's blank line, its row, the
+  // token line row and the token line's sample of 81 characters, which takes
+  // two rows, the CONFIRM pill and its blank line, then the question and its
+  // answer, nine rows. The STATUS LINE pill takes their
   // place, and the first preview after it starts fresh.
   const rewinds = [...output.text.matchAll(REWIND)];
   assert.equal(rewinds.length, 6, JSON.stringify(output.text));
-  assert.equal(rewinds[0][0], rewind(7));
+  assert.equal(rewinds[0][0], rewind(9));
   assert.ok(rewinds[0].index < output.text.indexOf('STATUS LINE'));
   assert.ok(output.text.indexOf('STATUS LINE') < rewinds[1].index);
   // Each of the five after it replaces the preview before: its blank line,
-  // its row and the token line row, the INPUT pill and its blank line, then
-  // the question and its answer: six rows.
-  assert.equal(rewinds[1][0], rewind(6));
+  // its row, the token line row and its two-row sample, the INPUT pill and
+  // its blank line, then the question and its answer: eight rows.
+  assert.equal(rewinds[1][0], rewind(8));
   assert.ok(output.text.lastIndexOf('<--show ctx>') > rewinds.at(-1).index, 'the last preview follows the last rewind');
 });
 
 test('on a narrow terminal, the rewind counts the rows that long lines wrap to', async () => {
   const output = fakeOutput(true, 20);
   await runOn(output, oneRow);
-  // The token line row of 35 characters takes two rows, the question and its
-  // answer of 49 take three: nine rows in all.
-  assert.equal([...output.text.matchAll(REWIND)][1][0], rewind(9));
+  // The token line row of 35 characters takes two rows, its sample of 81
+  // takes five, and the question and its answer of 49 take three: fourteen
+  // rows in all.
+  assert.equal([...output.text.matchAll(REWIND)][1][0], rewind(14));
 });
 
 test('with piped output, each preview prints below the last, with no cursor codes', async () => {
