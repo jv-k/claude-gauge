@@ -6,7 +6,7 @@
 
 ## Context
 
-A subagent in the background runs on after the Agent call that started it returns. Only its task notification in the session transcript ends it. When that notification never arrives, the agents part shows the subagent as running for ever. [ADR 0001, the agents part reads the transcript of each running subagent](0001-agents-part-reads-subagent-transcripts.md), gives the reader the last change time of each running subagent's own transcript, as a liveness signal for this issue.
+A subagent in the background runs on after the Agent call that started it returns. Only its task notification in the session transcript ends it. When that notification never arrives, the agents part shows the subagent as running for ever. [ADR 0005, the agents part reads the transcript of each running subagent](0005-agents-part-reads-subagent-transcripts.md), gives the reader the last change time of each running subagent's own transcript, as a liveness signal for this issue.
 
 ## Decision
 
@@ -27,4 +27,4 @@ The owner chose on 2026-10-11:
 
 - The reader's result now says which subagents run in the background (`background: true`), so the part can apply the rule.
 - A subagent in the background that waits more than 10 minutes on a single long tool call, and so writes nothing to its transcript, shows `?` while it waits. It shows `◐` again at its next record.
-- When Claude Code changes where it writes subagent transcripts, no transcript is found, and the part falls back to `◐`, as [that ADR](0001-agents-part-reads-subagent-transcripts.md) describes.
+- When Claude Code changes where it writes subagent transcripts, no transcript is found, and the part falls back to `◐`, as [that ADR](0005-agents-part-reads-subagent-transcripts.md) describes.
