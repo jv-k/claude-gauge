@@ -7,9 +7,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { render, parseArgs, readTranscriptActivity } = require('../dist/statusline.js');
 
-const { plain, tempDir } = require('./helpers');
+const { plain, tempDir, countingFs } = require('./helpers');
 
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const at = (secondsAgo) => NOW - secondsAgo * 1000;
@@ -238,17 +239,6 @@ test('a running subagent shows the model its own transcript names, before its re
   assert.equal(shown, '◐ Explore (Haiku 4.5) Map the reader 1m');
 });
 
-// The real fs, counting the transcript bytes it reads.
-function countingFs() {
-  const io = { ...fs, bytes: 0 };
-  io.readSync = (...args) => {
-    const n = fs.readSync(...args);
-    io.bytes += n;
-    return n;
-  };
-  return io;
-}
-
 test("the reader reads only the bytes a running subagent's transcript gained, and gives its last change time", () => {
   const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
   const { file, transcript, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5-20251001', at(70))] });
@@ -258,10 +248,13 @@ test("the reader reads only the bytes a running subagent's transcript gained, an
   assert.equal(running.model, 'Haiku 4.5');
   assert.equal(running.activeAt, fs.statSync(transcript).mtimeMs);
 
-  // Nothing new in either transcript: nothing read again.
+  // Nothing new in either transcript: nothing read again, and the reader's
+  // state keeps its place at the end of the subagent's transcript.
   const second = countingFs();
   assert.equal(readTranscriptActivity(file, { stateDir, fs: second }).agents[0].model, 'Haiku 4.5');
   assert.equal(second.bytes, 0);
+  const stateFile = path.join(stateDir, `${createHash('sha1').update(transcript).digest('hex')}.json`);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).offset, fs.statSync(transcript).size);
 
   // A new response on another model: only its bytes are read.
   const appended = jsonl([subagentReply('claude-sonnet-4-5', at(10))]);
@@ -271,7 +264,7 @@ test("the reader reads only the bytes a running subagent's transcript gained, an
   assert.equal(third.bytes, Buffer.byteLength(appended));
 });
 
-test('a subagent with no transcript of its own, or one that names no model, shows as before', () => {
+test('a subagent with no transcript of its own, one that names no model, or a meta file for another call, shows as before', () => {
   const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
   const before = [{ type: 'Explore', description: 'Map the reader', startedAt: at(72) }];
   const missing = sessionWithSubagent([call]);
@@ -302,4 +295,23 @@ test('a background subagent is found by the agent id its launch result names', (
   const launched = agentResult('t1', at(89), { isAsync: true, status: 'async_launched', agentId: 'a1b2c3' });
   const { file, stateDir } = sessionWithSubagent([call, launched], { toolUseId: null, subagent: [subagentReply('claude-sonnet-4-5', at(80))] });
   assert.equal(readTranscriptActivity(file, { stateDir }).agents[0].model, 'Sonnet 4.5');
+});
+
+test("the reader reads each subagent's meta file once, even one that names no Agent call of the session", () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const { file, stateDir } = sessionWithSubagent([call], { toolUseId: 't9' });
+  const metaReads = () => {
+    const io = { ...fs, metas: 0 };
+    io.readFileSync = (p, ...rest) => {
+      if (String(p).endsWith('.meta.json')) io.metas++;
+      return fs.readFileSync(p, ...rest);
+    };
+    return io;
+  };
+  const first = metaReads();
+  readTranscriptActivity(file, { stateDir, fs: first });
+  assert.equal(first.metas, 1);
+  const second = metaReads();
+  readTranscriptActivity(file, { stateDir, fs: second });
+  assert.equal(second.metas, 0);
 });

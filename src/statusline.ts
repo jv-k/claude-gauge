@@ -2281,7 +2281,8 @@ function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [
 // does, so a state from an older claude-gauge is rebuilt, not misread.
 const TRANSCRIPT_STATE_VERSION = 5;
 
-interface TranscriptState {
+// Where a reader is in a transcript.
+interface TranscriptCursor {
   version: number;
   // The transcript, and the file it was: a replaced file has a new inode.
   file: string;
@@ -2289,6 +2290,14 @@ interface TranscriptState {
   ino: number;
   // The bytes read so far, always up to the end of a whole line.
   offset: number;
+}
+
+// Whether a saved cursor still points into this file: the same file, not
+// replaced, and no shorter than the cursor's offset.
+const cursorHolds = (saved: TranscriptCursor | undefined, file: string, stat: fs.Stats): saved is TranscriptCursor =>
+  !!saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
+
+interface TranscriptState extends TranscriptCursor {
   // The tool calls with no result yet, by call id, oldest first. A call
   // that was running when the user sent a prompt has ended, but its result
   // may still come, and then counts.
@@ -2308,6 +2317,9 @@ interface TranscriptState {
   skills: string[];
   mcp: McpServer[];
   command?: string;
+  // The toolUseId each subagent meta file read so far names, by agent id,
+  // with '' for one that names none, so a meta file is read only once.
+  subagentCalls?: Record<string, string>;
   // How many times the conversation was compacted.
   compactions: number;
   // When the last prompt or tool result came, which asks for the next
@@ -2575,9 +2587,12 @@ function capAgents(state: TranscriptState): void {
 // starts a response, timed from the prompt or tool result that asked for it,
 // and each block after it moves the response's end. A reply Claude Code
 // writes itself, such as an API error, is no response of the model's.
+// A reply Claude Code writes itself names this model.
+const SYNTHETIC_MODEL = '<synthetic>';
+
 function applyResponse(state: TranscriptState, record: TranscriptRecord, at: number | undefined): void {
   const message = record.message;
-  if (at === undefined || typeof message?.id !== 'string' || message.model === '<synthetic>') return;
+  if (at === undefined || typeof message?.id !== 'string' || message.model === SYNTHETIC_MODEL) return;
   const tokens = finite(message.usage?.output_tokens) ?? 0;
   if (state.response?.id === message.id) {
     state.response.endedAt = Math.max(state.response.endedAt, at);
@@ -2712,6 +2727,7 @@ function loadTranscriptState(io: TranscriptFs, stateFile: string): TranscriptSta
       Array.isArray(state.skills) &&
       Array.isArray(state.mcp) &&
       Number.isInteger(state.compactions) &&
+      (state.subagentCalls === undefined || isObject(state.subagentCalls)) &&
       state.completed &&
       typeof state.completed === 'object';
     return valid ? state : undefined;
@@ -2758,12 +2774,7 @@ function saveTranscriptState(io: TranscriptFs, stateFile: string, state: Transcr
 // while its subagent runs.
 const SUBAGENT_STATE_VERSION = 1;
 
-interface SubagentState {
-  version: number;
-  file: string;
-  dev: number;
-  ino: number;
-  offset: number;
+interface SubagentState extends TranscriptCursor {
   // The model of the subagent's latest response, as its id.
   model?: string;
 }
@@ -2772,10 +2783,12 @@ const subagentsFolder = (file: string): string => path.join(file.replace(/\.json
 
 const stateFileOf = (stateDir: string, file: string): string => path.join(stateDir, `${createHash('sha1').update(file).digest('hex')}.json`);
 
-// The agent id of each running subagent that has none yet, from the meta
-// files in the subagents folder. True when it found one.
-function findAgentIds(io: TranscriptFs, folder: string, agents: AgentEntry[]): boolean {
-  const wanted = agents.filter((a) => a.endedAt === undefined && !a.agentId);
+// Links each running subagent that has no agent id yet to its own
+// transcript, by the toolUseId in the meta files of the subagents folder.
+// Each meta file is read once: the toolUseId it names is kept in the state.
+// True when the state changed.
+function linkSubagentTranscripts(io: TranscriptFs, folder: string, state: TranscriptState): boolean {
+  const wanted = state.agents.filter((a) => a.endedAt === undefined && !a.agentId);
   if (!wanted.length) return false;
   let names: string[];
   try {
@@ -2783,24 +2796,27 @@ function findAgentIds(io: TranscriptFs, folder: string, agents: AgentEntry[]): b
   } catch {
     return false;
   }
-  const known = new Set(agents.map((a) => a.agentId));
-  let found = false;
+  const calls = (state.subagentCalls ??= {});
+  let changed = false;
   for (const name of names) {
     const agentId = /^agent-(.+)\.meta\.json$/.exec(name)?.[1];
-    if (!agentId || known.has(agentId)) continue;
-    let toolUseId: string | undefined;
+    if (!agentId || agentId in calls) continue;
     try {
-      toolUseId = stringAt(JSON.parse(String(io.readFileSync(path.join(folder, name), 'utf8'))), 'toolUseId');
+      calls[agentId] = stringAt(JSON.parse(String(io.readFileSync(path.join(folder, name), 'utf8'))), 'toolUseId') ?? '';
+      changed = true;
     } catch {
-      continue;
-    }
-    const agent = wanted.find((a) => a.id === toolUseId && !a.agentId);
-    if (agent) {
-      agent.agentId = agentId;
-      found = true;
+      /* not written yet, or not JSON: read it again next render */
     }
   }
-  return found;
+  const linked = new Set(state.agents.map((a) => a.agentId));
+  for (const [agentId, toolUseId] of Object.entries(calls)) {
+    const agent = !linked.has(agentId) && toolUseId ? wanted.find((a) => a.id === toolUseId && !a.agentId) : undefined;
+    if (agent) {
+      agent.agentId = agentId;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function loadSubagentState(io: TranscriptFs, stateFile: string): SubagentState | undefined {
@@ -2824,7 +2840,7 @@ function readSubagentTranscript(io: TranscriptFs, file: string, stateDir: string
   }
   const stateFile = stateFileOf(stateDir, file);
   const saved = loadSubagentState(io, stateFile);
-  const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
+  const unchanged = cursorHolds(saved, file, stat);
   const state: SubagentState = unchanged ? saved : { version: SUBAGENT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0 };
   if (stat.size > state.offset || !unchanged) {
     state.offset = readLines(io, file, state.offset, stat.size, (line) => {
@@ -2832,7 +2848,7 @@ function readSubagentTranscript(io: TranscriptFs, file: string, stateDir: string
       try {
         const record = JSON.parse(line) as TranscriptRecord;
         const model = record?.type === 'assistant' ? record.message?.model : undefined;
-        if (typeof model === 'string' && model.trim() && model !== '<synthetic>') state.model = model;
+        if (typeof model === 'string' && model.trim() && model !== SYNTHETIC_MODEL) state.model = model;
       } catch {
         /* not a record: skip it */
       }
@@ -2855,7 +2871,7 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   }
   const stateFile = stateFileOf(stateDir, file);
   const saved = loadTranscriptState(io, stateFile);
-  const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
+  const unchanged = cursorHolds(saved, file, stat);
   const state: TranscriptState = unchanged
     ? saved
     : {
@@ -2874,7 +2890,7 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
         compactions: 0,
       };
 
-  let changed = !unchanged;
+  let changed = false;
   if (stat.size > state.offset || !unchanged) {
     changed = true;
     state.offset = readLines(io, file, state.offset, stat.size, (line) => {
@@ -2889,9 +2905,11 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
     });
   }
   const folder = subagentsFolder(file);
-  if (findAgentIds(io, folder, state.agents)) changed = true;
+  if (linkSubagentTranscripts(io, folder, state)) changed = true;
   if (changed) saveTranscriptState(io, stateFile, state);
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
+  // A running subagent's own transcript names the model it runs on, version
+  // and all, so it wins over the alias the Agent call may give.
   const agents = state.agents.map(({ id, background, agentId, ...agent }) =>
     agent.endedAt === undefined && agentId ? { ...agent, ...readSubagentTranscript(io, path.join(folder, `agent-${agentId}.jsonl`), stateDir) } : agent,
   );
