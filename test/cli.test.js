@@ -345,7 +345,7 @@ test('FORCE_COLOR or CLICOLOR_FORCE draws the wordmark a colour a letter, the hy
   for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
     const r = runCli(configFolder(), ['--help'], { env: colour });
     ok(r);
-    assert.ok(r.stdout.startsWith(`${RAINBOW.join('\n')}\n\nUsage: claude-gauge `), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
+    assert.ok(r.stdout.startsWith(`${RAINBOW.join('\n')}\n`), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
   }
 });
 
@@ -398,6 +398,25 @@ const OK = icon(SGR.ok, '✔');
 const INFO = icon(SGR.info, 'ℹ');
 const ERROR = icon(SGR.error, '✖');
 
+// In colour the usage sits under a USAGE pill, as a command's result sits
+// under its own, so its first line drops the Usage: that the pill now says.
+const USAGE_PILL = `${RAINBOW.join('\n')}\n\n${pill('USAGE')}\nclaude-gauge <setup | configure | uninstall | update> [switches]\n`;
+
+test('--help in colour puts a USAGE pill between the wordmark and the usage', () => {
+  for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
+    const r = runCli(configFolder(), ['--help'], { env: colour });
+    ok(r);
+    assert.ok(r.stdout.startsWith(USAGE_PILL), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
+    assert.doesNotMatch(r.stdout, /Usage:/);
+  }
+});
+
+test('a bare claude-gauge in colour prints the USAGE pill over the usage, on stderr', () => {
+  const bare = runCli(configFolder(), [], { env: { FORCE_COLOR: '1' } });
+  assert.equal(bare.status, 2);
+  assert.ok(bare.stderr.startsWith(USAGE_PILL), JSON.stringify(bare.stderr.slice(0, 400)));
+});
+
 test('a bare claude-gauge prints the wordmark and the usage, on stderr, and exits 2', () => {
   const bare = runCli(configFolder(), [], { env: { NO_COLOR: '1' } });
   assert.equal(bare.status, 2);
@@ -411,7 +430,7 @@ test('the usage after a mistake starts with the wordmark, coloured by the gate o
   assert.ok(noCommand.stderr.startsWith(`\nERROR\n✖ Name a command.\n\n${WORDMARK.join('\n')}\n\nUsage: claude-gauge `), noCommand.stderr);
   const unknown = runCli(configFolder(), ['launch'], { env: { FORCE_COLOR: '1' } });
   assert.equal(unknown.status, 2);
-  assert.ok(unknown.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}Unknown command: launch\n\n${RAINBOW.join('\n')}\n\nUsage: claude-gauge `), JSON.stringify(unknown.stderr.slice(0, 400)));
+  assert.ok(unknown.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}Unknown command: launch\n\n${USAGE_PILL}`), JSON.stringify(unknown.stderr.slice(0, 400)));
   assert.equal(unknown.stdout, '');
 });
 
@@ -715,6 +734,53 @@ test('with colour on, each command prints a pill header, icons and green values'
   assert.equal(failed.status, 1);
   assert.ok(failed.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}There is no copy`), JSON.stringify(failed.stderr));
   assert.equal(failed.stdout, '');
+});
+
+// The values in an error are green too, as they are in a result (#119).
+test('an error in colour prints its values green: the folder update cannot find, and a settings file that is not valid JSON', () => {
+  const env = { FORCE_COLOR: '1' };
+  const empty = configFolder();
+  const missing = runCli(empty, ['update'], { env });
+  assert.equal(missing.status, 1);
+  assert.ok(
+    missing.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}There is no copy of claude-gauge in ${green(runtimeOf(empty))} to update. Run claude-gauge setup first.\n`),
+    JSON.stringify(missing.stderr),
+  );
+
+  const dir = configFolder();
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, '{ not json');
+  const broken = runCli(dir, ['setup', '--yes'], { env });
+  assert.equal(broken.status, 1);
+  assert.ok(broken.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}${green(file)} is not valid JSON (`), JSON.stringify(broken.stderr));
+  // Node's own words stay plain: the only green is the path.
+  assert.equal(broken.stderr.split(SGR.ok).length, 2, JSON.stringify(broken.stderr));
+
+  // A status line that is not claude-gauge's: the command under the path is
+  // green on its own ↳ line.
+  const other = configFolder({ statusLine: { type: 'command', command: '~/bin/my-status.sh' } });
+  const blocked = runCli(other, ['setup', '--yes'], { env });
+  assert.equal(blocked.status, 1);
+  assert.ok(
+    blocked.stderr.includes(`${ERROR}${green(path.join(other, 'settings.json'))} already runs another status line:\n  ${SGR.dim}↳ ${green('~/bin/my-status.sh')}${SGR.reset}\n`),
+    JSON.stringify(blocked.stderr),
+  );
+
+  // A known command and a known switch in a mistake are values too, but a
+  // word claude-gauge does not know stays plain.
+  const stray = runCli(empty, ['update', '--replace'], { env });
+  assert.equal(stray.status, 2);
+  assert.ok(stray.stderr.includes(`${ERROR}${green('update')} takes no ${green('--replace')}\n`), JSON.stringify(stray.stderr));
+  const bare = runCli(empty, ['setup', '--status-line'], { env });
+  assert.equal(bare.status, 2);
+  assert.ok(bare.stderr.includes(`${ERROR}${green('--status-line')} needs a value: `), JSON.stringify(bare.stderr));
+
+  // With colour off the same errors are the plain text.
+  const offStray = runCli(empty, ['update', '--replace'], { env: { NO_COLOR: '1' } });
+  assert.ok(offStray.stderr.startsWith('\nERROR\n✖ update takes no --replace\n'), offStray.stderr);
+  const off = runCli(dir, ['setup', '--yes'], { env: { NO_COLOR: '1' } });
+  assert.ok(off.stderr.startsWith(`\nERROR\n✖ ${file} is not valid JSON (`), off.stderr);
+  assert.ok(!/\x1b/.test(off.stderr), JSON.stringify(off.stderr));
 });
 
 test('with NO_COLOR, or piped with no force variable, the output has no escape codes, and each pill reads as plain text', () => {
