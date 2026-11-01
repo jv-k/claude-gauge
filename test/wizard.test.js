@@ -8,6 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const { Readable } = require('node:stream');
 const { runWizard, offerStar, streamIo, EndOfAnswers, Interrupted, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
 const { DEFAULT_ROWS, PARTS } = require('../dist/statusline.js');
@@ -421,6 +422,17 @@ test('the preview shows every part, alone, from a fresh config folder outside gi
     assert.notEqual(plain(fresh(['--show', part])), '', `${part} shows nothing from the sample`);
     assert.notEqual(plain(saved(['--show', part])), '', `${part} shows nothing from a saved payload`);
   }
+});
+
+test("the samples for the git and worktree parts stay out of the branch part's real branch", () => {
+  const dir = tempDir('claude-gauge-wizard-');
+  execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+  execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x']);
+  const now = new Date(2026, 9, 7, 12, 0, 0).getTime();
+  const preview = previewer({ ...samplePayload(now), workspace: { current_dir: dir } }, { nowMs: now, env: { CLAUDE_CONFIG_DIR: dir } });
+  assert.equal(plain(preview(['--show', 'branch'])), '⎇ main', 'a clean folder in no worktree');
+  assert.match(plain(preview(['--show', 'git'])), /\S/, 'the git part shows the sample changes');
+  assert.match(plain(preview(['--show', 'worktree'])), /^wt \S/, 'the worktree part shows the sample worktree');
 });
 
 test('the preview keeps what the payload holds, and never runs the command', () => {

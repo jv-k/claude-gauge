@@ -572,6 +572,9 @@ const SAMPLE_TRANSCRIPT = 'claude-gauge-sample.jsonl';
 const SAMPLE_TEXT = 'on call';
 const SAMPLE_COMMAND_OUTPUT = 'build passing';
 const SAMPLE_PLAN = 'Claude Max 5x';
+// The sample's worktree, for the worktree part only: the branch part names
+// the worktree too, and a session in no worktree shows none there.
+const SAMPLE_WORKTREE = 'login-redirect';
 const SAMPLE_ENV = { claudeMd: 2, rules: 3, mcp: 2, hooks: 1 };
 const SAMPLE_MEMORY = { used: 11 * 1024 ** 3, total: 16 * 1024 ** 3 };
 // What git status --porcelain=v2 --branch would print: the branch two
@@ -593,7 +596,7 @@ function samplePayload(nowMs: number): StatusData {
   return {
     model: { display_name: 'Opus' },
     effort: { level: 'high' },
-    workspace: { current_dir: process.cwd(), git_worktree: 'login-redirect' },
+    workspace: { current_dir: process.cwd() },
     context_window: { context_window_size: 200000, used_percentage: 43 },
     rate_limits: {
       five_hour: { used_percentage: 9, resets_at: at(2 * hour) },
@@ -660,10 +663,12 @@ function underSample(real: unknown, sample: unknown): unknown {
 }
 
 // The payload with the sample's fields under it. thinking, fast and style
-// show nothing while they are off, so the preview shows the sample's.
-function withSamplePayload(payload: StatusData, nowMs: number): StatusData {
+// show nothing while they are off, so the preview shows the sample's. The
+// sample's worktree comes in only when `shown` holds the worktree part.
+function withSamplePayload(payload: StatusData, nowMs: number, shown: ReadonlySet<string>): StatusData {
   const sample = samplePayload(nowMs);
   const data = underSample(payload, sample) as StatusData;
+  if (shown.has('worktree') && !data.workspace?.git_worktree && !data.worktree?.name) data.workspace = { ...data.workspace, git_worktree: SAMPLE_WORKTREE };
   if (!data.thinking?.enabled) data.thinking = sample.thinking;
   if (!data.fast_mode) data.fast_mode = sample.fast_mode;
   if (!data.output_style?.name || data.output_style.name === 'default') data.output_style = sample.output_style;
@@ -686,16 +691,18 @@ function withSampleActivity(real: TranscriptActivity, nowMs: number): Transcript
   };
 }
 
-// The git status, with the sample's branch where it names none and the
-// sample's changes where it has none. Without a status in time, the branch
+// The git status, with the sample's branch where it names none, and, when
+// `withChanges`, the sample's changes where it has none. The changes are
+// for the git and files parts only: the branch part marks them with *, and
+// a clean folder shows no * there. Without a status in time, the branch
 // comes from HEAD.
-function withSampleStatus(status: string | undefined, branch: () => string): string {
+function withSampleStatus(status: string | undefined, branch: () => string, withChanges: boolean): string {
   const lines = (status ?? '').split(/\r?\n/).filter(Boolean);
   const head = lines.filter((line) => line.startsWith('#'));
   const changes = lines.filter((line) => !line.startsWith('#'));
   const named = status === undefined && branch() ? [`# branch.head ${branch()}`] : head;
   const hasBranch = named.some((line) => /^# branch\.head (?!\(detached\))\S/.test(line));
-  return [...(hasBranch ? named : SAMPLE_GIT_HEAD), ...(changes.length ? changes : SAMPLE_GIT_CHANGES)].join('\n');
+  return [...(hasBranch ? named : SAMPLE_GIT_HEAD), ...(changes.length || !withChanges ? changes : SAMPLE_GIT_CHANGES)].join('\n');
 }
 
 // What Claude Code loads, with the sample's counts where it loads nothing
@@ -731,7 +738,8 @@ function previewer(payload: StatusData, options: PreviewOptions = {}) {
   return (switches: readonly string[]) => {
     const nowMs = options.nowMs ?? Date.now();
     const config = parseArgs([...switches]);
-    return render(withSamplePayload(payload, nowMs), {
+    const shown = new Set<string>((config.rows ?? DEFAULT_ROWS).flat());
+    return render(withSamplePayload(payload, nowMs, shown), {
       ...options,
       nowMs,
       // Any command will do, as the preview runs none: the part shows the
@@ -746,7 +754,7 @@ function previewer(payload: StatusData, options: PreviewOptions = {}) {
         }
         return withSampleActivity(real, nowMs);
       },
-      statusOf: (cwd) => withSampleStatus(statusOf(cwd), () => branchOf(cwd)),
+      statusOf: (cwd) => withSampleStatus(statusOf(cwd), () => branchOf(cwd), shown.has('git') || shown.has('files')),
       setupOf: (cwd) => withSampleSetup(setupOf(cwd)),
       memoryOf: () => memoryOf() ?? SAMPLE_MEMORY,
       commandOutputOf: () => SAMPLE_COMMAND_OUTPUT,
