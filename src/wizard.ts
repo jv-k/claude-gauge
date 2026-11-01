@@ -36,9 +36,9 @@ import {
   THEMES,
   DEFAULT_ROWS,
 } from './statusline';
-import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches } from './tokenline';
+import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, summarize } from './tokenline';
 import type { StatusData, Part, TranscriptActivity, Ledger, Setup } from './statusline';
-import type { Part as TokenPart } from './tokenline';
+import type { Part as TokenPart, TranscriptRecord as TokenRecord } from './tokenline';
 import type { PerBar, InstalledSwitches } from './settings';
 import { colorEnabled } from './wordmark';
 import { styles } from './styles';
@@ -99,6 +99,8 @@ interface ChoiceIo {
 interface WizardOptions {
   // The status line's rows when run with these switches.
   preview: (statusLineSwitches: readonly string[]) => string;
+  // The token line when run with these switches, else the sample run's.
+  tokenPreview?: (tokenLineSwitches: readonly string[]) => string;
   // The bars configure found. The wizard starts from them, and from the
   // factory defaults when neither bar is set up.
   installed?: InstalledSwitches;
@@ -359,18 +361,21 @@ async function runWizard(userIo: WizardIo, options: WizardOptions): Promise<Wiza
   }
 }
 
-async function askAll(userIo: WizardIo, { preview, installed }: WizardOptions): Promise<WizardChoices | null> {
+async function askAll(userIo: WizardIo, { preview, tokenPreview = tokenPreviewer(), installed }: WizardOptions): Promise<WizardChoices | null> {
   const io = screenOf(userIo);
   const s = stylesOf(io);
   const start = startFrom(installed);
   let status: StatusChoices = { ...start.status };
   let tokenLine = start.tokenLine;
+  let tokenSwitches = start.tokenSwitches;
   // The preview of `choices` in the status line's own colours, or as plain
   // text when the questions take no colour, under `heading` when one is given.
-  const previewOf = (choices: StatusChoices, withTokenLine = tokenLine, heading = '') => {
+  // With the token line on, its line with `withTokenSwitches` comes under it.
+  const previewOf = (choices: StatusChoices, withTokenLine = tokenLine, heading = '', withTokenSwitches = tokenSwitches) => {
     const rendered = preview(switchesFor(choices));
     const rows = io.color ? rendered : stripOwnCodes(rendered);
-    return `${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${withTokenLine ? 'on, when each turn ends' : 'off'}\n`;
+    const token = withTokenLine ? `on, when each turn ends\n  ${tokenPreview(withTokenSwitches)}` : 'off';
+    return `${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${token}\n`;
   };
   const show = (heading = '') => io.preview(previewOf(status, tokenLine, heading));
   // The preview with `change` made to the choices so far, for a choice whose
@@ -454,21 +459,60 @@ async function askAll(userIo: WizardIo, { preview, installed }: WizardOptions): 
   tokenLine = await confirm(io, 'Add the token line, shown when each turn ends?', start.tokenLine, (yes) => previewOf(status, yes));
   show();
 
-  let tokenSwitches = start.tokenSwitches;
   if (tokenLine) {
     io.keep(s.pill('Token line'));
     const fallback = tokenPartsOf(start.tokenSwitches);
     const question = `Token line parts: all, req,out,ctx, or your own list from ${TOKEN_PARTS.map(s.value).join(', ')}? ${hint(s, fallback.join(','))} `;
     const parts = await askFor(io, question, readTokenParts(fallback), 'INPUT', (c) =>
-      c.many({ message: 'Token line parts', options: TOKEN_PARTS, initial: fallback }),
+      c.many({
+        message: 'Token line parts',
+        options: TOKEN_PARTS,
+        initial: fallback,
+        preview: (ticked) => previewOf(status, true, '', tokenSwitchesFor(ticked, start.tokenSwitches)),
+      }),
     );
     // The token line reads the context window the status line saves, so
     // there is no question for it. A --window set up stays as it is.
     tokenSwitches = tokenSwitchesFor(parts, start.tokenSwitches);
+    show();
   }
 
   if (!(await confirm(io, 'Write these choices?', true))) return null;
   return { statusLine: switchesFor(status), tokenLine: tokenLine ? tokenSwitches : null };
+}
+
+// The token line's sample run since the last prompt: four requests, the last
+// at 43% of a 200k context, as in the status line's sample.
+const SAMPLE_RUN: TokenRecord[] = [
+  { type: 'user', message: { content: 'Fix the login redirect.' } },
+  ...[
+    { output_tokens: 900, thinking: 400, cacheWrite: 1500, cacheRead: 78000, input: 600 },
+    { output_tokens: 700, thinking: 300, cacheWrite: 1000, cacheRead: 80000, input: 400 },
+    { output_tokens: 800, thinking: 200, cacheWrite: 2000, cacheRead: 82000, input: 300 },
+    { output_tokens: 1000, thinking: 300, cacheWrite: 2000, cacheRead: 83500, input: 500 },
+  ].map((u, i) => ({
+    type: 'assistant',
+    message: {
+      id: `sample-${i}`,
+      usage: {
+        output_tokens: u.output_tokens,
+        output_tokens_details: { thinking_tokens: u.thinking },
+        input_tokens: u.input,
+        cache_creation_input_tokens: u.cacheWrite,
+        cache_read_input_tokens: u.cacheRead,
+      },
+    },
+  })),
+];
+const SAMPLE_WINDOW = 200000;
+
+// The token line's preview: the sample run's line with the given switches,
+// as the token line reads them.
+function tokenPreviewer(nowMs?: number) {
+  return (switches: readonly string[]) => {
+    const { show, segments, window } = parseTokenArgs([...switches]);
+    return summarize(SAMPLE_RUN, { now: nowMs === undefined ? new Date() : new Date(nowMs), show, segments, window, savedWindow: SAMPLE_WINDOW }) ?? '';
+  };
 }
 
 const REPO = 'jv-k/claude-gauge';
@@ -760,6 +804,6 @@ async function openIo(input: Input, output: Output, load: LoadInk = loadInk): Pr
   return streamIo(input, output, color);
 }
 
-export { runWizard, offerStar, confirm, streamIo, openIo, EndOfAnswers, Interrupted, samplePayload, loadPayload, previewer, switchesFor };
+export { runWizard, offerStar, confirm, streamIo, openIo, EndOfAnswers, Interrupted, samplePayload, loadPayload, previewer, tokenPreviewer, switchesFor };
 
 export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, Output, Input, OpenIo };
