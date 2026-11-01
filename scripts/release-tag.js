@@ -14,13 +14,13 @@
 // is refused: npm drops it, so two tags would publish one version.
 const numeric = '(?:0|[1-9]\\d*)';
 const identifier = `(?:${numeric}|\\d*[A-Za-z-][0-9A-Za-z-]*)`;
-const tagPattern = new RegExp(`^v(${numeric}\\.${numeric}\\.${numeric}(?:-(${identifier}(?:\\.${identifier})*))?)$`);
+const tagPattern = new RegExp(`^v(?:${numeric}\\.${numeric}\\.${numeric}(?:-(${identifier}(?:\\.${identifier})*))?)$`);
 
-// The version a tag names and whether it is a pre-release, or null when the
-// tag is not `v` and a version.
+// Whether a tag is a pre-release, or null when the tag is not `v` and a
+// version.
 function releaseTag(tag) {
   const match = tagPattern.exec(String(tag));
-  return match ? { version: match[1], prerelease: match[2] !== undefined } : null;
+  return match ? { prerelease: match[1] !== undefined } : null;
 }
 
 function main(argv) {

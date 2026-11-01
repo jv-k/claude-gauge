@@ -13,15 +13,15 @@ const { releaseTag } = require('../scripts/release-tag.js');
 const script = path.join(__dirname, '..', 'scripts', 'release-tag.js');
 
 test('releaseTag reads a full release tag', () => {
-  assert.deepEqual(releaseTag('v1.0.0'), { version: '1.0.0', prerelease: false });
-  assert.deepEqual(releaseTag('v12.30.4'), { version: '12.30.4', prerelease: false });
+  assert.deepEqual(releaseTag('v1.0.0'), { prerelease: false });
+  assert.deepEqual(releaseTag('v12.30.4'), { prerelease: false });
 });
 
 test('releaseTag reads a pre-release tag', () => {
-  assert.deepEqual(releaseTag('v1.0.0-rc.1'), { version: '1.0.0-rc.1', prerelease: true });
-  assert.deepEqual(releaseTag('v2.0.0-beta.3'), { version: '2.0.0-beta.3', prerelease: true });
-  assert.deepEqual(releaseTag('v2.0.0-alpha'), { version: '2.0.0-alpha', prerelease: true });
-  assert.deepEqual(releaseTag('v2.0.0-0.3.7'), { version: '2.0.0-0.3.7', prerelease: true });
+  assert.deepEqual(releaseTag('v1.0.0-rc.1'), { prerelease: true });
+  assert.deepEqual(releaseTag('v2.0.0-beta.3'), { prerelease: true });
+  assert.deepEqual(releaseTag('v2.0.0-alpha'), { prerelease: true });
+  assert.deepEqual(releaseTag('v2.0.0-0.3.7'), { prerelease: true });
 });
 
 test('releaseTag refuses a tag that is not a version', () => {

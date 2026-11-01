@@ -61,13 +61,18 @@ test('the workflow does not start on a tag that is not a version', () => {
   }
 });
 
-// The `run: |` shell of the step named `name`.
-function stepScript(name) {
+// The lines of the step named `name`, from its `- name:` line to the next step.
+function stepLines(name) {
   const lines = workflow.split('\n');
   const start = lines.indexOf(`      - name: ${name}`);
   assert.ok(start >= 0, `release.yml has no step named ${name}`);
   const end = lines.findIndex((line, i) => i > start && /^ {6}- /.test(line));
-  const step = lines.slice(start, end < 0 ? lines.length : end);
+  return lines.slice(start, end < 0 ? lines.length : end);
+}
+
+// The `run: |` shell of the step named `name`.
+function stepScript(name) {
+  const step = stepLines(name);
   const run = step.indexOf('        run: |');
   assert.ok(run >= 0, `the step ${name} has no run: | block`);
   return step
@@ -79,10 +84,7 @@ function stepScript(name) {
 
 // The `env:` value that the step named `name` gives `key`.
 function stepEnv(name, key) {
-  const lines = workflow.split('\n');
-  const start = lines.indexOf(`      - name: ${name}`);
-  const end = lines.findIndex((line, i) => i > start && /^ {6}- /.test(line));
-  const step = lines.slice(start, end < 0 ? lines.length : end).join('\n');
+  const step = stepLines(name).join('\n');
   const match = new RegExp(`^ {10}${key}: (.*)$`, 'm').exec(step);
   return match ? match[1] : null;
 }

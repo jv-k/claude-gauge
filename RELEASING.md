@@ -77,7 +77,7 @@ VerBump does not create the GitHub release. The tag starts the `release` workflo
 
 6. It checks that npm is 11.5.1 or later, which trusted publishing needs, and that the tag is `v` followed by the version in `package.json`. Then `scripts/release-tag.js` reads whether the tag is a pre-release. It fails for a tag that is not `vX.Y.Z` or `vX.Y.Z-<pre-release>`, such as `v1.0.0-rc.1+build.5`.
 7. It runs `pnpm test` on the tagged commit, with a fresh build of `dist/`.
-8. It takes the section for the version from `CHANGELOG.md`. The section starts at the `## X.Y.Z` heading, or the `## X.Y.Z-rc.1` heading for a pre-release, and stops at the next `##` heading. If the section is missing or empty, the workflow fails here.
+8. It takes the section for the version from `CHANGELOG.md`. The section starts at the `## X.Y.Z` heading, or the `## X.Y.Z-<pre-release>` heading for a pre-release, and stops at the next `##` heading. If the section is missing or empty, the workflow fails here.
 9. It creates the GitHub release `vX.Y.Z` with the section as its body. For a pre-release, it marks the release as a pre-release. If the release already exists, it leaves the release as it is.
 10. It runs `npm publish --provenance`, and adds `--tag next` for a pre-release. npm accepts the publish through the trusted publisher, publishes `dist/`, `README.md`, `LICENSE` and `package.json`, and links the package to the workflow run that built it.
 
