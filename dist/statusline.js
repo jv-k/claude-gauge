@@ -26,7 +26,7 @@
 // registry disagree. test/snapshots/themes/ holds the default rows in every
 // theme.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AGENT_LINGER_MS = exports.COMMAND_TIMEOUT_MS = exports.payloadFile = exports.INSTRUCT_HOSTS = exports.SWITCHES = exports.DEFAULT_ROWS = exports.THEMES = exports.PARTS = exports.stripOwnCodes = void 0;
+exports.AGENT_LINGER_MS = exports.COMMAND_TIMEOUT_MS = exports.payloadFile = exports.INSTRUCT_HOSTS = exports.SWITCHES = exports.DEFAULT_ROWS = exports.BAR_STYLE_REGISTRY = exports.BAR_STYLES = exports.THEMES = exports.PARTS = exports.stripOwnCodes = void 0;
 exports.render = render;
 exports.parseArgs = parseArgs;
 exports.readSwitches = readSwitches;
@@ -135,8 +135,9 @@ const DEFAULTS = {
     command: '',
     theme: 'default',
     colors: {},
-    barFilled: '▓',
-    barEmpty: '░',
+    barStyle: 'classic',
+    barFilled: '',
+    barEmpty: '',
 };
 // Every status line switch.
 const SWITCHES = [
@@ -187,9 +188,15 @@ const SWITCHES = [
             }
         },
     },
-    { name: '--bar-filled', value: '<char>', description: 'the character of a filled bar cell (default ▓)', apply: (config, value) => { if (isBarChar(value))
+    {
+        name: '--bar-style',
+        value: '<name>',
+        description: 'how every bar is drawn: classic, steps, rising, hairline, dots, spark or underline',
+        apply: (config, value) => { config.barStyle = value.trim(); },
+    },
+    { name: '--bar-filled', value: '<char>', description: "the character of a filled bar cell (default: the bar style's)", apply: (config, value) => { if (isBarChar(value))
             config.barFilled = value; } },
-    { name: '--bar-empty', value: '<char>', description: 'the character of an empty bar cell (default ░)', apply: (config, value) => { if (isBarChar(value))
+    { name: '--bar-empty', value: '<char>', description: "the character of an empty bar cell (default: the bar style's)", apply: (config, value) => { if (isBarChar(value))
             config.barEmpty = value; } },
     { name: '--latest', description: "print the calling session's rows from its transcript, as plain text" },
     { name: '--window', value: '<size>', description: 'with --latest: the context window size, such as 200k or 1m' },
@@ -392,10 +399,28 @@ const fmt = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(2)}M`
 const capitalised = (word) => word[0].toUpperCase() + word.slice(1);
 // Bars come in 5 or 10 cells; anything else falls back to 5.
 const segmentsOf = (value) => (Number(value) === 10 ? 10 : 5);
-// The cells of a bar, filled in proportion to pct, one character each.
-const cellsFor = (pct, { segments, barFilled, barEmpty }) => {
-    const filled = Math.min(segments, Math.max(0, Math.round((pct * segments) / 100)));
-    return [...Array(filled).fill(barFilled), ...Array(segments - filled).fill(barEmpty)];
+const BAR_STYLE_REGISTRY = {
+    classic: { description: '▓▓┃░░: shaded cells, 5 or 10 with --segments', filled: '▓', empty: '░', marker: '┃' },
+    steps: { description: '▅▅▅▁▁▁: 6 tall cells over a low track, the pace marker a cell in its colour', cells: 6, filled: '▅', empty: '▁', marker: '' },
+    rising: { description: '▅▃·▕: 3 cells whose last one rises, then a dot in the pace colour', cells: 3 },
+    hairline: { description: '━━╋───: 8 cells of thin rule', cells: 8, filled: '━', empty: '─', marker: '╋' },
+    dots: { description: '•••|··: 6 dots', cells: 6, filled: '•', empty: '·', marker: '|' },
+    spark: { description: '▄: 1 cell whose height shows the share, then a dot in the pace colour', cells: 1 },
+    underline: { description: 'no bar characters: the text is underlined for the share used' },
+};
+exports.BAR_STYLE_REGISTRY = BAR_STYLE_REGISTRY;
+const BAR_STYLES = Object.keys(BAR_STYLE_REGISTRY);
+exports.BAR_STYLES = BAR_STYLES;
+// The bar style to draw with. Plain text loses the underline with the other
+// codes, so there underline draws as classic.
+const barStyleOf = (config, plain) => {
+    const name = ownValue(BAR_STYLE_REGISTRY, config.barStyle) ? config.barStyle : 'classic';
+    return plain && name === 'underline' ? 'classic' : name;
+};
+// The cells of a bar of `n` cells, filled in proportion to pct.
+const cellsFor = (pct, n, filled, empty) => {
+    const count = Math.min(n, Math.max(0, Math.round((pct * n) / 100)));
+    return [...Array(count).fill(filled), ...Array(n - count).fill(empty)];
 };
 // How every git call runs: for at most a second, with its output as text
 // and its errors dropped.
@@ -574,38 +599,113 @@ function formatDaysOrTime(epochSeconds, config, nowMs) {
     const days = Math.round((midnight(resetDate(epochSeconds)) - midnight(new Date(nowMs))) / 86400000);
     return days > 0 ? `${days}d` : formatTime(epochSeconds, config);
 }
-// A usage bar. With a pace marker, ┃ replaces the cell where "now" falls in
-// the window, coloured by the projected end-of-window usage.
-function usageBar(pct, color, window, resetsAt, config, theme, nowMs) {
-    const cells = cellsFor(pct, config);
+// The pace of a reported window, or none without --pace or a reset time
+// inside the window.
+function paceOf(pct, window, resetsAt, config, theme, nowMs) {
     const remaining = resetsAt ? resetsAt - nowMs / 1000 : 0;
     if (!config.pace || remaining <= 0 || remaining >= window.seconds)
-        return ` ${cells.join('')}`;
+        return undefined;
     const elapsed = window.seconds - remaining;
-    const pos = Math.min(config.segments - 1, Math.max(0, Math.round((elapsed * config.segments) / window.seconds)));
-    // Early in a window the projection is noise, so keep the usage colour. A
-    // pace colour of '' (mono) resets, so the marker never takes a --color.
-    const marker = elapsed >= window.minElapsed ? paceColor(theme, (pct * window.seconds) / elapsed) || (color && RESET) : color;
-    return ` ${cells.slice(0, pos).join('')}${marker}┃${RESET}${color}${cells.slice(pos + 1).join('')}`;
+    return { at: elapsed / window.seconds, color: elapsed >= window.minElapsed ? paceColor(theme, (pct * window.seconds) / elapsed) : undefined };
+}
+const UNDERLINE = '\x1b[4m';
+const NO_UNDERLINE = '\x1b[24m';
+const INVERSE = '\x1b[7m';
+const NO_INVERSE = '\x1b[27m';
+// A bar in `style`, after a space, for a part drawn in `color`. It ends in
+// `color`, so the text after it keeps the part's colour. With a pace, the
+// pace marker shows where "now" falls in the window, coloured by the
+// projection.
+function drawBar(pct, color, pace, style, { config, theme, plain }) {
+    const spec = BAR_STYLE_REGISTRY[style];
+    const n = spec.cells ?? config.segments;
+    const muted = (text) => `${RESET}${theme.muted}${text}${RESET}${color}`;
+    // A dot after the bar in the pace colour, for the styles with no room for
+    // a marker inside. Without colour it says nothing, so it is left out.
+    const paceDot = pace?.color && !plain ? `${pace.color}•${RESET}${color}` : '';
+    if (style === 'spark') {
+        const glyph = '▁▂▃▄▅▆▇█'[Math.min(7, Math.max(0, Math.floor((pct * 8) / 100)))];
+        return ` ${glyph}${paceDot}`;
+    }
+    if (style === 'rising') {
+        const units = Math.round((pct * n * 5) / 100);
+        const cells = Array.from({ length: n }, (_, i) => {
+            const u = Math.max(0, Math.min(5, units - i * 5));
+            return u ? ' ▁▂▃▄▅'[u] : muted('·');
+        });
+        return ` ${cells.join('')}${muted('▕')}${paceDot}`;
+    }
+    const cells = cellsFor(pct, n, config.barFilled || spec.filled || '', config.barEmpty || spec.empty || '');
+    const filled = Math.min(n, Math.max(0, Math.round((pct * n) / 100)));
+    // classic draws every cell in the part's colour; the slim styles draw the
+    // empty cells in the muted colour.
+    const drawn = style === 'classic' ? cells : cells.map((cell, i) => (i < filled ? cell : muted(cell)));
+    if (!pace)
+        return ` ${drawn.join('')}`;
+    const pos = Math.min(n - 1, Math.max(0, Math.round(pace.at * n)));
+    let marker;
+    if (spec.marker) {
+        // A pace colour of '' (mono) resets, so the marker never takes a --color.
+        const markerColor = pace.color === undefined ? color : pace.color || (color && RESET);
+        marker = `${markerColor}${spec.marker}${RESET}${color}`;
+    }
+    else if (pace.color === undefined) {
+        // Early in the window there is no pace colour yet, so the cell stays.
+        marker = drawn[pos];
+    }
+    else if (pace.color && !plain) {
+        marker = `${pace.color}${cells[pos]}${RESET}${color}`;
+    }
+    else {
+        // No colour to show the pace by: the classic marker in its place.
+        marker = `${pace.color || (color && RESET)}┃${RESET}${color}`;
+    }
+    return ` ${drawn.slice(0, pos).join('')}${marker}${drawn.slice(pos + 1).join('')}`;
+}
+// `text` underlined for the share used, as the underline style's bar. With
+// a pace, the character where "now" falls takes the pace colour, or, with
+// no colour, shows inverted.
+function underlined(text, pct, color, pace) {
+    const chars = [...text];
+    const cut = Math.min(chars.length, Math.max(0, Math.round((pct * chars.length) / 100)));
+    const pos = pace?.color === undefined ? -1 : Math.min(chars.length - 1, Math.max(0, Math.round(pace.at * chars.length)));
+    const drawn = chars.map((ch, i) => {
+        if (i !== pos)
+            return ch;
+        return pace?.color ? `${pace.color}${ch}${RESET}${color}${i < cut ? UNDERLINE : ''}` : `${INVERSE}${ch}${NO_INVERSE}`;
+    });
+    return `${UNDERLINE}${drawn.slice(0, cut).join('')}${NO_UNDERLINE}${drawn.slice(cut).join('')}`;
+}
+// A part with a bar, in `color`: `head`, the label and percentage, then the
+// bar, then `tail`, such as a count or a reset time. The underline style
+// draws its bar under head and tail instead.
+function barred(head, tail, pct, color, input, pace) {
+    if (!input.config.bars)
+        return `${color}${head}${tail}${RESET}`;
+    const style = barStyleOf(input.config, input.plain);
+    if (style === 'underline')
+        return `${color}${underlined(`${head}${tail}`, pct, color, pace)}${RESET}`;
+    return `${color}${head}${drawBar(pct, color, pace, style, input)}${tail}${RESET}`;
 }
 // The 5h or 7d part. rate_limits is present only for claude.ai Pro and Max
 // subscribers, after the first response of a session; "~" marks a window
 // Claude Code has not reported yet.
-function windowPart(name, { data, config, theme, nowMs }) {
+function windowPart(name, input) {
+    const { data, config, theme } = input;
     const window = WINDOWS[name];
     const label = labelOf(config, name);
     const limit = data.rate_limits?.[window.key];
     if (limit?.used_percentage == null)
         return `${theme.accent}${label}~${RESET}`;
-    return usageSegment(label, { ...limit, used_percentage: limit.used_percentage }, window, config, theme, nowMs);
+    return usageSegment(label, { ...limit, used_percentage: limit.used_percentage }, window, input);
 }
 // A reported window's percentage, bar and reset, behind its label.
-function usageSegment(label, limit, window, config, theme, nowMs) {
+function usageSegment(label, limit, window, input) {
+    const { config, theme, nowMs } = input;
     const pct = Math.round(limit.used_percentage);
     const color = levelColor(theme, pct);
-    const bar = config.bars ? usageBar(pct, color, window, limit.resets_at, config, theme, nowMs) : '';
     const reset = config.reset && limit.resets_at ? ` → ${window.resetText(limit.resets_at, config, nowMs)}` : '';
-    return `${color}${label}${pct}%${bar}${reset}${RESET}`;
+    return barred(`${label}${pct}%`, reset, pct, color, input, paceOf(pct, window, limit.resets_at, config, theme, nowMs));
 }
 // The per-model weekly windows Claude Code reports, as seven_day_<model>
 // keys, sorted by key: the model's name and the window. Keys reach the row
@@ -627,15 +727,17 @@ function modelWindows(data) {
 // The models part: each per-model weekly window as 7d shows the week, with
 // the model's name after the 7d label. The name stays with --no-labels,
 // since without it two windows read alike.
-function modelsPart({ data, config, theme, nowMs }) {
+function modelsPart(input) {
+    const { data, config, theme } = input;
     return modelWindows(data)
-        .map(({ name, limit }) => usageSegment(`${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], config, theme, nowMs))
+        .map(({ name, limit }) => usageSegment(`${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], input))
         .join(separatorOf(config, theme));
 }
 // The context in the token line's shape: ctx 43% ▓▓░░░ 86.0k. Both figures
 // count input only (fresh input plus cache writes and reads), as Claude
 // Code's used_percentage does.
-function contextPart({ data, config, theme }) {
+function contextPart(input) {
+    const { data, config, theme } = input;
     const ctx = data.context_window;
     if (!ctx)
         return '';
@@ -651,9 +753,8 @@ function contextPart({ data, config, theme }) {
         tokens = Math.round((pct * size) / 100);
     const color = theme.context[pct <= 50 ? 0 : pct <= 75 ? 1 : 2];
     const label = labelOf(config, 'ctx');
-    const bar = config.bars ? ` ${cellsFor(pct, config).join('')}` : '';
     const count = tokens != null ? ` ${fmt(tokens)}` : '';
-    return `${color}${label}${Math.round(pct)}%${bar}${count}${RESET}`;
+    return barred(`${label}${Math.round(pct)}%`, count, pct, color, input);
 }
 // The current local time, on the same clock as the reset times.
 function timePart({ config, theme, nowMs }) {
@@ -961,13 +1062,13 @@ const gib = (bytes) => {
 };
 // The memory in use in the ctx part's shape: ram 66% ▓▓▓░░ 10.5G, on the
 // usage colours.
-function ramPart({ config, theme, memory: memoryOf }) {
+function ramPart(input) {
+    const { config, theme, memory: memoryOf } = input;
     const memory = memoryOf();
     if (!memory)
         return '';
     const pct = (memory.used * 100) / memory.total;
-    const bar = config.bars ? ` ${cellsFor(pct, config).join('')}` : '';
-    return `${levelColor(theme, Math.round(pct))}${labelOf(config, 'ram')}${Math.round(pct)}%${bar} ${gib(memory.used)}${RESET}`;
+    return barred(`${labelOf(config, 'ram')}${Math.round(pct)}%`, ` ${gib(memory.used)}`, pct, levelColor(theme, Math.round(pct)), input);
 }
 // The text and command parts: text from --text or from the command's
 // output. Neither comes through render's sanitised payload, so the part
@@ -1580,7 +1681,7 @@ function joinRow(shown, separator, right, widthOf) {
         return join(shown);
     return `${left}${' '.repeat(gap)}${end}`;
 }
-function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = gitStatus, branchOf = headBranch, mtimeOf = fileMtime, env = process.env, setupOf, memoryOf = readMemory, commandOutputOf = runCommand, transcript = readTranscriptActivity, columns, ledger, hostname = os.hostname(), } = {}) {
+function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = gitStatus, branchOf = headBranch, mtimeOf = fileMtime, env = process.env, setupOf, memoryOf = readMemory, commandOutputOf = runCommand, transcript = readTranscriptActivity, columns, ledger, hostname = os.hostname(), plain = false, } = {}) {
     const merged = { ...DEFAULTS, ...overrides };
     const config = { ...merged, segments: segmentsOf(merged.segments) };
     const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
@@ -1627,6 +1728,7 @@ function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = g
         memory: () => (memory ??= { reading: memoryOf() }).reading,
         // Nothing runs without a command, and a command runs once per render.
         commandOutput: () => (commandOutput ??= config.command ? commandOutputOf(config.command, cwd) : ''),
+        plain,
     };
     const separator = separatorOf(config, theme);
     const terminal = columnsOf(columns);
@@ -2763,7 +2865,7 @@ if (isMain) {
             Object.assign(data.workspace, gitWorkspace(cwd));
         // Plain text: it is pasted into a reply, where colour codes and links
         // show as junk.
-        process.stdout.write(stripOwnCodes(render(data, { config, nowMs, ledger: readLedger(ledgerFile()) })) + '\n');
+        process.stdout.write(stripOwnCodes(render(data, { config, nowMs, ledger: readLedger(ledgerFile()), plain: true })) + '\n');
         pruneTranscriptStates(transcriptStateDir(), nowMs);
         pruneTranscriptStates(windowStateDir(), nowMs);
     }

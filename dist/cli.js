@@ -308,7 +308,8 @@ async function interactive(command, replace) {
             }
             replace = true;
         }
-        const preview = (0, wizard_1.previewer)((0, wizard_1.loadPayload)((0, statusline_1.payloadFile)()));
+        // A front end that redraws with the clock gets bars that move.
+        const preview = (0, wizard_1.previewer)((0, wizard_1.loadPayload)((0, statusline_1.payloadFile)()), { sweep: io.animated === true });
         const choices = await (0, wizard_1.runWizard)(io, { preview, installed: command === 'configure' ? (0, settings_1.installedSwitches)(settings) : undefined });
         if (!choices) {
             say(s.info('Nothing changed.'));

@@ -16,20 +16,26 @@
 // straight to the output.
 // The look is VerBump's, from styles.ts, so NO_COLOR turns it off as it does
 // for the readline questions.
+//
+// On a terminal the preview animates: each question redraws it every
+// FRAME_MS, and the preview the wizard gives moves its bars with the clock.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.inkIoWith = inkIoWith;
 exports.loadInkIo = loadInkIo;
 const wizard_1 = require("./wizard");
 const styles_1 = require("./styles");
+// How often an animated question redraws: about 12 frames a second.
+const FRAME_MS = 80;
 // The most options a list shows at once. A longer list scrolls with the
 // selection.
 const VISIBLE = 10;
 // The questions as Ink choices on `deps`, with the text the wizard writes
 // between them going to `output`, in colour when `color` is set.
-function inkIoWith({ ink, React, mount, ready }, output, color) {
+function inkIoWith({ ink, React, mount, ready, animate = false }, output, color) {
     const s = (0, styles_1.styles)(color);
     const h = React.createElement;
     let preview = '';
+    const previewNow = () => (typeof preview === 'function' ? preview() : preview);
     let live;
     // The frame for `view`: the preview, the pill, the question, the options in
     // view with the selection marked, a reason the answer is not taken, and the
@@ -97,6 +103,15 @@ function inkIoWith({ ink, React, mount, ready }, output, color) {
         React.useEffect(() => {
             ready?.();
         }, []);
+        React.useEffect(() => {
+            if (!animate)
+                return undefined;
+            const timer = setInterval(() => {
+                if (!state.current.answered)
+                    redraw((r) => r + 1);
+            }, FRAME_MS);
+            return () => clearInterval(timer);
+        }, []);
         const now = state.current;
         return h(ink.Text, null, frame(view, now.cursor, now.ticked, now.warning));
     };
@@ -129,7 +144,7 @@ function inkIoWith({ ink, React, mount, ready }, output, color) {
                 message,
                 labels: options.map((o) => o.label),
                 initial,
-                preview: (at) => (previewFor ? previewFor(options[at].value) : preview),
+                preview: (at) => (previewFor ? previewFor(options[at].value) : previewNow()),
             });
             return options[cursor].value;
         },
@@ -141,7 +156,7 @@ function inkIoWith({ ink, React, mount, ready }, output, color) {
                 labels: [...options],
                 initial: 0,
                 ticked,
-                preview: (_, now) => (previewFor ? previewFor(now.map((i) => options[i])) : preview),
+                preview: (_, now) => (previewFor ? previewFor(now.map((i) => options[i])) : previewNow()),
             });
             return answer.ticked.map((i) => options[i]);
         },
@@ -152,6 +167,7 @@ function inkIoWith({ ink, React, mount, ready }, output, color) {
     return {
         color,
         choices,
+        animated: animate,
         // Not asked: the wizard asks through `choices`.
         ask: async () => undefined,
         write: (text) => {
@@ -174,5 +190,5 @@ async function loadInkIo(input, output, color) {
         exitOnCtrlC: false,
         patchConsole: false,
     });
-    return inkIoWith({ ink, React, mount }, output, color);
+    return inkIoWith({ ink, React, mount, animate: true }, output, color);
 }

@@ -53,17 +53,19 @@ class Interrupted extends EndOfAnswers {
 exports.Interrupted = Interrupted;
 const MAX_ROWS = 3;
 const SEGMENTS = [5, 10];
-const DEFAULT_CHOICES = { rows: statusline_1.DEFAULT_ROWS, segments: 5, theme: 'default', labels: true, others: [] };
+const DEFAULT_CHOICES = { rows: statusline_1.DEFAULT_ROWS, barStyle: 'classic', segments: 5, theme: 'default', labels: true, others: [] };
 // Whether two lists of parts, or of rows of parts, are the same, in order.
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 // The fewest switches that give `choices`: none for the defaults, then the
 // switches the wizard does not ask about. A row not chosen yet is left out.
-function switchesFor({ rows, segments, theme, labels, others }) {
+function switchesFor({ rows, barStyle, segments, theme, labels, others }) {
     const chosen = rows.filter((row) => row.length);
     const words = [];
     if (!same(chosen, statusline_1.DEFAULT_ROWS))
         for (const row of chosen)
             words.push('--show', row.join(','));
+    if (barStyle !== 'classic')
+        words.push('--bar-style', barStyle);
     if (segments !== 5)
         words.push('--segments', String(segments));
     if (theme !== 'default')
@@ -73,7 +75,7 @@ function switchesFor({ rows, segments, theme, labels, others }) {
     return [...words, ...others];
 }
 // The status line choices that `switches` give, read as the status line reads
-// them, so the last --segments or --theme wins. A part name or theme the
+// them, so the last --bar-style, --segments or --theme wins. A part name or theme the
 // status line does not know reads as the status line shows it: left out, or
 // the default theme.
 function statusChoicesOf(switches) {
@@ -84,6 +86,8 @@ function statusChoicesOf(switches) {
             if (row.length)
                 status.rows.push(row);
         }
+        else if (name === '--bar-style')
+            status.barStyle = statusline_1.BAR_STYLES.includes(value.trim()) ? value.trim() : 'classic';
         else if (name === '--segments')
             status.segments = Number(value) === 10 ? 10 : 5;
         else if (name === '--theme')
@@ -179,6 +183,12 @@ function tokenSwitchesFor(parts, installed) {
     const others = without(installed, '--show');
     return same(parts, tokenline_1.PARTS) ? others : ['--show', parts.join(','), ...others];
 }
+// The token line's `switches` with the status line's bar style, so the two
+// lines draw their bars alike. classic needs no switch.
+const withBarStyle = (switches, barStyle) => [
+    ...without(switches, '--bar-style'),
+    ...(barStyle === 'classic' ? [] : ['--bar-style', barStyle]),
+];
 // Reads the token line's parts: `all` for all five, else a list as readParts
 // reads it.
 function readTokenParts(fallback) {
@@ -239,13 +249,14 @@ function screenOf(io) {
             write(text);
             live = false;
         },
-        // A front end with choices shows the preview with its questions.
+        // A front end with choices shows the preview with its questions, and
+        // takes the function, to call as often as it redraws.
         preview: (text) => {
             if (io.choices)
                 return io.choices.preview(text);
             clear();
             live = true;
-            write(text);
+            write(typeof text === 'function' ? text() : text);
         },
         clear,
     };
@@ -273,23 +284,28 @@ async function askAll(userIo, { preview, tokenPreview = tokenPreviewer(), instal
     // text when the questions take no colour, under `heading` when one is given.
     // With the token line on, its line with `withTokenSwitches` comes under it.
     const previewOf = (choices, withTokenLine = tokenLine, heading = '', withTokenSwitches = tokenSwitches) => {
-        const rendered = preview(switchesFor(choices));
+        const rendered = preview(switchesFor(choices), !io.color);
         const rows = io.color ? rendered : (0, statusline_1.stripOwnCodes)(rendered);
-        const token = withTokenLine ? `on, when each turn ends\n  ${tokenPreview(withTokenSwitches)}` : 'off';
+        const token = withTokenLine ? `on, when each turn ends\n  ${tokenPreview(withBarStyle(withTokenSwitches, choices.barStyle))}` : 'off';
         return `${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${token}\n`;
     };
-    const show = (heading = '') => io.preview(previewOf(status, tokenLine, heading));
+    // A function, so a front end that animates the preview can redraw it.
+    const show = (heading = '') => {
+        const now = status;
+        const line = tokenLine;
+        io.preview(() => previewOf(now, line, heading));
+    };
     // The preview with `change` made to the choices so far, for a choice whose
     // selection moves.
     const previewWith = (change) => previewOf({ ...status, ...change });
     if (isSetUp(installed)) {
         show(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
-        if (await confirm(io, 'Keep the current bars as they are?', true))
+        if (await confirm(io, 'Keep the current lines as they are?', true))
             return {};
     }
     else {
         show('The status line with the defaults:\n');
-        if (await confirm(io, 'Use the defaults: both bars, with the parts above?', true))
+        if (await confirm(io, 'Use the defaults: both lines, with the parts above?', true))
             return { statusLine: [], tokenLine: [] };
     }
     // A row set up, else the default row there.
@@ -317,9 +333,18 @@ async function askAll(userIo, { preview, tokenPreview = tokenPreviewer(), instal
         status = { ...status, rows: withRow(parts) };
         show();
     }
-    const segments = await askFor(io, `Cells per bar, ${SEGMENTS.join(' or ')}? ${hint(s, start.status.segments)} `, (answer) => SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` }, 'INPUT', oneOf('Cells per bar?', SEGMENTS, start.status.segments, (n) => previewWith({ segments: n })));
-    status = { ...status, segments };
+    const barStyle = await askFor(io, `Bar style: ${statusline_1.BAR_STYLES.join(', ')}? ${hint(s, start.status.barStyle)} `, (answer) => {
+        const name = answer.toLowerCase() || start.status.barStyle;
+        return statusline_1.BAR_STYLES.includes(name) ? name : { retry: `Unknown bar style: ${answer}. Answer one of ${statusline_1.BAR_STYLES.join(', ')}.` };
+    }, 'INPUT', oneOf('Bar style?', statusline_1.BAR_STYLES, start.status.barStyle, (name) => previewWith({ barStyle: name })));
+    status = { ...status, barStyle };
     show();
+    // Only classic takes a number of cells: each other style has its own.
+    if (barStyle === 'classic') {
+        const segments = await askFor(io, `Cells per bar, ${SEGMENTS.join(' or ')}? ${hint(s, start.status.segments)} `, (answer) => SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` }, 'INPUT', oneOf('Cells per bar?', SEGMENTS, start.status.segments, (n) => previewWith({ segments: n })));
+        status = { ...status, segments };
+        show();
+    }
     const theme = await askFor(io, `Theme: ${statusline_1.THEMES.join(', ')}? ${hint(s, start.status.theme)} `, (answer) => {
         const name = answer.toLowerCase() || start.status.theme;
         return statusline_1.THEMES.includes(name) ? name : { retry: `Unknown theme: ${answer}. Answer one of ${statusline_1.THEMES.join(', ')}.` };
@@ -350,7 +375,7 @@ async function askAll(userIo, { preview, tokenPreview = tokenPreviewer(), instal
     }
     if (!(await confirm(io, 'Write these choices?', true)))
         return null;
-    return { statusLine: switchesFor(status), tokenLine: tokenLine ? tokenSwitches : null };
+    return { statusLine: switchesFor(status), tokenLine: tokenLine ? withBarStyle(tokenSwitches, status.barStyle) : null };
 }
 // The token line's sample run since the last prompt: four requests, the last
 // at 43% of a 200k context, as in the status line's sample.
@@ -380,8 +405,8 @@ const SAMPLE_WINDOW = 200000;
 // as the token line reads them.
 function tokenPreviewer(nowMs) {
     return (switches) => {
-        const { show, segments, window } = (0, tokenline_1.parseArgs)([...switches]);
-        return (0, tokenline_1.summarize)(SAMPLE_RUN, { now: nowMs === undefined ? new Date() : new Date(nowMs), show, segments, window, savedWindow: SAMPLE_WINDOW }) ?? '';
+        const { show, segments, barStyle, window } = (0, tokenline_1.parseArgs)([...switches]);
+        return (0, tokenline_1.summarize)(SAMPLE_RUN, { now: nowMs === undefined ? new Date() : new Date(nowMs), show, segments, barStyle, window, savedWindow: SAMPLE_WINDOW }) ?? '';
     };
 }
 const REPO = 'jv-k/claude-gauge';
@@ -566,6 +591,45 @@ function loadPayload(file, nowMs = Date.now()) {
     }
     return samplePayload(nowMs);
 }
+// The payload with the context, 5h and 7d bars moved to where they are at
+// `nowMs` in the preview's animation. Each climbs and falls on its own
+// period, and "now" moves through each window, so the pace marker walks
+// and changes colour. The other fields stay as they are.
+function swept(payload, nowMs) {
+    const wave = (period, phase) => {
+        const x = (((nowMs / period + phase) % 1) + 1) % 1;
+        return x < 0.5 ? x * 2 : 2 - x * 2;
+    };
+    const pct = (period, phase) => {
+        const x = wave(period, phase);
+        return Math.round(100 * x * x * (3 - 2 * x));
+    };
+    const resetsAt = (seconds, period, phase) => Math.floor(nowMs / 1000 + seconds * (0.92 - 0.84 * wave(period, phase)));
+    // Without the token counts, ctx counts its tokens from the percentage.
+    const context = { context_window_size: 200000, ...payload.context_window, used_percentage: pct(8000, 0.5) };
+    delete context.current_usage;
+    delete context.total_input_tokens;
+    return {
+        ...payload,
+        context_window: context,
+        rate_limits: {
+            ...payload.rate_limits,
+            five_hour: { used_percentage: pct(6000, 0), resets_at: resetsAt(5 * 3600, 7000, 0.15) },
+            seven_day: { used_percentage: pct(9000, 0.3), resets_at: resetsAt(7 * 86400, 11000, 0.6) },
+        },
+    };
+}
+// `read` with each answer kept by its key, for an animated preview, which
+// renders many times a second and must not run git or read files each time.
+function kept(read) {
+    const answers = new Map();
+    return (...args) => {
+        const key = JSON.stringify(args);
+        if (!answers.has(key))
+            answers.set(key, read(...args));
+        return answers.get(key);
+    };
+}
 // The preview: the status line's rows for `payload`, with the given switches
 // as words, as the settings command passes them. A part with nothing to show
 // shows its sample, and only the preview does: the status line itself shows
@@ -573,15 +637,22 @@ function loadPayload(file, nowMs = Date.now()) {
 // Code loads, as the status line does, but never runs --command, and takes
 // the sample ledger in place of the real one.
 function previewer(payload, options = {}) {
-    const { transcript = statusline_1.readTranscriptActivity, statusOf = statusline_1.gitStatus, branchOf = statusline_1.headBranch, memoryOf = statusline_1.readMemory } = options;
-    const setupOf = options.setupOf ?? ((cwd) => (0, statusline_1.readSetup)(cwd, { env: options.env ?? process.env }));
-    return (switches) => {
+    const { sweep = false, ...renderOptions } = options;
+    const keep = (read) => (sweep ? kept(read) : read);
+    const transcript = keep(options.transcript ?? statusline_1.readTranscriptActivity);
+    const statusOf = keep(options.statusOf ?? statusline_1.gitStatus);
+    const branchOf = keep(options.branchOf ?? statusline_1.headBranch);
+    const memoryOf = keep(options.memoryOf ?? statusline_1.readMemory);
+    const setupOf = keep(options.setupOf ?? ((cwd) => (0, statusline_1.readSetup)(cwd, { env: options.env ?? process.env })));
+    return (switches, plain = false) => {
         const nowMs = options.nowMs ?? Date.now();
         const config = (0, statusline_1.parseArgs)([...switches]);
         const shown = new Set((config.rows ?? statusline_1.DEFAULT_ROWS).flat());
-        return (0, statusline_1.render)(withSamplePayload(payload, nowMs, shown), {
-            ...options,
+        const data = withSamplePayload(payload, nowMs, shown);
+        return (0, statusline_1.render)(sweep ? swept(data, nowMs) : data, {
+            ...renderOptions,
             nowMs,
+            plain,
             // Any command will do, as the preview runs none: the part shows the
             // sample's output.
             config: { ...config, text: config.text || SAMPLE_TEXT, command: config.command || 'sample' },

@@ -20,7 +20,11 @@
 // Switches:
 //   --show <parts>      parts to show, in order, comma-separated, from
 //                       time,req,out,cache,ctx (default: all of them)
-//   --segments <5|10>   cells in the context bar (default 5)
+//   --segments <5|10>   cells in the context bar, with the classic bar style
+//                       (default 5)
+//   --bar-style <name>  how the context bar is drawn: classic, steps,
+//                       rising, hairline, dots, spark or underline, as on
+//                       the status line (default classic)
 //   --window <tokens>   context window size, e.g. 200k or 1m, over the size
 //                       the status line saved for the session. Without
 //                       either, the window is 200k, or 1M once the context
@@ -58,6 +62,7 @@ const SWITCHES = [
         },
     },
     { name: '--segments', takesValue: true, apply: (opts, value) => { opts.segments = value; } },
+    { name: '--bar-style', takesValue: true, apply: (opts, value) => { opts.barStyle = value.trim(); } },
     { name: '--window', takesValue: true, apply: (opts, value) => { opts.window = value; } },
     { name: '--latest', apply: (opts) => { opts.latest = true; } },
 ];
@@ -111,10 +116,32 @@ function contextWindow(ctx, explicit, saved) {
 }
 // Bars come in 5 or 10 cells; anything else falls back to 5.
 const segmentsOf = (value) => (Number(value) === 10 ? 10 : 5);
-// A bar of `segments` cells over the context window.
-const bar = (pct, segments) => {
-    const filled = Math.min(segments, Math.max(0, Math.round((pct * segments) / 100)));
-    return '▓'.repeat(filled) + '░'.repeat(segments - filled);
+// The bar styles, as the status line draws them without colour (see
+// docs/adr/0007), with the cells each one has. The token line is plain
+// text, so underline, which needs an underline code, draws as classic, and
+// there is no pace marker. classic takes --segments.
+const BAR_STYLES = {
+    classic: { filled: '▓', empty: '░' },
+    steps: { cells: 6, filled: '▅', empty: '▁' },
+    rising: { cells: 3 },
+    hairline: { cells: 8, filled: '━', empty: '─' },
+    dots: { cells: 6, filled: '•', empty: '·' },
+    spark: { cells: 1 },
+    underline: { filled: '▓', empty: '░' },
+};
+// The context bar in `style` (classic for an unknown name), with `segments`
+// cells for classic.
+const bar = (pct, segments, style = 'classic') => {
+    const spec = Object.hasOwn(BAR_STYLES, style) ? BAR_STYLES[style] : BAR_STYLES.classic;
+    const n = spec.cells ?? segments;
+    if (style === 'spark')
+        return '▁▂▃▄▅▆▇█'[Math.min(7, Math.max(0, Math.floor((pct * 8) / 100)))];
+    if (style === 'rising') {
+        const units = Math.round((pct * n * 5) / 100);
+        return `${Array.from({ length: n }, (_, i) => ' ▁▂▃▄▅·'[Math.max(0, Math.min(5, units - i * 5)) || 6]).join('')}▕`;
+    }
+    const filled = Math.min(n, Math.max(0, Math.round((pct * n) / 100)));
+    return (spec.filled ?? '').repeat(filled) + (spec.empty ?? '').repeat(n - filled);
 };
 // Local HH:MM, enough to tell runs apart in a scrollback.
 const stamp = (d) => {
@@ -159,7 +186,7 @@ function tally(records) {
 }
 // Builds the line from parsed transcript records; null when the run made no
 // API request yet, or when none of the chosen parts has anything to show.
-function summarize(records, { now = new Date(), window, savedWindow, segments, show = PARTS } = {}) {
+function summarize(records, { now = new Date(), window, savedWindow, segments, barStyle, show = PARTS } = {}) {
     let start = 0;
     for (let i = records.length - 1; i >= 0; i--) {
         if (isHumanPrompt(records[i])) {
@@ -180,7 +207,7 @@ function summarize(records, { now = new Date(), window, savedWindow, segments, s
             if (!run.ctx)
                 return '';
             const pct = (run.ctx / contextWindow(run.ctx, window, savedWindow)) * 100;
-            return `ctx ${Math.round(pct)}% ${bar(pct, segmentsOf(segments))} ${fmt(run.ctx)}`;
+            return `ctx ${Math.round(pct)}% ${bar(pct, segmentsOf(segments), barStyle)} ${fmt(run.ctx)}`;
         },
     };
     // A show list handed in from JavaScript may name parts the registry lacks;
