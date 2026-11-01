@@ -1451,6 +1451,9 @@ function speedPart({ theme, activity: activityOf }: PartContext): string {
 // from the files it reads them from. Only local files, never the network or
 // the macOS Keychain, and a file that is missing or not JSON counts as empty.
 
+// Whether a path that exists belongs to another user.
+type OwnerCheck = (file: string) => boolean;
+
 interface SetupOptions {
   env?: Env;
   home?: string;
@@ -1461,7 +1464,7 @@ interface SetupOptions {
   // Whether a path that exists belongs to another user, for tests to
   // replace. The default compares its owner with the current user's id,
   // and says no where the OS has none.
-  ownedByOther?: (file: string) => boolean;
+  ownedByOther?: OwnerCheck;
 }
 
 const MANAGED_DIRS: Record<string, string> = {
@@ -1531,8 +1534,9 @@ function foldersDownTo(cwd: string): string[] {
   }
 }
 
-// Whether a path belongs to another user: its owner is not the current
-// user's id. No path does where the OS has no user ids, as on Windows.
+// Whether a path that exists belongs to another user: its owner is not the
+// current user's id. No path does where the OS has no user ids, as on
+// Windows. A missing path throws.
 function ownedByAnotherUser(file: string): boolean {
   const uid = process.getuid?.();
   return uid !== undefined && fs.statSync(file).uid !== uid;
@@ -1544,7 +1548,7 @@ function ownedByAnotherUser(file: string): boolean {
 // .git file names. The launch folder itself outside a repository, where the
 // root is the home folder, on Windows, and where the root, its .git entry or
 // its .claude folder is not the current user's.
-function localSettingsDir(project: string, home: string, platform: string, ownedByOther: (file: string) => boolean): string {
+function localSettingsDir(project: string, home: string, platform: string, ownedByOther: OwnerCheck): string {
   if (platform === 'win32') return project;
   try {
     const entry = gitEntryAbove(project);
@@ -1554,8 +1558,8 @@ function localSettingsDir(project: string, home: string, platform: string, owned
     const linked = entry.gitDir !== path.join(entry.dir, '.git') && path.basename(worktrees) === 'worktrees' && path.basename(path.dirname(worktrees)) === '.git';
     const root = linked ? path.dirname(path.dirname(worktrees)) : entry.dir;
     if (root === path.resolve(home)) return project;
-    for (const owned of [root, path.join(root, '.git'), path.join(root, '.claude')]) {
-      if (fs.existsSync(owned) && ownedByOther(owned)) return project;
+    for (const candidate of [root, path.join(root, '.git'), path.join(root, '.claude')]) {
+      if (fs.existsSync(candidate) && ownedByOther(candidate)) return project;
     }
     return root;
   } catch {
