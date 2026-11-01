@@ -128,10 +128,8 @@ test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () =>
 });
 
 // --latest as a program: a home folder and a config folder of the test's own,
-// each holding a transcript only where the test writes one.
-
-// Both runs name the same session, as Claude Code exports it to the commands
-// it runs.
+// each holding a transcript only where the test writes one. Both runs name the
+// same session, as Claude Code exports it to the commands it runs.
 const SESSION = 'session-1';
 
 // Writes a transcript of one request to <folder>/projects/<project>/<session>.jsonl.
@@ -156,18 +154,18 @@ const latestRun = (runtime, { config, home }) => {
 const LINE = '1 req │ ctx 53% ▓▓▓░░ 106k\n';
 
 test('--latest reads the transcript under CLAUDE_CONFIG_DIR when it is set', () => {
-  const [home, config] = [tempDir(), tempDir()];
+  const [home, config] = [tempDir('claude-gauge-'), tempDir('claude-gauge-')];
   writeTranscript(config);
   assert.equal(latestRun('node', { config, home }), LINE);
 });
 
 test('--latest reads ~/.claude/projects when CLAUDE_CONFIG_DIR is unset or empty, and only then', () => {
-  const home = tempDir();
+  const home = tempDir('claude-gauge-');
   writeTranscript(path.join(home, '.claude'));
   assert.equal(latestRun('node', { config: undefined, home }), LINE);
   assert.equal(latestRun('node', { config: '', home }), LINE);
   // A config folder without the transcript: the one in the home folder is not read.
-  assert.equal(latestRun('node', { config: tempDir(), home }), '');
+  assert.equal(latestRun('node', { config: tempDir('claude-gauge-'), home }), '');
 });
 
 // The token line runs under Bun too, from its source. The check skips where
@@ -176,10 +174,10 @@ const hasBun = spawnSync('bun', ['--version'], { encoding: 'utf8' }).status === 
 const withoutBun = !hasBun && 'bun is not installed';
 
 test('bun runs --latest from source and finds the same transcripts', { skip: withoutBun }, () => {
-  const [home, config] = [tempDir(), tempDir()];
+  const [home, config] = [tempDir('claude-gauge-'), tempDir('claude-gauge-')];
   writeTranscript(config);
   assert.equal(latestRun('bun', { config, home }), LINE);
-  const otherHome = tempDir();
+  const otherHome = tempDir('claude-gauge-');
   writeTranscript(path.join(otherHome, '.claude'));
   assert.equal(latestRun('bun', { config: undefined, home: otherHome }), LINE);
 });
