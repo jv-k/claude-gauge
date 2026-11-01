@@ -821,18 +821,18 @@ const versions = {
   [`${LOCAL_DIR}/hooks/hooks.json`]: { hooks: hooks(['Stop', 3]) },
   [`${MANAGED_DIR}/hooks/hooks.json`]: { hooks: hooks(['Stop', 4]) },
 };
-const user = { scope: 'user', installPath: USER_DIR, projectPath: null };
-const hooksOf = (installs, files = {}) => pluginSetup(pluginTree({ ...versions, ...files }, { installs })).hooks;
+const userInstall = { scope: 'user', installPath: USER_DIR, projectPath: null };
+const hooksOf = (installs) => pluginSetup(pluginTree(versions, { installs })).hooks;
 
 test('a plugin\'s project or local install counts only in the folder it was installed for', () => {
   const here = 'home/work/project';
   // The user's install is first, and the project's for the launch folder wins.
-  assert.equal(hooksOf([user, { scope: 'project', installPath: PROJECT_DIR, projectPath: here }]), 2);
+  assert.equal(hooksOf([userInstall, { scope: 'project', installPath: PROJECT_DIR, projectPath: here }]), 2);
   // A project install for another folder counts nothing, alone or beside the user's.
   const other = { scope: 'project', installPath: PROJECT_DIR, projectPath: 'home/work/other' };
   assert.equal(hooksOf([other]), 0);
-  assert.equal(hooksOf([other, user]), 1);
-  assert.equal(hooksOf([{ scope: 'local', installPath: LOCAL_DIR, projectPath: 'home/work/other' }, user]), 1);
+  assert.equal(hooksOf([other, userInstall]), 1);
+  assert.equal(hooksOf([{ scope: 'local', installPath: LOCAL_DIR, projectPath: 'home/work/other' }, userInstall]), 1);
 });
 
 test('where several installs apply, the most specific counts: managed, local, project, then user', () => {
@@ -840,23 +840,24 @@ test('where several installs apply, the most specific counts: managed, local, pr
   const project = { scope: 'project', installPath: PROJECT_DIR, projectPath: here };
   const local = { scope: 'local', installPath: LOCAL_DIR, projectPath: here };
   const managed = { scope: 'managed', installPath: MANAGED_DIR };
-  assert.equal(hooksOf([user, local, project]), 3);
-  assert.equal(hooksOf([local, managed, project, user]), 4);
+  assert.equal(hooksOf([userInstall, local, project]), 3);
+  assert.equal(hooksOf([local, managed, project, userInstall]), 4);
   // An install with no scope applies everywhere, as a user install does.
   assert.equal(hooksOf([{ installPath: USER_DIR }]), 1);
   // The most specific install with no installPath is passed over.
-  assert.equal(hooksOf([user, { scope: 'local', projectPath: here }]), 1);
+  assert.equal(hooksOf([userInstall, { scope: 'local', projectPath: here }]), 1);
 });
 
 test('a local install for the repository root counts in a folder under it', () => {
   const { readSetup } = require('../dist/statusline.js');
+  const fs = require('node:fs');
   const repo = 'home/work/project';
   const tree = pluginTree(
     { ...versions, [`${repo}/.git/HEAD`]: 'ref: refs/heads/main\n' },
-    { installs: [user, { scope: 'local', installPath: LOCAL_DIR, projectPath: repo }] },
+    { installs: [userInstall, { scope: 'local', installPath: LOCAL_DIR, projectPath: repo }] },
   );
   const launch = path.join(tree.root, repo, 'packages/app');
-  require('node:fs').mkdirSync(launch, { recursive: true });
+  fs.mkdirSync(launch, { recursive: true });
   assert.equal(readSetup(launch, { ...tree.options, env: configEnv(tree) }).hooks, 3);
 });
 
