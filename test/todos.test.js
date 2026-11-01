@@ -225,6 +225,12 @@ test('a TaskGet result adds a task the reader did not know, and changes one it d
     { content: 'Read the whole reader', activeForm: 'Reading the reader', status: 'in_progress' },
   ]);
   assert.deepEqual(todosIn([...created, ...taskGet('8', null)]), [{ content: 'Read the reader', activeForm: 'Reading the reader', status: 'pending' }]);
+  // A null result for a task the reader knew: another session deleted it.
+  assert.deepEqual(todosIn([...created, ...taskGet('1', null)]), []);
+  // A result with no task data at all changes nothing.
+  assert.deepEqual(todosIn([...created, ...done('TaskGet', { taskId: '1' }, {})]), [
+    { content: 'Read the reader', activeForm: 'Reading the reader', status: 'pending' },
+  ]);
 });
 
 test('an update to an unknown task applies once a later TaskList or TaskGet names it', () => {

@@ -2618,7 +2618,7 @@ function readTask(state: TranscriptState, task: unknown): TodoEntry | undefined 
 // TodoWrite replaces the list, TaskCreate adds a pending task, and
 // TaskUpdate changes one, or drops it when it is deleted. A TaskList result
 // replaces the list with the shared task list it names, and a TaskGet result
-// changes or adds the one task it names.
+// changes or adds the one task it names, or drops it when it names none.
 function applyTodoCall(state: TranscriptState, todoCall: TodoCall, block: ContentBlock, record: TranscriptRecord): void {
   if (resultFailed(block, record)) return;
   const input = isObject(todoCall.input) ? todoCall.input : {};
@@ -2628,6 +2628,12 @@ function applyTodoCall(state: TranscriptState, todoCall: TodoCall, block: Conten
   } else if (todoCall.name === 'TaskList') {
     if (Array.isArray(data.tasks)) state.todos = data.tasks.flatMap((task) => readTask(state, task) ?? []);
   } else if (todoCall.name === 'TaskGet') {
+    // A null task is one the shared list no longer holds.
+    if (data.task === null) {
+      const id = idAt(input, 'taskId');
+      state.todos = state.todos.filter((t) => t.id !== id);
+      return;
+    }
     const task = readTask(state, data.task);
     if (!task) return;
     const at = state.todos.findIndex((t) => t.id === task.id);
