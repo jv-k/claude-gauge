@@ -1,3 +1,10 @@
+## 1.4.1 (2026-11-01)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.4.0 -> 1.4.1
+- chore(dist): build dist from 45839d3 [auto]
+- Merge pull request #163 from jv-k/fix/npx-test-colour
+- fix(wizard): return nothing from the effect that says the question is ready
+- test: keep a FORCE_COLOR in the shell from failing the npx package test
+
 ## 1.4.0 (2026-11-01)
 - chore: updated package.json, updated CHANGELOG.md, bumped 1.3.0 -> 1.4.0
 - chore(dist): build dist from c5224fb [auto]
