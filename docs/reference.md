@@ -22,6 +22,7 @@ This page lists every part, switch, theme and install route. The [README](../REA
 - [Options](#options)
   - [Status line options](#status-line-options)
     - [Themes](#themes)
+    - [Bar styles](#bar-styles)
     - [Colours and bar characters](#colours-and-bar-characters)
     - [Examples](#examples)
     - [Keeping time-based parts fresh](#keeping-time-based-parts-fresh)
@@ -54,7 +55,7 @@ The default rows hold these parts, in this order. The name in the first column i
 
 **Usage colours.** Each usage bar has 10 colour steps, from dark green at 0–10% to deep red above 90%. These colours, and the others on this page, are the `default` theme's. `--theme` picks another (see [Themes](#themes)).
 
-**Pace marker.** The `┃` sits at the share of the window that has passed. If it is ahead of the filled cells, you are using less than an even pace. Its colour comes from the usage projected for the end of the window, calculated as used % × window length ÷ time elapsed:
+**Pace marker.** The `┃` sits at the share of the window that has passed. Some [bar styles](#bar-styles) draw it another way. If it is ahead of the filled cells, you are using less than an even pace. Its colour comes from the usage projected for the end of the window, calculated as used % × window length ÷ time elapsed:
 
 | Projected usage | Colour |
 | --- | --- |
@@ -394,7 +395,7 @@ Both scripts take switches on the command line, so you set them in the `command`
 | Switch | Effect |
 | --- | --- |
 | `--show <parts>` | One row: the parts to show, in the order given, separated by commas. Parts: those in [Status line](#status-line) and [More status line parts](#more-status-line-parts). Repeat `--show` for more rows. Default: two rows, `ctx,5h,7d` and `time,duration,repo,branch,model,effort`. |
-| `--segments <5\|10>` | Cells per bar. Default: 5. Any other value gives 5. |
+| `--segments <5\|10>` | Cells per bar, with the `classic` bar style. Default: 5. Any other value gives 5. The other bar styles have their own widths. |
 | `--no-labels` | Drops the labels in front of values, such as `ctx`, `5h`, `7d` and `effort`. |
 | `--no-bars` | Drops the bars, and with them the pace markers. |
 | `--no-pace` | Drops the pace markers. |
@@ -407,8 +408,9 @@ Both scripts take switches on the command line, so you set them in the `command`
 | `--command <command>` | The shell command that the `command` part runs. Quote the command as one value: `--command 'kubectl config current-context'`. It runs only when a `--show` row names `command`. See [Memory, text and command](#memory-text-and-command) for its rules. |
 | `--theme <name>` | The colour preset: `default`, `mono`, `high-contrast` or `pastel`. An unknown name gives `default`. See [Themes](#themes). |
 | `--color <part>=<colour>` | One part's colour, over the theme's: a name such as `red` or `bright-red`, a 256-colour number from `0` to `255`, or a hex colour such as `#ff8800` or `#f80`. Separate more parts with commas, or repeat the switch. See [Colours and bar characters](#colours-and-bar-characters). |
-| `--bar-filled <char>` | The character of a filled bar cell. Default: `▓`. |
-| `--bar-empty <char>` | The character of an empty bar cell. Default: `░`. |
+| `--bar-style <name>` | How every bar is drawn: `classic`, `steps`, `rising`, `hairline`, `dots`, `spark` or `underline`. Default: `classic`. An unknown name gives `classic`. See [Bar styles](#bar-styles). |
+| `--bar-filled <char>` | The character of a filled bar cell, in the `classic`, `steps`, `hairline` and `dots` bar styles. Default: the style's own, such as `▓` for `classic`. |
+| `--bar-empty <char>` | The character of an empty bar cell, in the `classic`, `steps`, `hairline` and `dots` bar styles. Default: the style's own, such as `░` for `classic`. |
 | `--latest` | Prints the rows for the calling session from its transcript, as plain text, instead of reading Claude Code's input. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 | `--window <size>` | With `--latest`: the context window size, for example `200k` or `1m`, as for the token line. |
 | `--instruct` | As a SessionStart hook: in the VS Code extension and the desktop app, prints an instruction that has Claude end each reply with the `--latest` rows. In the terminal CLI, prints nothing. The other switches pass through to the command it names. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
@@ -428,11 +430,29 @@ A row with nothing to show is left out, and a `--show` that names no known part 
 
 The pace marker keeps its six steps in every theme but `mono`, where only its position shows the pace.
 
+#### Bar styles
+
+`--bar-style` sets how every bar is drawn: the `ctx`, `ram` and usage bars, and the token line's `ctx` bar when its command has the same switch. A bar style changes only the bar and the pace marker. The labels, percentages, reset times and separators stay as they are, and `--theme` still sets the colours. Each style has its own width; only `classic` takes `--segments`. The examples show `5h 43%`, about half-way through the window.
+
+| Style | Example | The bar |
+| --- | --- | --- |
+| `classic` | `5h 43% ▓▓┃░░ → 16:30` | Shaded cells, 5 or 10 with `--segments`, and `┃` for the pace marker. The default. |
+| `steps` | `5h 43% ▅▅▅▁▁▁ → 16:30` | 6 cells: tall blocks for the share used over a low track for the rest. The cell where "now" falls takes the pace colour. |
+| `rising` | `5h 43% ▅▁·▕• → 16:30` | 3 cells. The last filled cell rises `▁▂▃▄` to a full `▅`, so the bar shows 15 steps. A `•` after it takes the pace colour. |
+| `hairline` | `5h 43% ━━━─╋─── → 16:30` | 8 cells of thin rule, and `╋` for the pace marker. |
+| `dots` | `5h 43% •••\|·· → 16:30` | 6 dots, and `\|` for the pace marker. |
+| `spark` | `5h 43% ▄• → 16:30` | 1 cell whose height shows the share, `▁` to `█`. A `•` after it takes the pace colour. |
+| `underline` | `5h 43% → 16:30` | No bar characters. The part's own text is underlined for the share used, and the character where "now" falls takes the pace colour. |
+
+The empty cells of every style but `classic` take the theme's detail colour, so the share used stands out. Early in a window, before the pace colour is reliable, `steps` and `underline` show no marker, and `rising` and `spark` show no `•`.
+
+Without colour, a pace colour cannot show. With the `mono` theme, and in the plain text of `--latest`, `steps` draws `┃` in the marker's cell, `underline` shows the marker's character inverted, and `rising` and `spark` leave out the `•`. Plain text also has no underline, so with `--latest`, and on the token line, which is plain text, `underline` draws as `classic`.
+
 #### Colours and bar characters
 
 `--color` sets one part to one colour, on top of the theme. The whole part takes that colour, except the pace marker, whose colour is what it reports. The `│` separators keep the theme's colour. The colour names are `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan` and `white`, each also as `bright-red` and so on, and `gray` or `grey`. A hex colour needs a terminal with 24-bit colour. An unknown part or colour is ignored.
 
-`--bar-filled` and `--bar-empty` each take one character, and every bar uses it, the `ctx` bar and the usage bars alike. More than one character, or a control character, is ignored. A wide character, such as an emoji, makes the bar wider.
+`--bar-filled` and `--bar-empty` each take one character, and every bar uses it, the `ctx` bar and the usage bars alike, in the bar styles that have filled and empty cells: `classic`, `steps`, `hairline` and `dots`. `rising`, `spark` and `underline` ignore them. More than one character, or a control character, is ignored. A wide character, such as an emoji, makes the bar wider.
 
 #### Examples
 
@@ -515,7 +535,8 @@ Claude Code reruns a status line when something happens in the session, such as 
 | Switch | Effect |
 | --- | --- |
 | `--show <parts>` | The parts to show, in the order given, separated by commas. Parts: `time`, `req`, `out`, `cache`, `ctx`. Default: all of them, in that order. |
-| `--segments <5\|10>` | Cells in the context bar. Default: 5. Any other value gives 5. |
+| `--segments <5\|10>` | Cells in the context bar, with the `classic` bar style. Default: 5. Any other value gives 5. |
+| `--bar-style <name>` | How the context bar is drawn, as for the status line: `classic`, `steps`, `rising`, `hairline`, `dots`, `spark` or `underline`. The token line is plain text, so `underline` draws as `classic`. Default: `classic`. See [Bar styles](#bar-styles). |
 | `--window <size>` | The context window size, for example `200k` or `1m`. It replaces the size that the status line saved. |
 | `--latest` | Prints the line for the calling session, instead of reading a hook payload. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 | `--instruct` | As a SessionStart hook: in the VS Code extension and the desktop app, prints an instruction that has Claude end each reply with the `--latest` line. In the terminal CLI, prints nothing. The other switches pass through to the command it names. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |

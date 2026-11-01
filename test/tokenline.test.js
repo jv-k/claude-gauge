@@ -60,6 +60,17 @@ test('--segments 10 draws a 10-cell context bar', () => {
   assert.match(withArgs(records, ['--segments=7']), /ctx 53% ▓▓▓░░ 106k$/);
 });
 
+test('--bar-style draws the context bar as the status line does, with underline as classic', () => {
+  const records = [prompt('go'), assistant('m1', usage(100, 6000, 100000))];
+  assert.match(withArgs(records, ['--bar-style', 'steps']), /ctx 53% ▅▅▅▁▁▁ 106k$/);
+  assert.match(withArgs(records, ['--bar-style', 'rising']), /ctx 53% ▅▃·▕ 106k$/);
+  assert.match(withArgs(records, ['--bar-style', 'hairline']), /ctx 53% ━━━━──── 106k$/);
+  assert.match(withArgs(records, ['--bar-style', 'dots']), /ctx 53% •••··· 106k$/);
+  assert.match(withArgs(records, ['--bar-style', 'spark']), /ctx 53% ▅ 106k$/);
+  assert.match(withArgs(records, ['--bar-style', 'underline', '--segments', '10']), /ctx 53% ▓▓▓▓▓░░░░░ 106k$/);
+  assert.match(withArgs(records, ['--bar-style=wavy']), /ctx 53% ▓▓▓░░ 106k$/);
+});
+
 test('--show picks the parts and their order, ignoring unknown ones', () => {
   const records = [prompt('go'), assistant('m1', usage(100, 6000, 100000))];
   assert.equal(withArgs(records, ['--show', 'req,ctx']), '1 req │ ctx 53% ▓▓▓░░ 106k');
