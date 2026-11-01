@@ -389,7 +389,7 @@ Both scripts take switches on the command line, so you set them in the `command`
 | `--12h` | Shows the `time` part and reset times on the 12-hour clock. Default: 24-hour. |
 | `--compact` | Fits narrow terminals: `│` between parts with no spaces round it, and shorter labels: `c` for `ctx`, `eff` for `effort`, `sty` for `style`, `agt` for `agent`, `cch` for `cache`, `spd` for `spend`, `tdy` for `today`, `wk` for `week` and `cmp` for `compactions`. The other labels are short already. |
 | `--no-links` | Drops the links on `dir`, `repo`, `branch` and `pr`. See [Links](#links). |
-| `--right <parts>` | The parts to right-align, separated by commas. In each row that shows any of them, they move to the end of the row, in the row's order, and spaces fill the gap so the row ends at the terminal's right edge. Claude Code gives the terminal width in `COLUMNS`. When the width is unknown, as with `--latest`, the row is too long to leave a gap, or the row holds characters whose width varies by terminal, such as CJK text and emoji, the row is left as it is. Repeat `--right` to name more parts. |
+| `--right <parts>` | The parts to right-align, separated by commas. In each row that shows any of them, they move to the end of the row, in the row's order, and spaces fill the gap so the row ends at the last column Claude Code shows. Claude Code gives the terminal width in `COLUMNS`, and keeps 2 columns free on each side of the status line, plus `statusLine.padding` from your settings. So a `--right` row is `COLUMNS - 2 × (2 + padding)` columns wide: 96 columns in a 100-column terminal, or 92 with `"padding": 2`. When the width is unknown, as with `--latest`, the row is too long to leave a gap, or the row holds characters whose width varies by terminal, such as CJK text and emoji, the row is left as it is. Repeat `--right` to name more parts. |
 | `--text <text>` | The text that the `text` part shows. Quote text that holds spaces: `--text 'work laptop'`. If you give `--text` more than once, the last one counts. |
 | `--command <command>` | The shell command that the `command` part runs. Quote the command as one value: `--command 'kubectl config current-context'`. It runs only when a `--show` row names `command`. See [Memory, text and command](#memory-text-and-command) for its rules. |
 | `--theme <name>` | The colour preset: `default`, `mono`, `high-contrast` or `pastel`. An unknown name gives `default`. See [Themes](#themes). |
@@ -458,7 +458,7 @@ c 43% ▓▓░░░ 86.0k│5h 9% ░░┃░░ → 14:10│7d 41% ▓▓░
 jv-k/claude-gauge│⎇ main│Opus 5.5│eff high
 ```
 
-The model and effort at the right edge of a 72-column terminal, with `--right`:
+The model and effort at the right edge of a 76-column terminal, with `--right`. The row is 72 columns wide, because Claude Code keeps 2 columns free on each side:
 
 ```text
 --show ctx,5h,7d --show repo,branch,model,effort --right model,effort

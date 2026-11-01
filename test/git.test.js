@@ -127,7 +127,9 @@ test('the default second row shows the branch markers', () => {
 
 test('--right counts the git marks as one column each', () => {
   const statusOf = () => status({ entries: [entry('.D', 'gone.ts'), '? new.ts'] });
-  const out = plain(render(data, { config: parseArgs(['--show', 'branch,git', '--right', 'git']), statusOf, columns: 24 }));
+  // Claude Code keeps 2 columns free on each side, so 28 columns leave 24.
+  const setupOf = () => ({ claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
+  const out = plain(render(data, { config: parseArgs(['--show', 'branch,git', '--right', 'git']), statusOf, setupOf, columns: 28 }));
   assert.equal(out, '⎇ main*            ✘1 ?1');
 });
 
