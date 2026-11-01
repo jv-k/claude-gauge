@@ -29,7 +29,7 @@ import { spawnSync } from 'node:child_process';
 import { plan, commandFor, installed, installedSwitches, ownerOf, isForeign } from './settings';
 import type { PerBar, Choices, StatusLineSetting } from './settings';
 import { readSettings, writeSettings, writeAtomic } from './settings-file';
-import { runWizard, offerStar, confirm, loadPayload, previewer, streamIo } from './wizard';
+import { runWizard, offerStar, confirm, loadPayload, previewer, openIo, Interrupted } from './wizard';
 import { payloadFile } from './statusline';
 import { wordmark, colorEnabled } from './wordmark';
 import { styles, stylesFor } from './styles';
@@ -326,9 +326,10 @@ const starWithGh = () => spawnSync('gh', ['api', '--method', 'PUT', 'user/starre
 // setup or configure with no bar switches: asks before it replaces another
 // status line, then asks for the bars, and writes them. configure starts the
 // questions from the bars set up, setup from the defaults. setup ends with
-// the star offer.
+// the star offer. On a terminal the questions are Ink's choices where Ink
+// loads, else typed answers, as for piped ones.
 async function interactive(command: 'setup' | 'configure', replace: boolean): Promise<void> {
-  const io = streamIo(process.stdin, process.stdout);
+  const io = await openIo(process.stdin, process.stdout);
   const s = stylesFor(process.stdout);
   try {
     io.write(wordmark(colorEnabled(process.stdout)) + s.pill(command));
@@ -548,6 +549,11 @@ async function main(argv: string[]): Promise<number> {
     if (err instanceof UsageError) {
       process.stderr.write(`${failure(err.message)}\n${usage(process.stderr)}`);
       return 2;
+    }
+    // Ctrl+C at a question: nothing changed, and the shell's code for it.
+    if (err instanceof Interrupted) {
+      process.stderr.write(stylesFor(process.stderr).info(err.message));
+      return 130;
     }
     if (err instanceof MissingTool) {
       process.stderr.write(failure(err.message));

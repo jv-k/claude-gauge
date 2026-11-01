@@ -221,7 +221,20 @@ In a terminal, run setup with npx:
 npx @jv-k/claude-gauge setup
 ```
 
-Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, then whether to add the token line, and if so, which parts it shows and your context window, 200k or 1M, so that its percentage is right from the first turn. It redraws the status line after each answer, from your last terminal session's figures or from a sample. In a terminal the new status line replaces the old one in place. With piped output, each one prints below the last. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is yes, `[Y/n]`, so Enter stars it.
+Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, then whether to add the token line, and if so, which parts it shows and your context window, 200k or 1M, so that its percentage is right from the first turn. It redraws the status line from your last terminal session's figures or from a sample. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is yes, `[Y/n]`, so Enter stars it.
+
+When stdin and stdout are both a terminal, each question is a choice, and these keys answer it:
+
+| Key | Effect |
+| --- | --- |
+| Up and Down arrows | Move the selection. A long list scrolls with it. |
+| Space | Ticks or unticks the selected part, in a list of parts. The parts stay in the order that you ticked them. A row needs at least one part. |
+| Enter | Accepts the selection. The default answer is selected first, so Enter keeps it. |
+| Ctrl+C | Stops the questions. Nothing changes, and the command exits with code 130. |
+
+The status line redraws as the selection moves, before you accept it, so you see each theme, bar size and row before you choose it. The questions use [Ink](https://github.com/vadimdemedes/ink), which npm installs with claude-gauge.
+
+When stdin or stdout is not a terminal, for example when you pipe the answers in, setup asks for a typed answer to each question, one line each. Enter gives the default in brackets. The plugin's own copy of claude-gauge has no Ink, so there the questions are always typed. In a terminal, the new status line then replaces the old one in place after each answer. With piped output, each one prints below the last.
 
 Setup copies the two scripts into `~/.claude/claude-gauge/runtime/` (under `$CLAUDE_CONFIG_DIR` when that is set) and points the settings there, so the bars keep working when npm clears its npx cache. To keep the `claude-gauge` command at hand instead of running it through npx, install it globally with `npm install -g @jv-k/claude-gauge`.
 

@@ -32,5 +32,14 @@
         "useTemplate": "off"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      // react is a dependency, for the Ink questions, so Biome checks React's
+      // rules of hooks. The status line is no React code: its useServer only
+      // records an MCP server, and is no hook.
+      "includes": ["src/statusline.ts"],
+      "linter": { "rules": { "correctness": { "useHookAtTopLevel": "off" } } }
+    }
+  ]
 }
