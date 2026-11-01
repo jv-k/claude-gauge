@@ -719,6 +719,29 @@ test('the setup is empty where there is nothing to read, and skips files that ar
   assert.deepEqual(readSetup(broken.project, broken.options), { claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
 });
 
+test('the setup takes statusLine.padding from the settings Claude Code applies last', () => {
+  const { readSetup } = require('../dist/statusline.js');
+  const project = 'home/work/project';
+  const paddingOf = (files) => {
+    const tree = setupTree({ [`${project}/.git/HEAD`]: 'ref: refs/heads/main\n', ...files });
+    return readSetup(tree.project, tree.options).padding;
+  };
+  const padded = (padding) => ({ statusLine: { type: 'command', command: 'x', padding } });
+  assert.equal(paddingOf({ 'home/.claude/settings.json': padded(2) }), 2);
+  // Project, local and managed settings each override the ones before.
+  assert.equal(paddingOf({ 'home/.claude/settings.json': padded(2), [`${project}/.claude/settings.json`]: padded(3) }), 3);
+  assert.equal(paddingOf({ [`${project}/.claude/settings.json`]: padded(3), [`${project}/.claude/settings.local.json`]: padded(1) }), 1);
+  assert.equal(paddingOf({ [`${project}/.claude/settings.local.json`]: padded(1), 'managed/managed-settings.json': padded(4) }), 4);
+  // A later statusLine without padding keeps the earlier padding, so the row
+  // ends short of the edge rather than past it.
+  assert.equal(paddingOf({ 'home/.claude/settings.json': padded(2), [`${project}/.claude/settings.json`]: { statusLine: { type: 'command', command: 'x' } } }), 2);
+  // A later padding that does not count sets it back to none.
+  assert.equal(paddingOf({ 'home/.claude/settings.json': padded(2), [`${project}/.claude/settings.json`]: padded(0) }), undefined);
+  // Only a whole number above 0 counts; anything else is no padding.
+  for (const value of [0, -1, 1.5, '2', null]) assert.equal(paddingOf({ 'home/.claude/settings.json': padded(value) }), undefined, String(value));
+  assert.equal(paddingOf({ 'home/.claude/settings.json': { statusLine: 'not an object' } }), undefined);
+});
+
 // A plugin as Claude Code installs one: enabledPlugins in the user settings
 // names it on, and plugins/installed_plugins.json names its install folder.
 // A temporary config folder, named by CLAUDE_CONFIG_DIR, holds both.
@@ -1295,17 +1318,22 @@ test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () =>
   assert.match(text, /statusline\.js'? --latest --window 1m\n/);
 });
 
-// Renders with the given switches and terminal width, colours stripped.
-const runAt = (columns, data, args) =>
-  plain(render(data, { nowMs: NOW, statusOf: onMain, config: parseArgs(args), columns }));
+// A setup with the given statusLine.padding, or none.
+const paddedBy = (padding) => () => ({ ...NOTHING_LOADED, ...(padding === undefined ? {} : { padding }) });
 
-test('--right pads its parts to the end of the row, to the terminal width', () => {
+// Renders with the given switches, terminal width and statusLine.padding,
+// colours stripped. Claude Code leaves 2 + padding columns on each side, so
+// a --right row is 4 columns narrower than the terminal without padding.
+const runAt = (columns, data, args, padding) =>
+  plain(render(data, { nowMs: NOW, statusOf: onMain, config: parseArgs(args), columns, setupOf: paddedBy(padding) }));
+
+test('--right pads its parts to the end of the row, to the width Claude Code leaves for it', () => {
   const data = { model: { display_name: 'Opus' } };
-  assert.equal(runAt(20, data, ['--show', 'time,model', '--right', 'model']), '12:00           Opus');
+  assert.equal(runAt(24, data, ['--show', 'time,model', '--right', 'model']), '12:00           Opus');
   // A row of right-aligned parts only is padded at its start.
-  assert.equal(runAt(10, data, ['--show', 'model', '--right', 'model']), '      Opus');
-  // The colour codes take no room: the visible row is the terminal's width.
-  const raw = render(data, { nowMs: NOW, config: parseArgs(['--show', 'time,model', '--right', 'model']), columns: 20 });
+  assert.equal(runAt(14, data, ['--show', 'model', '--right', 'model']), '      Opus');
+  // The colour codes take no room: the visible row is the usable width.
+  const raw = render(data, { nowMs: NOW, config: parseArgs(['--show', 'time,model', '--right', 'model']), columns: 24, setupOf: paddedBy() });
   assert.ok(raw.length > 20);
   assert.equal(plain(raw).length, 20);
 });
@@ -1313,15 +1341,15 @@ test('--right pads its parts to the end of the row, to the terminal width', () =
 test('--right moves its parts to the end in row order, and keeps their separators', () => {
   const data = { model: { display_name: 'Opus' }, effort: { level: 'high' }, version: '2.1.90' };
   const args = ['--show', 'model,time,effort,version', '--right', 'version,model'];
-  assert.equal(runAt(40, data, args), '12:00 │ effort high       Opus │ v2.1.90');
-  assert.equal(runAt(30, data, [...args, '--compact']), '12:00│eff high    Opus│v2.1.90');
+  assert.equal(runAt(44, data, args), '12:00 │ effort high       Opus │ v2.1.90');
+  assert.equal(runAt(34, data, [...args, '--compact']), '12:00│eff high    Opus│v2.1.90');
   // Repeating --right adds to the parts it names; unknown names are ignored.
-  assert.equal(runAt(40, data, [...args.slice(0, 2), '--right', 'model,weather', '--right', 'version']), runAt(40, data, args));
+  assert.equal(runAt(44, data, [...args.slice(0, 2), '--right', 'model,weather', '--right', 'version']), runAt(44, data, args));
 });
 
 test('--right counts a linked part by the text it shows, not its link', () => {
   const data = { model: { display_name: 'Opus' }, workspace: { current_dir: '/home/me/project' } };
-  const raw = render(data, { nowMs: NOW, statusOf: onMain, hostname: 'box', columns: 20, config: parseArgs(['--show', 'dir,model', '--right', 'model']) });
+  const raw = render(data, { nowMs: NOW, statusOf: onMain, hostname: 'box', columns: 24, setupOf: paddedBy(), config: parseArgs(['--show', 'dir,model', '--right', 'model']) });
   assert.equal(linksIn(raw).length, 1);
   assert.equal(plain(raw), 'project         Opus');
 });
@@ -1335,13 +1363,40 @@ test('--right leaves rows unchanged when the terminal width is unknown', () => {
 test('--right leaves a row unchanged when it does not fit, or has no right-aligned part to show', () => {
   const data = { model: { display_name: 'Opus' } };
   // Padding narrower than the separator would run the parts together.
-  assert.equal(runAt(11, data, ['--show', 'time,model', '--right', 'model']), '12:00 │ Opus');
-  assert.equal(runAt(12, data, ['--show', 'time,model', '--right', 'model']), '12:00   Opus');
+  assert.equal(runAt(15, data, ['--show', 'time,model', '--right', 'model']), '12:00 │ Opus');
+  assert.equal(runAt(16, data, ['--show', 'time,model', '--right', 'model']), '12:00   Opus');
+  assert.equal(runAt(7, data, ['--show', 'model', '--right', 'model']), 'Opus');
+  // A terminal narrower than Claude Code's margins leaves no room at all.
   assert.equal(runAt(3, data, ['--show', 'model', '--right', 'model']), 'Opus');
+  // statusLine.padding narrows the room the same way.
+  assert.equal(runAt(16, data, ['--show', 'time,model', '--right', 'model'], 1), '12:00 │ Opus');
   // pr has nothing to show, so the row has nothing to align.
-  assert.equal(runAt(20, data, ['--show', 'time,model,pr', '--right', 'pr']), '12:00 │ Opus');
+  assert.equal(runAt(24, data, ['--show', 'time,model,pr', '--right', 'pr']), '12:00 │ Opus');
   // Only the rows holding a right-aligned part are padded.
-  assert.equal(runAt(10, data, ['--show', 'time', '--show', 'model', '--right', 'model']), '12:00\n      Opus');
+  assert.equal(runAt(14, data, ['--show', 'time', '--show', 'model', '--right', 'model']), '12:00\n      Opus');
+});
+
+test('--right leaves 2 columns plus statusLine.padding free on each side of the terminal', () => {
+  const data = { model: { display_name: 'Opus' } };
+  const args = ['--show', 'time,model', '--right', 'model'];
+  // Measured on Claude Code 2.1.296: a 100-column terminal shows 96 columns,
+  // and 92 with statusLine.padding 2.
+  const row = runAt(100, data, args);
+  assert.equal(row.length, 96);
+  assert.ok(row.endsWith('Opus'));
+  assert.equal(runAt(100, data, args, 2).length, 92);
+  assert.equal(runAt(100, data, args, 0).length, 96);
+  assert.equal(runAt(80, data, args).length, 76);
+});
+
+test('--right reads the setup only for a row it pads, and other rows do not change', () => {
+  const data = { model: { display_name: 'Opus' }, effort: { level: 'high' } };
+  const unread = () => assert.fail('the setup was read with no row to pad');
+  const at = (columns, args) => plain(render(data, { nowMs: NOW, config: parseArgs(args), columns, setupOf: unread }));
+  assert.equal(at(100, ['--show', 'model,effort']), 'Opus │ effort high');
+  assert.equal(at(100, ['--show', 'model,effort', '--compact']), 'Opus│eff high');
+  assert.equal(at(undefined, ['--show', 'model', '--right', 'model']), 'Opus');
+  assert.equal(at(100, ['--show', 'model', '--right', 'pr']), 'Opus');
 });
 
 test('--latest shows the per-model windows a terminal render saved, less those that have reset', () => {
@@ -1394,20 +1449,42 @@ test('the status line program takes the terminal width from COLUMNS', () => {
         encoding: 'utf8',
       }),
     );
-  assert.equal(statusLine('20'), 'project         Opus\n');
+  assert.equal(statusLine('24'), 'project         Opus\n');
   for (const columns of [undefined, '', 'wide', '0']) assert.equal(statusLine(columns), 'project │ Opus\n', String(columns));
+});
+
+test('the status line program narrows a --right row by the statusLine.padding in the settings', () => {
+  const { execFileSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const script = path.join(__dirname, '..', 'dist', 'statusline.js');
+  const config = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: config, COLUMNS: '100' };
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-project-'));
+  const statusLine = () =>
+    plain(
+      execFileSync(process.execPath, [script, '--show', 'model', '--right', 'model'], {
+        env,
+        input: JSON.stringify({ model: { display_name: 'Opus' }, workspace: { current_dir: project } }),
+        encoding: 'utf8',
+      }),
+    );
+  assert.equal(statusLine(), `${' '.repeat(92)}Opus\n`);
+  fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ statusLine: { type: 'command', command: 'x', padding: 2 } }));
+  assert.equal(statusLine(), `${' '.repeat(88)}Opus\n`);
 });
 
 test('--right leaves a row unchanged when it holds text of uncertain width', () => {
   const args = ['--show', 'name,model', '--right', 'model'];
   const named = (session_name) => ({ session_name, model: { display_name: 'Opus' } });
   // Accented and Cyrillic letters take one column each.
-  assert.equal(runAt(30, named('café réunion'), args), 'café réunion              Opus');
-  assert.equal(runAt(30, named('встреча'), args), 'встреча                   Opus');
+  assert.equal(runAt(34, named('café réunion'), args), 'café réunion              Opus');
+  assert.equal(runAt(34, named('встреча'), args), 'встреча                   Opus');
   // CJK and emoji take two columns in most terminals, and combining marks
   // none, so the row stays as it is rather than overshoot the edge.
   for (const name of ['東京の会議', '🚀 launch', 'cafe\u0301']) {
-    assert.equal(runAt(30, named(name), args), `${name} │ Opus`, name);
+    assert.equal(runAt(34, named(name), args), `${name} │ Opus`, name);
   }
 });
 
@@ -1421,10 +1498,11 @@ test("the reference's compact and --right example rows are what the status line 
   const show = ['--show', 'repo,branch,model,effort'];
   const compact = run(data, [...show, '--compact']);
   assert.equal(compact, 'jv-k/claude-gauge│⎇ main│Opus 5.5│eff high');
-  const right = runAt(72, data, [...show, '--right', 'model,effort']);
+  const right = runAt(76, data, [...show, '--right', 'model,effort']);
   assert.equal(right, 'jv-k/claude-gauge │ ⎇ main                        Opus 5.5 │ effort high');
   assert.ok(reference.includes(`\n${compact}\n`), compact);
-  assert.ok(reference.includes(`a 72-column terminal`));
+  assert.ok(reference.includes(`a 76-column terminal`));
+  assert.equal(right.length, 72);
   assert.ok(reference.includes(`\n${right}\n`), right);
 });
 

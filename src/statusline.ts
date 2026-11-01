@@ -79,8 +79,9 @@ interface PartContext {
 type Env = Record<string, string | undefined>;
 
 // What Claude Code loads into a session, and the account it signs in with:
-// counts of CLAUDE.md files, rules, MCP servers and hooks, and the plan and
-// user when the config names them.
+// counts of CLAUDE.md files, rules, MCP servers and hooks, the plan and
+// user when the config names them, and the status line's padding when the
+// settings set one above 0.
 interface Setup {
   claudeMd: number;
   rules: number;
@@ -88,6 +89,7 @@ interface Setup {
   hooks: number;
   plan?: string;
   user?: string;
+  padding?: number;
 }
 
 interface PartSpec {
@@ -1495,6 +1497,9 @@ function readJson(file: string): JsonObject {
   }
 }
 
+// Whether a value is a whole number above 0.
+const isPositiveInteger = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value > 0;
+
 const objectAt = (value: unknown, key: string): JsonObject => (isObject(value) && isObject(value[key]) ? value[key] : {});
 const stringAt = (value: unknown, key: string): string | undefined => {
   const field = isObject(value) ? value[key] : undefined;
@@ -1735,6 +1740,16 @@ function readSetup(
     planName(/^claude_(\w+)$/.exec(stringAt(account, 'organizationType') ?? '')?.[1], stringAt(account, 'organizationRateLimitTier'));
   const user = stringAt(account, 'emailAddress');
 
+  // statusLine.padding, from the last settings file that sets one, as
+  // Claude Code applies a later file over an earlier one. A later statusLine
+  // that sets no padding leaves the earlier padding in place: were Claude
+  // Code to drop it instead, the row would only end short of the edge, where
+  // the other way round it would be cut. Only a whole number above 0 counts.
+  const padding = settings
+    .map((s) => objectAt(s, 'statusLine'))
+    .filter((line) => 'padding' in line)
+    .pop()?.padding;
+
   return {
     claudeMd: claudeMd.size,
     rules: rules.size,
@@ -1742,6 +1757,7 @@ function readSetup(
     hooks: settings.reduce((n, s) => n + hooksIn(s), 0) + plugins.hooks,
     ...(plan ? { plan } : {}),
     ...(user ? { user } : {}),
+    ...(isPositiveInteger(padding) ? { padding } : {}),
   };
 }
 
@@ -1889,8 +1905,18 @@ interface RenderOptions {
 // number above 0.
 const columnsOf = (value: number | string | undefined): number | undefined => {
   const n = Number(value);
-  return Number.isInteger(n) && n > 0 ? n : undefined;
+  return isPositiveInteger(n) ? n : undefined;
 };
+
+// The columns Claude Code keeps free on each side of the status line, before
+// statusLine.padding adds its own. Measured on Claude Code 2.1.296 (issue
+// #45): a 100-column terminal shows a row of at most 96 columns, and 92 with
+// padding 2. A wider row is cut and ends in an ellipsis.
+const STATUS_LINE_MARGIN = 2;
+
+// The columns a status line row may take in a terminal of the given width,
+// with the given statusLine.padding.
+const usableColumns = (columns: number, padding: number): number => columns - 2 * (STATUS_LINE_MARGIN + padding);
 
 // Characters that take exactly one terminal column: printable Latin,
 // Greek and Cyrillic, and the punctuation, arrows, maths signs, box drawing,
@@ -1921,13 +1947,15 @@ interface ShownPart {
 
 // A row's shown parts joined by the separator. With a known width, the parts
 // named in right move to the end of the row, in row order, and spaces fill
-// the gap so the row ends at the terminal's edge. A row with none of those
-// parts, with text of uncertain width, or with too little room for a gap as
-// wide as the separator, is left as it is.
-function joinRow(shown: ShownPart[], separator: string, right: readonly string[], columns: number | undefined): string {
+// the gap so the row ends at the last column Claude Code shows. widthOf gives
+// that width, and is asked only for a row that has parts to move. A row with
+// none of those parts, with text of uncertain width, or with too little room
+// for a gap as wide as the separator, is left as it is.
+function joinRow(shown: ShownPart[], separator: string, right: readonly string[], widthOf: () => number | undefined): string {
   const join = (parts: ShownPart[]) => parts.map((p) => p.text).join(separator);
   const atEnd = shown.filter((p) => right.includes(p.part));
-  if (columns === undefined || !atEnd.length) return join(shown);
+  const columns = atEnd.length ? widthOf() : undefined;
+  if (columns === undefined) return join(shown);
   const left = join(shown.filter((p) => !atEnd.includes(p)));
   const end = join(atEnd);
   const [leftWidth, endWidth, separatorWidth] = [left, end, separator].map(visibleWidth);
@@ -2004,7 +2032,11 @@ function render(
   };
 
   const separator = separatorOf(config, theme);
-  const width = columnsOf(columns);
+  const terminal = columnsOf(columns);
+  // The width a --right row fills: the terminal's, less Claude Code's margins
+  // and statusLine.padding on both sides. The settings are read only for a
+  // row with parts to move.
+  const widthOf = () => (terminal === undefined ? undefined : usableColumns(terminal, input.setup().padding ?? 0));
 
   // One output line per row. A part with nothing to show drops out of its
   // row, and a row left with no parts drops out of the status line.
@@ -2025,7 +2057,7 @@ function render(
           .filter((p) => p.text),
         separator,
         config.right,
-        width,
+        widthOf,
       ),
     )
     .filter(Boolean)
