@@ -1061,9 +1061,16 @@ test('command runs nothing unless --command names a command and a row shows the 
 // sh and in cmd.exe alike.
 const nodeCommand = (script) => `${JSON.stringify(process.execPath)} -e "${script}"`;
 
+// The time the tests of a command's output give it, in place of the real
+// timeout: enough for Node to start on a busy machine.
+const SLOW_START_MS = 10000;
+
 test('the command runner keeps the first line of output, and nothing when the command fails', () => {
-  const { runCommand } = require('../dist/statusline.js');
+  const { runCommand: run } = require('../dist/statusline.js');
   const cwd = require('node:os').tmpdir();
+  // Each command starts Node, which can take longer than the real timeout
+  // while the suites run side by side. These checks are of the output.
+  const runCommand = (command, folder) => run(command, folder, SLOW_START_MS);
   assert.equal(runCommand(nodeCommand("process.stdout.write('first line\\nsecond line\\n')"), cwd), 'first line');
   assert.equal(runCommand(nodeCommand("process.stdout.write('\\n  padded  \\r\\nnext')"), cwd), 'padded');
   assert.equal(runCommand(nodeCommand("process.stdout.write('\\x1b[2J\\nvisible')"), cwd), 'visible');
@@ -1206,7 +1213,7 @@ test("hostile output from --command's command prints without its control codes",
   assert.equal(renderClean({}, 'command', 'main', NOTHING_LOADED, ['--command', 'ctx'], { commandOutputOf }), 'prod-eu');
   // And from a real command, whose escape codes reach the runner as they are.
   const { runCommand: real } = require('../dist/statusline.js');
-  const hostile = real(nodeCommand("process.stdout.write('pro\\u001b]0;pwned\\u0007d\\u001b[2J\\u202eeu')"), require('node:os').tmpdir());
+  const hostile = real(nodeCommand("process.stdout.write('pro\\u001b]0;pwned\\u0007d\\u001b[2J\\u202eeu')"), require('node:os').tmpdir(), SLOW_START_MS);
   assert.match(hostile, /\x1b/);
   assert.equal(renderClean({}, 'command', 'main', NOTHING_LOADED, ['--command', 'ctx'], { commandOutputOf: () => hostile }), 'prodeu');
 });

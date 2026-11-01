@@ -2020,11 +2020,12 @@ function readMemory({
 // then killed, so a slow or hung command costs the status line that long and
 // no longer. Its output is cut to the first line with text in it, and
 // capped at MAX_COMMAND_OUTPUT bytes; failure, a timeout or empty output
-// shows nothing.
+// shows nothing. `timeoutMs` is for the tests, which give a command that
+// starts Node more time on a busy machine.
 const COMMAND_TIMEOUT_MS = 500;
 const MAX_COMMAND_OUTPUT = 64 * 1024;
 
-function runCommand(command: string, cwd: string): string {
+function runCommand(command: string, cwd: string, timeoutMs = COMMAND_TIMEOUT_MS): string {
   // Outside Windows the shell leads a process group of its own, so that
   // whatever the command starts can be stopped with it.
   // Node 18 and Bun take detached in spawnSync, though Node's types list it
@@ -2034,7 +2035,7 @@ function runCommand(command: string, cwd: string): string {
     shell: true,
     detached: grouped,
     cwd,
-    timeout: COMMAND_TIMEOUT_MS,
+    timeout: timeoutMs,
     killSignal: 'SIGKILL',
     maxBuffer: MAX_COMMAND_OUTPUT,
     encoding: 'utf8',
