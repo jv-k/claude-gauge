@@ -27,6 +27,17 @@ function tempDir(prefix = 'claude-gauge-') {
   return dir;
 }
 
+// The real fs, counting the transcript bytes it reads.
+function countingFs() {
+  const io = { ...fs, bytes: 0 };
+  io.readSync = (...args) => {
+    const n = fs.readSync(...args);
+    io.bytes += n;
+    return n;
+  };
+  return io;
+}
+
 // A Claude config folder of its own, with settings.json holding `settings`
 // when given.
 function configFolder(settings) {
@@ -101,4 +112,4 @@ function fakeTool(name, { status = 0, body = '' } = {}) {
   return { bin, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []) };
 }
 
-module.exports = { root, dist, plain, tempDir, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, cliSource, switchesIn, switchAt, usageSwitches, packageAt, fakeTool };
+module.exports = { root, dist, plain, tempDir, countingFs, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, cliSource, switchesIn, switchAt, usageSwitches, packageAt, fakeTool };

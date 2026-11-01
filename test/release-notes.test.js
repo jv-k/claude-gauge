@@ -9,6 +9,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { tempDir } = require('./helpers');
 const { releaseNotes } = require('../scripts/release-notes.js');
 
 const script = path.join(__dirname, '..', 'scripts', 'release-notes.js');
@@ -58,6 +59,36 @@ test('releaseNotes does not match the version inside a section body', () => {
   assert.equal(releaseNotes('## 1.1.0 (2026-11-02)\n- 1.0.0 had a bug\n', 'v1.0.0'), null);
 });
 
+// A pre-release tag such as v2.0.0-rc.1 publishes under the npm dist-tag
+// next, with its own CHANGELOG section (docs/adr/0001).
+const prereleases = [
+  '## [2.0.0-rc.2](https://github.com/jv-k/claude-gauge/compare/v2.0.0-rc.1...v2.0.0-rc.2) (2026-12-02)',
+  '- fix: the second candidate',
+  '',
+  '## 2.0.0-rc.1 (2026-12-01)',
+  '- feat: the first candidate',
+  '',
+  '## 1.0.0 (2026-10-20)',
+  '- feat: first release',
+  '',
+].join('\n');
+
+test('releaseNotes returns the section of a pre-release version', () => {
+  assert.equal(releaseNotes(prereleases, 'v2.0.0-rc.1'), '- feat: the first candidate');
+});
+
+test('releaseNotes reads a linked pre-release heading', () => {
+  assert.equal(releaseNotes(prereleases, 'v2.0.0-rc.2'), '- fix: the second candidate');
+});
+
+test('releaseNotes does not give a full version the section of its pre-release', () => {
+  assert.equal(releaseNotes(prereleases, 'v2.0.0'), null);
+});
+
+test('releaseNotes does not give a pre-release the section of its full version', () => {
+  assert.equal(releaseNotes(prereleases, 'v1.0.0-rc.1'), null);
+});
+
 test('releaseNotes handles CRLF line ends', () => {
   assert.equal(releaseNotes('## 1.0.0 (2026-10-20)\r\n- first\r\n', 'v1.0.0'), '- first');
 });
@@ -67,7 +98,7 @@ function run(args) {
 }
 
 function tempChangelog(text) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-release-'));
+  const dir = tempDir('claude-gauge-release-');
   const file = path.join(dir, 'CHANGELOG.md');
   fs.writeFileSync(file, text);
   return file;

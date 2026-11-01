@@ -7,9 +7,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { render, parseArgs, readTranscriptActivity } = require('../dist/statusline.js');
 
-const { plain, tempDir } = require('./helpers');
+const { plain, tempDir, countingFs } = require('./helpers');
 
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const at = (secondsAgo) => NOW - secondsAgo * 1000;
@@ -70,6 +71,37 @@ test('subagent types, models and descriptions print without their control codes'
   assert.equal(plain(raw), '◐ Explore (Haiku) Map it 1s');
 });
 
+// Issue #60: a background subagent whose own transcript has not changed for
+// 10 minutes shows a dim ? in place of the running mark.
+test('a background subagent whose transcript changed 11 minutes ago shows a dim ?, and one 9 minutes ago still runs', () => {
+  const background = (minutesUnchanged) => [
+    { type: 'Plan', description: 'Plan it', startedAt: at(1200), background: true, activeAt: at(minutesUnchanged * 60) },
+  ];
+  assert.equal(renderAgents(background(9)), '◐ Plan Plan it 20m');
+  assert.equal(renderAgents(background(11)), '? Plan Plan it 20m');
+  assert.equal(renderAgents(background(10)), '? Plan Plan it 20m');
+  const raw = render(
+    { workspace: { current_dir: '/home/me/project' }, transcript_path: '/t.jsonl' },
+    { config: parseArgs(['--show', 'agents']), nowMs: NOW, transcript: () => ({ tools: { running: [], completed: {} }, agents: background(11) }) },
+  );
+  // The default theme's grey, its muted colour.
+  assert.ok(raw.startsWith('\x1b[0;90m?'), `the ? is not dim: ${JSON.stringify(raw)}`);
+});
+
+test('a stale background subagent goes back to running when its transcript changes, and shows finished once notified', () => {
+  const stale = { type: 'Plan', description: 'Plan it', startedAt: at(1200), background: true, activeAt: at(660) };
+  assert.equal(renderAgents([stale]), '? Plan Plan it 20m');
+  assert.equal(renderAgents([{ ...stale, activeAt: at(5) }]), '◐ Plan Plan it 20m');
+  assert.equal(renderAgents([{ ...stale, endedAt: at(2) }]), '✓ Plan Plan it 19m');
+});
+
+test('a foreground subagent, and a background one with no transcript found, run however long their transcript is unchanged', () => {
+  const foreground = { type: 'Explore', description: 'Map it', startedAt: at(1200), activeAt: at(660) };
+  assert.equal(renderAgents([foreground]), '◐ Explore Map it 20m');
+  const unseen = { type: 'Plan', description: 'Plan it', startedAt: at(1200), background: true };
+  assert.equal(renderAgents([unseen]), '◐ Plan Plan it 20m');
+});
+
 // Transcript records as Claude Code writes them for a subagent: the Agent
 // tool call, its result, and for one run in the background, the task
 // notification that says it finished.
@@ -125,9 +157,9 @@ test('a background subagent runs until its task notification, and a prompt does 
   const call = agentCall('t1', { subagent_type: 'Plan', description: 'Plan it', run_in_background: true }, at(90));
   const launched = agentResult('t1', at(89), { isAsync: true, status: 'async_launched', agentId: 'a1', resolvedModel: 'claude-sonnet-4-5' });
   const running = agentsIn([call, launched, prompt('carry on', at(60))]);
-  assert.deepEqual(running, [{ type: 'Plan', description: 'Plan it', startedAt: at(90), model: 'Sonnet 4.5' }]);
+  assert.deepEqual(running, [{ type: 'Plan', description: 'Plan it', startedAt: at(90), background: true, model: 'Sonnet 4.5' }]);
   const done = agentsIn([call, launched, prompt('carry on', at(60)), notification('t1', 'completed', at(10))]);
-  assert.deepEqual(done, [{ type: 'Plan', description: 'Plan it', startedAt: at(90), model: 'Sonnet 4.5', endedAt: at(10) }]);
+  assert.deepEqual(done, [{ type: 'Plan', description: 'Plan it', startedAt: at(90), background: true, model: 'Sonnet 4.5', endedAt: at(10) }]);
   const killed = agentsIn([call, launched, notification('t1', 'killed', at(10))]);
   assert.equal(killed[0].failed, true);
 });
@@ -193,11 +225,197 @@ test('a long description is cut between characters, never inside an emoji', () =
 test('a background subagent still runs when a prompt comes before its launch result', () => {
   const call = agentCall('t1', { subagent_type: 'Plan', description: 'Plan it', run_in_background: true }, at(90));
   const launched = agentResult('t1', at(40), { isAsync: true, status: 'async_launched', agentId: 'a1' });
-  assert.deepEqual(agentsIn([call, prompt('carry on', at(60)), launched]), [{ type: 'Plan', description: 'Plan it', startedAt: at(90) }]);
+  assert.deepEqual(agentsIn([call, prompt('carry on', at(60)), launched]), [{ type: 'Plan', description: 'Plan it', startedAt: at(90), background: true }]);
 });
 
 test('a prompt the user types that starts like a task notification is still a prompt', () => {
   const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map it' }, at(90));
   const typed = prompt('<task-notification>\n<tool-use-id>t1</tool-use-id>\n<status>completed</status>\n</task-notification>', at(50));
   assert.deepEqual(agentsIn([call, typed]), [{ type: 'Explore', description: 'Map it', startedAt: at(90), endedAt: at(50), failed: true }]);
+});
+
+// A session folder as Claude Code writes one for a subagent: beside the
+// session transcript, a folder of the same name holds subagents/, with the
+// subagent's own transcript, agent-<id>.jsonl, and agent-<id>.meta.json,
+// which names the Agent call that started it.
+function sessionWithSubagent(records, { agentId = 'a1b2c3', toolUseId = 't1', subagent } = {}) {
+  const dir = tempDir();
+  const file = path.join(dir, 'session.jsonl');
+  fs.writeFileSync(file, jsonl(records));
+  const folder = path.join(dir, 'session', 'subagents');
+  fs.mkdirSync(folder, { recursive: true });
+  const meta = path.join(folder, `agent-${agentId}.meta.json`);
+  fs.writeFileSync(meta, JSON.stringify({ agentType: 'Explore', description: 'Map the reader', toolUseId }));
+  const transcript = path.join(folder, `agent-${agentId}.jsonl`);
+  if (subagent) fs.writeFileSync(transcript, jsonl(subagent));
+  return { dir, file, transcript, stateDir: path.join(dir, 'state') };
+}
+const subagentReply = (model, when) => ({
+  type: 'assistant',
+  isSidechain: true,
+  agentId: 'a1b2c3',
+  timestamp: iso(when),
+  message: { role: 'assistant', model, id: `m-${when}`, content: [{ type: 'text', text: 'Looking.' }] },
+});
+
+test('a running subagent shows the model its own transcript names, before its result comes', () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const { file, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5-20251001', at(70))] });
+  const shown = plain(
+    render(
+      { workspace: { current_dir: '/home/me/project' }, transcript_path: file },
+      { config: parseArgs(['--show', 'agents']), nowMs: NOW, transcript: (f) => readTranscriptActivity(f, { stateDir }) },
+    ),
+  );
+  assert.equal(shown, '◐ Explore (Haiku 4.5) Map the reader 1m');
+});
+
+test("the reader reads only the bytes a running subagent's transcript gained, and gives its last change time", () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const { file, transcript, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5-20251001', at(70))] });
+  const first = countingFs();
+  const [running] = readTranscriptActivity(file, { stateDir, fs: first }).agents;
+  assert.equal(first.bytes, fs.statSync(file).size + fs.statSync(transcript).size);
+  assert.equal(running.model, 'Haiku 4.5');
+  assert.equal(running.activeAt, fs.statSync(transcript).mtimeMs);
+
+  // Nothing new in either transcript: nothing read again, and the reader's
+  // state keeps its place at the end of the subagent's transcript.
+  const second = countingFs();
+  assert.equal(readTranscriptActivity(file, { stateDir, fs: second }).agents[0].model, 'Haiku 4.5');
+  assert.equal(second.bytes, 0);
+  const stateFile = path.join(stateDir, `${createHash('sha1').update(transcript).digest('hex')}.json`);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).offset, fs.statSync(transcript).size);
+
+  // A new response on another model: only its bytes are read.
+  const appended = jsonl([subagentReply('claude-sonnet-4-5', at(10))]);
+  fs.appendFileSync(transcript, appended);
+  const third = countingFs();
+  assert.equal(readTranscriptActivity(file, { stateDir, fs: third }).agents[0].model, 'Sonnet 4.5');
+  assert.equal(third.bytes, Buffer.byteLength(appended));
+});
+
+test('a subagent with no transcript of its own, one that names no model, or a meta file for another call, shows as before', () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const before = [{ type: 'Explore', description: 'Map the reader', startedAt: at(72) }];
+  const missing = sessionWithSubagent([call]);
+  assert.deepEqual(readTranscriptActivity(missing.file, { stateDir: missing.stateDir }).agents, before);
+  const silent = sessionWithSubagent([call], { subagent: [prompt('Map the reader.', at(71))] });
+  const [agent] = readTranscriptActivity(silent.file, { stateDir: silent.stateDir }).agents;
+  assert.deepEqual({ ...agent, activeAt: undefined }, { ...before[0], activeAt: undefined });
+  const other = sessionWithSubagent([call], { toolUseId: 't9', subagent: [subagentReply('claude-haiku-4-5', at(70))] });
+  assert.deepEqual(readTranscriptActivity(other.file, { stateDir: other.stateDir }).agents, before);
+});
+
+test("the reader stops reading a subagent's transcript once it has finished", () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const { file, transcript, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5', at(70))] });
+  readTranscriptActivity(file, { stateDir });
+  const result = jsonl([agentResult('t1', at(20), { status: 'completed', resolvedModel: 'claude-haiku-4-5' })]);
+  fs.appendFileSync(file, result);
+  fs.appendFileSync(transcript, jsonl([subagentReply('claude-sonnet-4-5', at(19))]));
+  const io = countingFs();
+  const [done] = readTranscriptActivity(file, { stateDir, fs: io }).agents;
+  assert.deepEqual(done, { type: 'Explore', description: 'Map the reader', startedAt: at(72), model: 'Haiku 4.5', endedAt: at(20) });
+  // Only the session transcript's new result is read.
+  assert.equal(io.bytes, Buffer.byteLength(result));
+});
+
+test('a background subagent is found by the agent id its launch result names', () => {
+  const call = agentCall('t1', { subagent_type: 'Plan', description: 'Plan it', run_in_background: true }, at(90));
+  const launched = agentResult('t1', at(89), { isAsync: true, status: 'async_launched', agentId: 'a1b2c3' });
+  const { file, stateDir } = sessionWithSubagent([call, launched], { toolUseId: null, subagent: [subagentReply('claude-sonnet-4-5', at(80))] });
+  assert.equal(readTranscriptActivity(file, { stateDir }).agents[0].model, 'Sonnet 4.5');
+});
+
+test("the reader reads each subagent's meta file once, even one that names no Agent call of the session", () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const { file, stateDir } = sessionWithSubagent([call], { toolUseId: 't9' });
+  const metaReads = () => {
+    const io = { ...fs, metas: 0 };
+    io.readFileSync = (p, ...rest) => {
+      if (String(p).endsWith('.meta.json')) io.metas++;
+      return fs.readFileSync(p, ...rest);
+    };
+    return io;
+  };
+  const first = metaReads();
+  readTranscriptActivity(file, { stateDir, fs: first });
+  assert.equal(first.metas, 1);
+  const second = metaReads();
+  readTranscriptActivity(file, { stateDir, fs: second });
+  assert.equal(second.metas, 0);
+});
+
+test("a subagent transcript that cannot be read after its stat shows as before, and the session's activity stays", () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const { file, transcript, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5', at(70))] });
+  const io = { ...fs };
+  io.openSync = (target, ...rest) => {
+    if (target === transcript) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+    return fs.openSync(target, ...rest);
+  };
+  const { agents } = readTranscriptActivity(file, { stateDir, fs: io });
+  assert.deepEqual(agents, [{ type: 'Explore', description: 'Map the reader', startedAt: at(72) }]);
+});
+
+test('with no agents part to show, the reader leaves the subagents folder and transcripts unread', () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const { file, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5', at(70))] });
+  const io = countingFs();
+  // The reader catches a listing error, so the test counts the listings.
+  let listings = 0;
+  io.readdirSync = (...args) => {
+    listings += 1;
+    return fs.readdirSync(...args);
+  };
+  const [agent] = readTranscriptActivity(file, { stateDir, fs: io, subagents: false }).agents;
+  assert.equal(listings, 0, 'the subagents folder was listed');
+  assert.deepEqual(agent, { type: 'Explore', description: 'Map the reader', startedAt: at(72) });
+  assert.equal(io.bytes, fs.statSync(file).size);
+
+  let asked;
+  render(
+    { workspace: { current_dir: '/home/me/project' }, transcript_path: file },
+    {
+      config: parseArgs(['--show', 'tools']),
+      nowMs: NOW,
+      transcript: (f, options) => {
+        asked = options;
+        return readTranscriptActivity(f, { stateDir, ...options });
+      },
+    },
+  );
+  assert.deepEqual(asked, { subagents: false });
+});
+
+// Issue #60 through the reader: the background flag and the transcript's last
+// change time reach the part, which reads the render clock.
+test('through the reader, a background subagent whose transcript changed 11 minutes ago shows a dim ?, and a foreground one still runs', () => {
+  const renderFrom = ({ file, stateDir }) =>
+    plain(
+      render(
+        { workspace: { current_dir: '/home/me/project' }, transcript_path: file },
+        { config: parseArgs(['--show', 'agents']), nowMs: NOW, transcript: (f) => readTranscriptActivity(f, { stateDir }) },
+      ),
+    );
+  const unchangedFor = (session, seconds) => {
+    fs.utimesSync(session.transcript, at(seconds) / 1000, at(seconds) / 1000);
+    return session;
+  };
+  const call = agentCall('t1', { subagent_type: 'Plan', description: 'Plan it', run_in_background: true }, at(1200));
+  const launched = agentResult('t1', at(1199), { isAsync: true, status: 'async_launched', agentId: 'a1b2c3' });
+  const background = () => sessionWithSubagent([call, launched], { subagent: [subagentReply('claude-sonnet-4-5', at(1190))] });
+
+  const stale = unchangedFor(background(), 660);
+  const [agent] = readTranscriptActivity(stale.file, { stateDir: stale.stateDir }).agents;
+  assert.equal(agent.background, true);
+  assert.equal(renderFrom(stale), '? Plan (Sonnet 4.5) Plan it 20m');
+  assert.equal(renderFrom(unchangedFor(background(), 540)), '◐ Plan (Sonnet 4.5) Plan it 20m');
+
+  const unseen = sessionWithSubagent([call, launched]);
+  assert.equal(renderFrom(unseen), '◐ Plan Plan it 20m');
+
+  const foreground = agentCall('t1', { subagent_type: 'Explore', description: 'Map it' }, at(1200));
+  assert.equal(renderFrom(unchangedFor(sessionWithSubagent([foreground], { subagent: [subagentReply('claude-haiku-4-5', at(1190))] }), 660)), '◐ Explore (Haiku 4.5) Map it 20m');
 });

@@ -7,11 +7,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { render, parseArgs, recordCost, withLock } = require('../dist/statusline.js');
 
-const { plain } = require('./helpers');
+const { plain, tempDir } = require('./helpers');
 
 // A fixed local noon on Wednesday 7 October 2026, so the week began on
 // Monday the 5th.
@@ -35,8 +34,9 @@ test("today and week add the session's cost the ledger has not recorded yet", ()
   assert.equal(run({ session_id: 'abc', cost: { total_cost_usd: 2 } }, ['--show', 'today,week'], ledger), 'today $3.00 │ week $4.00');
   // A session the ledger has never seen adds all its cost.
   assert.equal(run({ session_id: 'new', cost: { total_cost_usd: 2 } }, ['--show', 'today,week'], ledger), 'today $4.50 │ week $5.50');
-  // A cost that fell since it was recorded started again from zero.
-  assert.equal(run({ session_id: 'abc', cost: { total_cost_usd: 0.25 } }, ['--show', 'today'], ledger), 'today $2.75');
+  // A cost that fell since it was recorded is a restored total the ledger has
+  // already counted, so it adds nothing.
+  assert.equal(run({ session_id: 'abc', cost: { total_cost_usd: 0.25 } }, ['--show', 'today'], ledger), 'today $2.50');
 });
 
 test('today and week show the session alone without a ledger, and drop out with no cost at all', () => {
@@ -57,7 +57,7 @@ test('a ledger with values that are not numbers adds nothing for them', () => {
 });
 
 // A ledger file in a folder of its own.
-const tempLedger = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-ledger-')), 'ledger.json');
+const tempLedger = () => path.join(tempDir('claude-gauge-ledger-'), 'ledger.json');
 const readFile = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 const session = (id, usd) => ({ session_id: id, cost: { total_cost_usd: usd } });
 
@@ -79,10 +79,27 @@ test('a session that runs past midnight puts its spend on the day it was spent',
   assert.deepEqual(readFile(file).days, { '2026-10-06': 1, '2026-10-07': 2 });
 });
 
-test('a cost that falls counts again from zero', () => {
+// After a crash, --resume keeps the session id but restores the total from
+// the last clean exit, which the ledger has already counted (issue #52).
+test('a session resumed after a crash counts only what it spends past its restored total', () => {
+  const file = tempLedger();
+  recordCost(session('a', 0.00848), { file, nowMs: NOW });
+  const countedAtExit = readFile(file).days['2026-10-07'];
+  recordCost(session('a', 0.00523), { file, nowMs: NOW + 60_000 });
+  recordCost(session('a', 0.006), { file, nowMs: NOW + 120_000 });
+  const ledger = readFile(file);
+  assert.equal((ledger.days['2026-10-07'] - countedAtExit).toFixed(5), '0.00077');
+  assert.deepEqual(ledger.sessions.a, { usd: 0.006, at: NOW + 120_000 });
+});
+
+test('a cost that falls is written at once, even inside the throttle window', () => {
   const file = tempLedger();
   recordCost(session('a', 3), { file, nowMs: NOW });
-  recordCost(session('a', 0.5), { file, nowMs: NOW + 60_000 });
+  recordCost(session('a', 0.5), { file, nowMs: NOW + 1_000 });
+  assert.deepEqual(readFile(file).days, { '2026-10-07': 3 });
+  assert.deepEqual(readFile(file).sessions.a, { usd: 0.5, at: NOW + 1_000 });
+  // Later spend counts from the restored total, once the throttle allows.
+  recordCost(session('a', 1), { file, nowMs: NOW + 11_000 });
   assert.deepEqual(readFile(file).days, { '2026-10-07': 3.5 });
 });
 
@@ -236,7 +253,7 @@ test('two sessions rendering at once keep the ledger whole, and lose none of its
 test('the status line program records each session in the state folder, and --latest shows the totals', () => {
   const { execFileSync } = require('node:child_process');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const config = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+  const config = tempDir('claude-gauge-');
   const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
   delete env.CLAUDE_CODE_SESSION_ID;
   const statusLine = (data, args = ['--show', 'today,week']) =>

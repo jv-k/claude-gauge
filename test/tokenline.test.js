@@ -4,8 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
+const { root, tempDir } = require('./helpers');
 const { summarize, parseArgs, parseSize, contextWindow } = require('../dist/tokenline.js');
 
 const NOW = new Date(2026, 9, 7, 12, 5);
@@ -97,6 +97,14 @@ test('assumes 200k, then 1M once the context passes it, unless told', () => {
   assert.equal(contextWindow(150000, '1m'), 1000000);
 });
 
+test('a saved window size beats the guess, and --window beats both', () => {
+  assert.equal(contextWindow(150000, undefined, 1000000), 1000000);
+  assert.equal(contextWindow(250000, undefined, 500000), 500000);
+  assert.equal(contextWindow(150000, '200k', 1000000), 200000);
+  assert.equal(contextWindow(150000, 'huge', 1000000), 1000000, 'a --window the token line cannot read is not set');
+  assert.equal(contextWindow(150000, undefined, 0), 200000, 'no size, no saved window');
+});
+
 test('--instruct prints the reply instruction in hosts without hook messages, and nothing elsewhere', () => {
   const { instruction, INSTRUCT_HOSTS } = require('../dist/tokenline.js');
   const script = '~/.claude/claude-gauge/tokenline.js';
@@ -110,6 +118,46 @@ test('--instruct prints the reply instruction in hosts without hook messages, an
   for (const host of INSTRUCT_HOSTS) assert.ok(instruction(['--instruct'], { host, script }), host);
   for (const host of ['cli', 'sdk-ts', 'local-agent', 'jetbrains', '', undefined]) {
     assert.equal(instruction(['--instruct'], { host, script }), null, String(host));
+  }
+});
+
+// The status line and the token line each hold a copy of the --instruct
+// code, because each script runs alone from the copy that setup makes and
+// cannot import a shared module. This test reads both sources and fails when
+// the copies drift apart. INSTRUCT_HOSTS, shellWord and the code of
+// instruction() must be the same text. Only the prose lines of the text that
+// instruction() returns may differ: each names its own bar and says what that
+// bar prints. A prose line holds one string literal with a space in it and
+// no quote mark of its own kind, then a comma, and nothing else. The comments
+// above the copies may differ too, as each names the other copy.
+test("the token line's --instruct code is the status line's, apart from the prose", () => {
+  const source = (name) => fs.readFileSync(path.join(root, 'src', `${name}.ts`), 'utf8');
+  // The lines from the first that starts with `start` up to the first, from
+  // there, that `end` matches.
+  const block = (text, name, start, end) => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((line) => line.startsWith(start));
+    assert.notEqual(from, -1, `${name}: no line starts with ${start}`);
+    const to = lines.findIndex((line, i) => i >= from && end.test(line));
+    assert.notEqual(to, -1, `${name}: ${start} has no end`);
+    return lines.slice(from, to + 1).join('\n');
+  };
+  const prose = /^(\s*)(?:'[^']* [^']*'|"[^"]* [^"]*"),$/;
+  const parts = (name) => {
+    const text = source(name);
+    return {
+      INSTRUCT_HOSTS: block(text, name, 'const INSTRUCT_HOSTS = ', /;$/),
+      shellWord: block(text, name, 'const shellWord = ', /;$/),
+      'instruction()': block(text, name, 'function instruction(', /^}$/)
+        .split('\n')
+        .map((line) => line.replace(prose, '$1<prose>,'))
+        .join('\n'),
+    };
+  };
+  const status = parts('statusline');
+  const token = parts('tokenline');
+  for (const name of Object.keys(status)) {
+    assert.equal(token[name], status[name], `${name} differs between src/tokenline.ts and src/statusline.ts`);
   }
 });
 
@@ -128,20 +176,8 @@ test('--instruct as a command reads the host from CLAUDE_CODE_ENTRYPOINT', () =>
 });
 
 // --latest as a program: a home folder and a config folder of the test's own,
-// each holding a transcript only where the test writes one.
-const made = [];
-test.after(() => {
-  for (const dir of made) fs.rmSync(dir, { recursive: true, force: true });
-});
-
-const tempFolder = () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
-  made.push(dir);
-  return dir;
-};
-
-// Both runs name the same session, as Claude Code exports it to the commands
-// it runs.
+// each holding a transcript only where the test writes one. Both runs name the
+// same session, as Claude Code exports it to the commands it runs.
 const SESSION = 'session-1';
 
 // Writes a transcript of one request to <folder>/projects/<project>/<session>.jsonl.
@@ -166,18 +202,18 @@ const latestRun = (runtime, { config, home }) => {
 const LINE = '1 req │ ctx 53% ▓▓▓░░ 106k\n';
 
 test('--latest reads the transcript under CLAUDE_CONFIG_DIR when it is set', () => {
-  const [home, config] = [tempFolder(), tempFolder()];
+  const [home, config] = [tempDir('claude-gauge-'), tempDir('claude-gauge-')];
   writeTranscript(config);
   assert.equal(latestRun('node', { config, home }), LINE);
 });
 
 test('--latest reads ~/.claude/projects when CLAUDE_CONFIG_DIR is unset or empty, and only then', () => {
-  const home = tempFolder();
+  const home = tempDir('claude-gauge-');
   writeTranscript(path.join(home, '.claude'));
   assert.equal(latestRun('node', { config: undefined, home }), LINE);
   assert.equal(latestRun('node', { config: '', home }), LINE);
   // A config folder without the transcript: the one in the home folder is not read.
-  assert.equal(latestRun('node', { config: tempFolder(), home }), '');
+  assert.equal(latestRun('node', { config: tempDir('claude-gauge-'), home }), '');
 });
 
 // The token line runs under Bun too, from its source. The check skips where
@@ -186,10 +222,68 @@ const hasBun = spawnSync('bun', ['--version'], { encoding: 'utf8' }).status === 
 const withoutBun = !hasBun && 'bun is not installed';
 
 test('bun runs --latest from source and finds the same transcripts', { skip: withoutBun }, () => {
-  const [home, config] = [tempFolder(), tempFolder()];
+  const [home, config] = [tempDir('claude-gauge-'), tempDir('claude-gauge-')];
   writeTranscript(config);
   assert.equal(latestRun('bun', { config, home }), LINE);
-  const otherHome = tempFolder();
+  const otherHome = tempDir('claude-gauge-');
   writeTranscript(path.join(otherHome, '.claude'));
   assert.equal(latestRun('bun', { config: undefined, home: otherHome }), LINE);
+});
+
+// The window size the status line saves for each session (ADR 0006): a
+// terminal render of a payload that names the session and its window, under
+// the config folder of the test's own.
+const renderStatusLine = (config, payload) =>
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'dist', 'statusline.js'), '--show', 'model'], {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: config },
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+  });
+
+// Runs the token line as the Stop hook, with `input` on stdin, and gives the
+// line from its system message, or '' when it prints none.
+const stopHook = (config, input, args = []) => {
+  const out = execFileSync(process.execPath, [path.join(__dirname, '..', 'dist', 'tokenline.js'), '--show', 'req,ctx', ...args], {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: config },
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+  });
+  return out ? JSON.parse(out).systemMessage : '';
+};
+
+const transcriptOf = (config) => path.join(config, 'projects', '-some-project', `${SESSION}.jsonl`);
+
+test('the Stop hook takes the window size the status line saved for its session over the guess', () => {
+  const config = tempDir('claude-gauge-');
+  writeTranscript(config);
+  const input = { session_id: SESSION, transcript_path: transcriptOf(config) };
+  assert.equal(stopHook(config, input), '1 req │ ctx 53% ▓▓▓░░ 106k', 'no saved size: the guess');
+
+  renderStatusLine(config, { session_id: SESSION, context_window: { context_window_size: 1000000 } });
+  assert.equal(stopHook(config, input), '1 req │ ctx 11% ▓░░░░ 106k');
+  assert.equal(stopHook(config, input, ['--window', '200k']), '1 req │ ctx 53% ▓▓▓░░ 106k', '--window wins');
+  // Another session's saved size is not this one's.
+  assert.equal(stopHook(config, { ...input, session_id: 'session-2' }), '1 req │ ctx 53% ▓▓▓░░ 106k');
+  // Without a session id, the transcript's name is the session's.
+  assert.equal(stopHook(config, { transcript_path: input.transcript_path }), '1 req │ ctx 11% ▓░░░░ 106k');
+});
+
+test('--latest takes the window size saved for the session it finds', () => {
+  const [home, config] = [tempDir('claude-gauge-'), tempDir('claude-gauge-')];
+  writeTranscript(config);
+  renderStatusLine(config, { session_id: SESSION, context_window: { context_window_size: 1000000 } });
+  assert.equal(latestRun('node', { config, home }), '1 req │ ctx 11% ▓░░░░ 106k\n');
+});
+
+test('a saved window file that cannot be read keeps the guess, and prints nothing else', () => {
+  const config = tempDir('claude-gauge-');
+  writeTranscript(config);
+  renderStatusLine(config, { session_id: SESSION, context_window: { context_window_size: 1000000 } });
+  const dir = path.join(config, 'claude-gauge', '.state', 'windows');
+  const [name] = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+  const input = { session_id: SESSION, transcript_path: transcriptOf(config) };
+  for (const text of ['{"context_window_size":', '{"context_window_size":-5}', '"1m"', 'null']) {
+    fs.writeFileSync(path.join(dir, name), text);
+    assert.equal(stopHook(config, input), '1 req │ ctx 53% ▓▓▓░░ 106k', text);
+  }
 });

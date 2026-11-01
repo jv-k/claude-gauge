@@ -9,7 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { render, parseArgs } = require('../dist/statusline.js');
-const { plain } = require('./helpers');
+const { plain, tempDir } = require('./helpers');
 
 const OID = 'a'.repeat(40);
 const entry = (xy, file) => `1 ${xy} N... 100644 100644 100644 ${OID} ${OID} ${file}`;
@@ -127,7 +127,9 @@ test('the default second row shows the branch markers', () => {
 
 test('--right counts the git marks as one column each', () => {
   const statusOf = () => status({ entries: [entry('.D', 'gone.ts'), '? new.ts'] });
-  const out = plain(render(data, { config: parseArgs(['--show', 'branch,git', '--right', 'git']), statusOf, columns: 24 }));
+  // Claude Code keeps 2 columns free on each side, so 28 columns leave 24.
+  const setupOf = () => ({ claudeMd: 0, rules: 0, mcp: 0, hooks: 0 });
+  const out = plain(render(data, { config: parseArgs(['--show', 'branch,git', '--right', 'git']), statusOf, setupOf, columns: 28 }));
   assert.equal(out, '⎇ main*            ✘1 ?1');
 });
 
@@ -135,90 +137,79 @@ test('--right counts the git marks as one column each', () => {
 // another so that it has an upstream.
 test('render reads the branch, counts and files from the real git', () => {
   const fs = require('node:fs');
-  const os = require('node:os');
   const { execFileSync } = require('node:child_process');
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-git-'));
+  const tmp = tempDir('claude-gauge-git-');
   const git = (cwd, ...args) =>
     execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd, stdio: 'pipe' });
   const write = (file, text) => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, text);
   };
-  try {
-    const origin = path.join(tmp, 'origin');
-    fs.mkdirSync(origin);
-    git(origin, 'init', '-q');
-    git(origin, 'symbolic-ref', 'HEAD', 'refs/heads/main');
-    for (const file of ['modified.txt', 'deleted.txt', 'sub/kept.txt']) write(path.join(origin, file), 'one\n');
-    git(origin, 'add', '.');
-    git(origin, 'commit', '-q', '-m', 'first');
-    git(tmp, 'clone', '-q', 'origin', 'work');
+  const origin = path.join(tmp, 'origin');
+  fs.mkdirSync(origin);
+  git(origin, 'init', '-q');
+  git(origin, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+  for (const file of ['modified.txt', 'deleted.txt', 'sub/kept.txt']) write(path.join(origin, file), 'one\n');
+  git(origin, 'add', '.');
+  git(origin, 'commit', '-q', '-m', 'first');
+  git(tmp, 'clone', '-q', 'origin', 'work');
 
-    const work = path.join(tmp, 'work');
-    write(path.join(work, 'ahead.txt'), 'one\n');
-    git(work, 'add', 'ahead.txt');
-    git(work, 'commit', '-q', '-m', 'ahead');
-    write(path.join(work, 'modified.txt'), 'two\n');
-    fs.rmSync(path.join(work, 'deleted.txt'));
-    write(path.join(work, 'staged.txt'), 'one\n');
-    git(work, 'add', 'staged.txt');
-    write(path.join(work, 'untracked file.txt'), 'one\n');
-    // Fixed times, a minute apart, so the newest file is known.
-    const times = { 'staged.txt': 1, 'untracked file.txt': 2, 'modified.txt': 3 };
-    for (const [file, minutes] of Object.entries(times)) {
-      const when = new Date(Date.UTC(2026, 0, 1, 12, minutes));
-      fs.utimesSync(path.join(work, file), when, when);
-    }
-
-    const expected = '⎇ main* ↑1 │ !1 +1 ✘1 ?1 │ modified.txt untracked file.txt staged.txt';
-    const shown = (dir) => plain(render({ workspace: { current_dir: dir } }, { config: parseArgs(['--show', 'branch,git,files']) }));
-    assert.equal(shown(work), expected);
-    // From a subfolder git prints paths from there, and render reads the
-    // files' times from the same place.
-    assert.equal(shown(path.join(work, 'sub')), expected);
-    // Outside any repository nothing shows.
-    assert.equal(shown(tmp), '');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+  const work = path.join(tmp, 'work');
+  write(path.join(work, 'ahead.txt'), 'one\n');
+  git(work, 'add', 'ahead.txt');
+  git(work, 'commit', '-q', '-m', 'ahead');
+  write(path.join(work, 'modified.txt'), 'two\n');
+  fs.rmSync(path.join(work, 'deleted.txt'));
+  write(path.join(work, 'staged.txt'), 'one\n');
+  git(work, 'add', 'staged.txt');
+  write(path.join(work, 'untracked file.txt'), 'one\n');
+  // Fixed times, a minute apart, so the newest file is known.
+  const times = { 'staged.txt': 1, 'untracked file.txt': 2, 'modified.txt': 3 };
+  for (const [file, minutes] of Object.entries(times)) {
+    const when = new Date(Date.UTC(2026, 0, 1, 12, minutes));
+    fs.utimesSync(path.join(work, file), when, when);
   }
+
+  const expected = '⎇ main* ↑1 │ !1 +1 ✘1 ?1 │ modified.txt untracked file.txt staged.txt';
+  const shown = (dir) => plain(render({ workspace: { current_dir: dir } }, { config: parseArgs(['--show', 'branch,git,files']) }));
+  assert.equal(shown(work), expected);
+  // From a subfolder git prints paths from there, and render reads the
+  // files' times from the same place.
+  assert.equal(shown(path.join(work, 'sub')), expected);
+  // Outside any repository nothing shows.
+  assert.equal(shown(tmp), '');
 });
 
 // A changed symbolic link sorts by its own time, even when its target is
 // gone, and not by its target's.
 test('files reads a changed symbolic link by its own time', { skip: process.platform === 'win32' && 'symbolic links need extra rights on Windows' }, () => {
   const fs = require('node:fs');
-  const os = require('node:os');
   const { execFileSync } = require('node:child_process');
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-links-'));
-  try {
-    execFileSync('git', ['init', '-q'], { cwd: tmp, stdio: 'pipe' });
-    const at = (minutes) => new Date(Date.UTC(2026, 0, 1, 12, minutes));
-    fs.writeFileSync(path.join(tmp, 'target.txt'), 'one\n');
-    fs.writeFileSync(path.join(tmp, 'plain.txt'), 'one\n');
-    fs.symlinkSync('target.txt', path.join(tmp, 'live-link'));
-    fs.symlinkSync('missing.txt', path.join(tmp, 'dangling-link'));
-    // The target is the newest, and each link is older than plain.txt.
-    fs.utimesSync(path.join(tmp, 'target.txt'), at(9), at(9));
-    fs.utimesSync(path.join(tmp, 'plain.txt'), at(5), at(5));
-    fs.lutimesSync(path.join(tmp, 'live-link'), at(2), at(2));
-    fs.lutimesSync(path.join(tmp, 'dangling-link'), at(1), at(1));
-    const shown = plain(render({ workspace: { current_dir: tmp } }, { config: parseArgs(['--show', 'files']) }));
-    assert.equal(shown, 'target.txt plain.txt live-link');
-    fs.rmSync(path.join(tmp, 'target.txt'));
-    fs.rmSync(path.join(tmp, 'plain.txt'));
-    const links = plain(render({ workspace: { current_dir: tmp } }, { config: parseArgs(['--show', 'files']) }));
-    assert.equal(links, 'live-link dangling-link');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
+  const tmp = tempDir('claude-gauge-links-');
+  execFileSync('git', ['init', '-q'], { cwd: tmp, stdio: 'pipe' });
+  const at = (minutes) => new Date(Date.UTC(2026, 0, 1, 12, minutes));
+  fs.writeFileSync(path.join(tmp, 'target.txt'), 'one\n');
+  fs.writeFileSync(path.join(tmp, 'plain.txt'), 'one\n');
+  fs.symlinkSync('target.txt', path.join(tmp, 'live-link'));
+  fs.symlinkSync('missing.txt', path.join(tmp, 'dangling-link'));
+  // The target is the newest, and each link is older than plain.txt.
+  fs.utimesSync(path.join(tmp, 'target.txt'), at(9), at(9));
+  fs.utimesSync(path.join(tmp, 'plain.txt'), at(5), at(5));
+  fs.lutimesSync(path.join(tmp, 'live-link'), at(2), at(2));
+  fs.lutimesSync(path.join(tmp, 'dangling-link'), at(1), at(1));
+  const shown = plain(render({ workspace: { current_dir: tmp } }, { config: parseArgs(['--show', 'files']) }));
+  assert.equal(shown, 'target.txt plain.txt live-link');
+  fs.rmSync(path.join(tmp, 'target.txt'));
+  fs.rmSync(path.join(tmp, 'plain.txt'));
+  const links = plain(render({ workspace: { current_dir: tmp } }, { config: parseArgs(['--show', 'files']) }));
+  assert.equal(links, 'live-link dangling-link');
 });
 
 // A git that takes too long, or prints too much, stands in for the real one
 // on PATH. The fallback then reads the branch from HEAD, without git.
 test('a git that times out or prints too much leaves the branch, read from HEAD', { skip: process.platform === 'win32' && 'the stand-in git is a shell script' }, () => {
   const fs = require('node:fs');
-  const os = require('node:os');
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-slow-git-'));
+  const tmp = tempDir('claude-gauge-slow-git-');
   const savedPath = process.env.PATH;
   try {
     const repo = path.join(tmp, 'repo');
@@ -249,6 +240,5 @@ test('a git that times out or prints too much leaves the branch, read from HEAD'
     }
   } finally {
     process.env.PATH = savedPath;
-    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

@@ -8,8 +8,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
+const { tempDir } = require('./helpers');
 
 const root = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -67,6 +67,18 @@ test('the package ships the built lines, and no sources or tests', () => {
   assert.deepEqual(extra, []);
 });
 
+// Ink and React come from the dependencies, at the majors that still run on
+// Node 18, and dist/ holds only the build of src/, with no Ink code in it.
+test('Ink 5 and React 18 are the only dependencies, and the package bundles neither', () => {
+  assert.deepEqual(Object.keys(pkg.dependencies).sort(), ['ink', 'react']);
+  assert.match(pkg.dependencies.ink, /^\^5\./);
+  assert.match(pkg.dependencies.react, /^\^18\./);
+  const sources = new Set(fs.readdirSync(path.join(root, 'src')).map((f) => f.replace(/\.ts$/, '')));
+  const built = packedFiles().filter((f) => f.startsWith('dist/'));
+  assert.ok(built.length > 0);
+  for (const file of built) assert.ok(sources.has(path.basename(file).replace(/\.(?:js|d\.ts|js\.map)$/, '')), `${file} is not built from src/`);
+});
+
 // npm refuses the unscoped name claude-gauge with a 403, so the package is
 // published under the owner's scope (#92). Only the npm name changes.
 const NPM_NAME = '@jv-k/claude-gauge';
@@ -83,18 +95,15 @@ test('the bin names stay claude-gauge, claude-gauge-statusline and claude-gauge-
 
 // With several bins, npm exec runs the one named as the package without its
 // scope. This packs the package and runs it as a user would, with npx and no
-// command name, offline and with a cache of its own.
+// command name, and a cache of its own. npx fetches the dependencies, Ink and
+// React, from the registry, as it does for a user.
 test('npx of the packed package runs the claude-gauge command', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-pack-'));
-  try {
-    const env = { npm_config_pack_destination: dir, npm_config_cache: path.join(dir, 'cache') };
-    const tarball = JSON.parse(runNpm('npm', ['pack', '--json', '--ignore-scripts'], { env }))[0].filename;
-    const help = runNpm('npx', ['--yes', '--offline', `./${tarball}`, '--help'], { cwd: dir, env });
-    // The usage follows the wordmark, so it starts a line, not the output.
-    assert.match(help, /^Usage: claude-gauge <setup \| configure \| uninstall \| update>/m);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  const dir = tempDir('claude-gauge-pack-');
+  const env = { npm_config_pack_destination: dir, npm_config_cache: path.join(dir, 'cache') };
+  const tarball = JSON.parse(runNpm('npm', ['pack', '--json', '--ignore-scripts'], { env }))[0].filename;
+  const help = runNpm('npx', ['--yes', `./${tarball}`, '--help'], { cwd: dir, env });
+  // The usage follows the wordmark, so it starts a line, not the output.
+  assert.match(help, /^Usage: claude-gauge <setup \| configure \| uninstall \| update>/m);
 });
 
 // An npm or npx command that names the package without its scope. The plugin

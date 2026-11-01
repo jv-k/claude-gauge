@@ -1,7 +1,7 @@
 // The questions claude-gauge setup and configure ask when run with no bar
 // switches: take the defaults in one answer, or walk through the status
-// line's rows and parts, its bar size, theme and labels, and the token line,
-// its parts and its context window, with a preview of the status line
+// line's rows and parts, its bar size, theme and labels, and the token line
+// and its parts, with a preview of the status line
 // redrawn after each answer. configure starts from the bars set up now: the
 // first answer keeps them, and each question offers the value set up. It
 // returns the switches for each bar, as words, for the CLI to write; it
@@ -11,13 +11,34 @@
 // preview renders the payload the status line saved last, else a sample. On
 // a terminal each preview replaces the one before it, in place; with piped
 // output each preview prints below the last.
+//
+// Two front ends ask the same questions, with the same defaults, and give the
+// same answers. The readline one reads a typed line for each question. The
+// Ink one (ink-io.ts) offers each as a choice: the arrow keys and Enter for
+// one option, Space to tick the parts of a row, and the preview redrawn as
+// the selection moves. openIo picks Ink when stdin and stdout are both a
+// terminal and Ink loads, and the readline one otherwise.
 
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
-import { render, parseArgs, readSwitches, stripOwnCodes, PARTS, THEMES, DEFAULT_ROWS } from './statusline';
-import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, parseSize, contextWindow } from './tokenline';
-import type { StatusData, Part } from './statusline';
-import type { Part as TokenPart } from './tokenline';
+import {
+  render,
+  parseArgs,
+  readSwitches,
+  stripOwnCodes,
+  readTranscriptActivity,
+  readSetup,
+  readMemory,
+  gitStatus,
+  headBranch,
+  AGENT_LINGER_MS,
+  PARTS,
+  THEMES,
+  DEFAULT_ROWS,
+} from './statusline';
+import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, summarize } from './tokenline';
+import type { StatusData, Part, TranscriptActivity, Ledger, Setup } from './statusline';
+import type { Part as TokenPart, TranscriptRecord as TokenRecord } from './tokenline';
 import type { PerBar, InstalledSwitches } from './settings';
 import { colorEnabled } from './wordmark';
 import { styles } from './styles';
@@ -33,11 +54,53 @@ interface WizardIo {
   // Set when the output is a terminal, so that each preview can replace the
   // one before it. `columns` is its width, for the rows a long line wraps to.
   terminal?: { columns?: number };
+  // Set by a front end that offers each question as a choice. The wizard then
+  // asks through it, and `ask` goes unused.
+  choices?: ChoiceIo;
+}
+
+// One option of a choice: the words it shows, and the answer it gives.
+interface Option<T> {
+  label: string;
+  value: T;
+}
+
+// A question as a choice of one option, the one at `initial` first. The pill
+// before it is CONFIRM for a yes or no, INPUT for any other. `preview`, when
+// set, gives the preview with the option the selection is on.
+interface PickOne<T> {
+  kind: 'CONFIRM' | 'INPUT';
+  message: string;
+  options: Option<T>[];
+  initial: number;
+  preview?: (value: T) => string;
+}
+
+// A question as a list of parts to tick, with `initial` ticked first. The
+// answer is the ticked parts: those of `initial` still ticked, in their
+// order, then each part ticked since, in the order it was ticked. `preview`,
+// when set, gives the preview with the parts ticked now.
+interface PickMany<P extends string> {
+  message: string;
+  options: readonly P[];
+  initial: readonly P[];
+  preview?: (value: P[]) => string;
+}
+
+// A front end that asks with choices. Each question rejects with
+// EndOfAnswers when it is stopped, such as at Ctrl+C. `preview` sets the
+// preview that the questions after it show, or none for ''.
+interface ChoiceIo {
+  one<T>(question: PickOne<T>): Promise<T>;
+  many<P extends string>(question: PickMany<P>): Promise<P[]>;
+  preview(text: string): void;
 }
 
 interface WizardOptions {
   // The status line's rows when run with these switches.
   preview: (statusLineSwitches: readonly string[]) => string;
+  // The token line when run with these switches, else the sample run's.
+  tokenPreview?: (tokenLineSwitches: readonly string[]) => string;
   // The bars configure found. The wizard starts from them, and from the
   // factory defaults when neither bar is set up.
   installed?: InstalledSwitches;
@@ -51,8 +114,16 @@ type WizardChoices = PerBar<string[], string[] | null>;
 
 // The input ended before the last question: nothing is written.
 class EndOfAnswers extends Error {
-  constructor() {
-    super('The answers ended before the last question. Nothing changed.');
+  constructor(message = 'The answers ended before the last question. Nothing changed.') {
+    super(message);
+  }
+}
+
+// Ctrl+C stopped the questions: nothing is written, as at the end of the
+// input. The star offer, after the settings are written, says so instead.
+class Interrupted extends EndOfAnswers {
+  constructor(message = 'Stopped at Ctrl+C. Nothing changed.') {
+    super(message);
   }
 }
 
@@ -134,8 +205,16 @@ const hint = (s: Styles, value: string | number) => s.dim(`[${value}]`);
 // Asks until `read` takes the answer: it returns the value, or a retry that
 // says why it cannot. Each `read` says what an empty answer, Enter, gives.
 // A magenta pill comes before the question, as VerBump's prompts have one:
-// CONFIRM for a yes or no, INPUT for any other answer.
-async function askFor<T>(io: WizardIo, question: string, read: (answer: string) => T | { retry: string }, kind: 'CONFIRM' | 'INPUT' = 'INPUT'): Promise<T> {
+// CONFIRM for a yes or no, INPUT for any other answer. A front end with
+// choices asks with `pick` instead, the same question as a choice.
+async function askFor<T>(
+  io: WizardIo,
+  question: string,
+  read: (answer: string) => T | { retry: string },
+  kind: 'CONFIRM' | 'INPUT' = 'INPUT',
+  pick?: (choices: ChoiceIo) => Promise<T>,
+): Promise<T> {
+  if (io.choices && pick) return pick(io.choices);
   const s = stylesOf(io);
   io.write(s.pill(kind, 'question'));
   for (;;) {
@@ -157,8 +236,16 @@ const yesNo = (fallback: boolean) => (answer: string) => {
   return { retry: 'Answer y or n.' };
 };
 
-const confirm = (io: WizardIo, question: string, fallback: boolean) =>
-  askFor(io, `${question} ${hint(stylesOf(io), fallback ? 'Y/n' : 'y/N')} `, yesNo(fallback), 'CONFIRM');
+// A yes or no, `fallback` on Enter. As a choice, Yes and No, with `preview`
+// for the preview each gives.
+const confirm = (io: WizardIo, question: string, fallback: boolean, preview?: (yes: boolean) => string) =>
+  askFor(io, `${question} ${hint(stylesOf(io), fallback ? 'Y/n' : 'y/N')} `, yesNo(fallback), 'CONFIRM', (c) =>
+    c.one({ kind: 'CONFIRM', message: question, options: [{ label: 'Yes', value: true }, { label: 'No', value: false }], initial: fallback ? 0 : 1, preview }),
+  );
+
+// A choice of one of `values`, shown as written, `fallback` first.
+const oneOf = <T extends string | number>(message: string, values: readonly T[], fallback: T, preview?: (value: T) => string) => (c: ChoiceIo) =>
+  c.one({ kind: 'INPUT', message, options: values.map((value) => ({ label: String(value), value })), initial: Math.max(0, values.indexOf(fallback)), preview });
 
 // Reads a list of parts from `known`, or `fallback` on Enter. An unknown
 // part is asked again, named, with `where` to say which parts there are.
@@ -199,35 +286,6 @@ function readTokenParts(fallback: TokenPart[]) {
   return (answer: string) => (/^all$/i.test(answer) ? [...TOKEN_PARTS] : list(answer));
 }
 
-// The context window the token line assumes at the first turn without a
-// --window it can read.
-const DEFAULT_WINDOW = contextWindow(0);
-
-// The context window `switches` name, as the token line reads them: the last
-// --window's value, as written, or undefined without one it can read.
-function tokenWindowOf(switches: readonly string[]): string | undefined {
-  const value = parseTokenArgs(switches).window;
-  return parseSize(value) > 0 ? value : undefined;
-}
-
-// The token line's switches for a context window `size`. The size the
-// installed --window gives keeps those switches as they are. Another size
-// drops the installed --window and keeps the rest, then adds the size as
-// --window <size>, unless it is the 200k the token line assumes without one.
-function tokenSwitchesForWindow(size: string, installed: string[]): string[] {
-  if (parseSize(size) === parseSize(tokenWindowOf(installed))) return installed;
-  const others = without(installed, '--window');
-  return parseSize(size) === DEFAULT_WINDOW ? others : [...others, '--window', size];
-}
-
-// Reads a context window size as the token line reads --window, in lower
-// case: 200k, 1m or a count. Enter gives undefined, which keeps the switches
-// as they are.
-const readTokenWindow = (answer: string): string | undefined | { retry: string } => {
-  if (!answer) return undefined;
-  return parseSize(answer) > 0 ? answer.toLowerCase() : { retry: 'Answer a size such as 200k or 1m.' };
-};
-
 // The wizard's io, which counts the screen rows written since the last
 // preview: each newline, and each wrap of a line wider than the terminal,
 // with a character counted one column wide, and colour codes and links,
@@ -258,6 +316,7 @@ function screenOf(io: WizardIo) {
     count(text);
   };
   const clear = () => {
+    io.choices?.preview('');
     if (io.terminal && live) io.write(`\r${rows ? `\x1b[${rows}A` : ''}\x1b[J`);
     rows = 0;
     column = 0;
@@ -266,6 +325,7 @@ function screenOf(io: WizardIo) {
   const screen: WizardIo & { keep(text: string): void; preview(text: string): void; clear(): void } = {
     color: io.color,
     terminal: io.terminal,
+    choices: io.choices,
     write,
     // The answer's line ends before the next write, so the cursor is at the
     // start of the row after the question.
@@ -278,7 +338,9 @@ function screenOf(io: WizardIo) {
       write(text);
       live = false;
     },
+    // A front end with choices shows the preview with its questions.
     preview: (text) => {
+      if (io.choices) return io.choices.preview(text);
       clear();
       live = true;
       write(text);
@@ -288,19 +350,37 @@ function screenOf(io: WizardIo) {
   return screen;
 }
 
-async function runWizard(userIo: WizardIo, { preview, installed }: WizardOptions): Promise<WizardChoices | null> {
+// The questions, then the switches for each bar. A front end with choices
+// shows no preview once they end, so a question after them, such as the star
+// offer, comes without one.
+async function runWizard(userIo: WizardIo, options: WizardOptions): Promise<WizardChoices | null> {
+  try {
+    return await askAll(userIo, options);
+  } finally {
+    userIo.choices?.preview('');
+  }
+}
+
+async function askAll(userIo: WizardIo, { preview, tokenPreview = tokenPreviewer(), installed }: WizardOptions): Promise<WizardChoices | null> {
   const io = screenOf(userIo);
   const s = stylesOf(io);
   const start = startFrom(installed);
   let status: StatusChoices = { ...start.status };
   let tokenLine = start.tokenLine;
-  // The preview in the status line's own colours, or as plain text when the
-  // questions take no colour, under `heading` when one is given.
-  const show = (heading = '') => {
-    const rendered = preview(switchesFor(status));
+  let tokenSwitches = start.tokenSwitches;
+  // The preview of `choices` in the status line's own colours, or as plain
+  // text when the questions take no colour, under `heading` when one is given.
+  // With the token line on, its line with `withTokenSwitches` comes under it.
+  const previewOf = (choices: StatusChoices, withTokenLine = tokenLine, heading = '', withTokenSwitches = tokenSwitches) => {
+    const rendered = preview(switchesFor(choices));
     const rows = io.color ? rendered : stripOwnCodes(rendered);
-    io.preview(`${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${tokenLine ? 'on, when each turn ends' : 'off'}\n`);
+    const token = withTokenLine ? `on, when each turn ends\n  ${tokenPreview(withTokenSwitches)}` : 'off';
+    return `${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${token}\n`;
   };
+  const show = (heading = '') => io.preview(previewOf(status, tokenLine, heading));
+  // The preview with `change` made to the choices so far, for a choice whose
+  // selection moves.
+  const previewWith = (change: Partial<StatusChoices>) => previewOf({ ...status, ...change });
 
   if (isSetUp(installed)) {
     show(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
@@ -312,6 +392,7 @@ async function runWizard(userIo: WizardIo, { preview, installed }: WizardOptions
 
   // A row set up, else the default row there.
   const rowAt = (i: number): Part[] | undefined => start.status.rows[i] ?? DEFAULT_ROWS[i];
+  const rowsFor = (n: number) => Array.from({ length: n }, (_, i) => rowAt(i) ?? []);
   // More rows than the wizard offers stay possible when that many are set up.
   const rowsNow = start.status.rows.length;
   const maxRows = Math.max(MAX_ROWS, rowsNow);
@@ -321,53 +402,117 @@ async function runWizard(userIo: WizardIo, { preview, installed }: WizardOptions
   io.keep(
     `${s.pill('Status line')}The parts: ${PARTS.map(s.value).join(', ')}.\nREADME.md says what each shows. Press Enter to keep the value in brackets.\n`,
   );
-  const count = await askFor(io, `How many status line rows, 1 to ${maxRows}? ${hint(s, rowsNow)} `, (answer) => {
-    const n = answer ? Number(answer) : rowsNow;
-    return Number.isInteger(n) && n >= 1 && n <= maxRows ? n : { retry: `Answer a number from 1 to ${maxRows}.` };
-  });
-  status = { ...status, rows: Array.from({ length: count }, (_, i) => rowAt(i) ?? []) };
+  const counts = Array.from({ length: maxRows }, (_, i) => i + 1);
+  const count = await askFor(
+    io,
+    `How many status line rows, 1 to ${maxRows}? ${hint(s, rowsNow)} `,
+    (answer) => {
+      const n = answer ? Number(answer) : rowsNow;
+      return Number.isInteger(n) && n >= 1 && n <= maxRows ? n : { retry: `Answer a number from 1 to ${maxRows}.` };
+    },
+    'INPUT',
+    oneOf('How many status line rows?', counts, rowsNow, (n) => previewWith({ rows: rowsFor(n) })),
+  );
+  status = { ...status, rows: rowsFor(count) };
   show();
 
   for (let i = 0; i < count; i++) {
     const fallback = rowAt(i);
     const brackets = fallback ? ` ${hint(s, fallback.join(','))}` : '';
-    const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${brackets} `, readParts(fallback, PARTS));
-    status = { ...status, rows: status.rows.map((row, j) => (j === i ? parts : row)) };
+    const withRow = (parts: Part[]) => status.rows.map((row, j) => (j === i ? parts : row));
+    const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${brackets} `, readParts(fallback, PARTS), 'INPUT', (c) =>
+      c.many({ message: `Row ${i + 1}: the parts`, options: PARTS, initial: fallback ?? [], preview: (ticked) => previewWith({ rows: withRow(ticked) }) }),
+    );
+    status = { ...status, rows: withRow(parts) };
     show();
   }
 
-  const segments = await askFor(io, `Cells per bar, ${SEGMENTS.join(' or ')}? ${hint(s, start.status.segments)} `, (answer) =>
-    SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` },
+  const segments = await askFor(
+    io,
+    `Cells per bar, ${SEGMENTS.join(' or ')}? ${hint(s, start.status.segments)} `,
+    (answer) => SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` },
+    'INPUT',
+    oneOf('Cells per bar?', SEGMENTS, start.status.segments, (n) => previewWith({ segments: n })),
   );
   status = { ...status, segments };
   show();
 
-  const theme = await askFor(io, `Theme: ${THEMES.join(', ')}? ${hint(s, start.status.theme)} `, (answer) => {
-    const name = answer.toLowerCase() || start.status.theme;
-    return THEMES.includes(name) ? name : { retry: `Unknown theme: ${answer}. Answer one of ${THEMES.join(', ')}.` };
-  });
+  const theme = await askFor(
+    io,
+    `Theme: ${THEMES.join(', ')}? ${hint(s, start.status.theme)} `,
+    (answer) => {
+      const name = answer.toLowerCase() || start.status.theme;
+      return THEMES.includes(name) ? name : { retry: `Unknown theme: ${answer}. Answer one of ${THEMES.join(', ')}.` };
+    },
+    'INPUT',
+    oneOf('Theme?', THEMES, start.status.theme, (name) => previewWith({ theme: name })),
+  );
   status = { ...status, theme };
   show();
 
-  status = { ...status, labels: await confirm(io, 'Labels in front of the values, such as ctx and 5h?', start.status.labels) };
+  status = {
+    ...status,
+    labels: await confirm(io, 'Labels in front of the values, such as ctx and 5h?', start.status.labels, (yes) => previewWith({ labels: yes })),
+  };
   show();
 
-  tokenLine = await confirm(io, 'Add the token line, shown when each turn ends?', start.tokenLine);
+  tokenLine = await confirm(io, 'Add the token line, shown when each turn ends?', start.tokenLine, (yes) => previewOf(status, yes));
   show();
 
-  let tokenSwitches = start.tokenSwitches;
   if (tokenLine) {
     io.keep(s.pill('Token line'));
     const fallback = tokenPartsOf(start.tokenSwitches);
     const question = `Token line parts: all, req,out,ctx, or your own list from ${TOKEN_PARTS.map(s.value).join(', ')}? ${hint(s, fallback.join(','))} `;
-    tokenSwitches = tokenSwitchesFor(await askFor(io, question, readTokenParts(fallback)), start.tokenSwitches);
-    io.write(s.info('The token line cannot read the context window, so it assumes 200k until the context grows past it.'));
-    const window = await askFor(io, `Context window, 200k or 1m? ${hint(s, tokenWindowOf(start.tokenSwitches) ?? '200k')} `, readTokenWindow);
-    if (window !== undefined) tokenSwitches = tokenSwitchesForWindow(window, tokenSwitches);
+    const parts = await askFor(io, question, readTokenParts(fallback), 'INPUT', (c) =>
+      c.many({
+        message: 'Token line parts',
+        options: TOKEN_PARTS,
+        initial: fallback,
+        preview: (ticked) => previewOf(status, true, '', tokenSwitchesFor(ticked, start.tokenSwitches)),
+      }),
+    );
+    // The token line reads the context window the status line saves, so
+    // there is no question for it. A --window set up stays as it is.
+    tokenSwitches = tokenSwitchesFor(parts, start.tokenSwitches);
+    show();
   }
 
   if (!(await confirm(io, 'Write these choices?', true))) return null;
   return { statusLine: switchesFor(status), tokenLine: tokenLine ? tokenSwitches : null };
+}
+
+// The token line's sample run since the last prompt: four requests, the last
+// at 43% of a 200k context, as in the status line's sample.
+const SAMPLE_RUN: TokenRecord[] = [
+  { type: 'user', message: { content: 'Fix the login redirect.' } },
+  ...[
+    { output_tokens: 900, thinking: 400, cacheWrite: 1500, cacheRead: 78000, input: 600 },
+    { output_tokens: 700, thinking: 300, cacheWrite: 1000, cacheRead: 80000, input: 400 },
+    { output_tokens: 800, thinking: 200, cacheWrite: 2000, cacheRead: 82000, input: 300 },
+    { output_tokens: 1000, thinking: 300, cacheWrite: 2000, cacheRead: 83500, input: 500 },
+  ].map((u, i) => ({
+    type: 'assistant',
+    message: {
+      id: `sample-${i}`,
+      usage: {
+        output_tokens: u.output_tokens,
+        output_tokens_details: { thinking_tokens: u.thinking },
+        input_tokens: u.input,
+        cache_creation_input_tokens: u.cacheWrite,
+        cache_read_input_tokens: u.cacheRead,
+      },
+    },
+  })),
+];
+const SAMPLE_WINDOW = 200000;
+
+// The token line's preview: the sample run's line with the given switches,
+// as the token line reads them.
+function tokenPreviewer(nowMs?: number) {
+  return (switches: readonly string[]) => {
+    const { show, segments, window } = parseTokenArgs([...switches]);
+    return summarize(SAMPLE_RUN, { now: nowMs === undefined ? new Date() : new Date(nowMs), show, segments, window, savedWindow: SAMPLE_WINDOW }) ?? '';
+  };
 }
 
 const REPO = 'jv-k/claude-gauge';
@@ -380,13 +525,15 @@ interface StarOptions {
 }
 
 // The end of setup: with gh at hand, offers to star the repo, and stars it
-// on a yes or Enter. Without gh it says nothing. The end of the input is a no.
+// on a yes or Enter. Without gh it says nothing. The end of the input is a no,
+// and Ctrl+C stops setup, as at any other question.
 async function offerStar(io: WizardIo, { hasGh, star }: StarOptions): Promise<void> {
   if (!hasGh()) return;
   let yes: boolean;
   try {
     yes = await confirm(io, `Star ${REPO} on GitHub with gh?`, true);
   } catch (err) {
+    if (err instanceof Interrupted) throw new Interrupted('Stopped at Ctrl+C. The settings are written, and the repo is not starred.');
     if (err instanceof EndOfAnswers) return;
     throw err;
   }
@@ -395,8 +542,33 @@ async function offerStar(io: WizardIo, { hasGh, star }: StarOptions): Promise<vo
   io.write(star() ? s.ok(`Starred ${s.value(REPO)}. Thank you.`) : s.warn(`gh could not star ${s.value(REPO)}. Nothing else changed.`));
 }
 
-// A status payload to preview with when the status line has saved none:
-// two-fifths of the context, and a 5-hour and a weekly window part used.
+// The preview's examples, for a part that has nothing to show from the
+// payload, the transcript or the folder, so that every part ticked shows. All
+// of them are one session about an hour in: Opus at 43% of its context, at
+// work on a fix for a login redirect on its own branch and worktree.
+// The sample's transcript path, which the preview never reads.
+const SAMPLE_TRANSCRIPT = 'claude-gauge-sample.jsonl';
+const SAMPLE_TEXT = 'on call';
+const SAMPLE_COMMAND_OUTPUT = 'build passing';
+const SAMPLE_PLAN = 'Claude Max 5x';
+// The sample's worktree, for the worktree part only: the branch part names
+// the worktree too, and a session in no worktree shows none there.
+const SAMPLE_WORKTREE = 'login-redirect';
+const SAMPLE_ENV = { claudeMd: 2, rules: 3, mcp: 2, hooks: 1 };
+const SAMPLE_MEMORY = { used: 11 * 1024 ** 3, total: 16 * 1024 ** 3 };
+// What git status --porcelain=v2 --branch would print: the branch two
+// commits ahead, with a file staged, one modified and one untracked.
+const SAMPLE_GIT_HEAD = ['# branch.head fix/login-redirect', '# branch.upstream origin/fix/login-redirect', '# branch.ab +2 -0'];
+const SAMPLE_GIT_CHANGES = [
+  '1 M. N... 100644 100644 100644 0000000 0000000 src/auth/session.ts',
+  '1 .M N... 100644 100644 100644 0000000 0000000 src/auth/redirect.ts',
+  '? test/redirect.test.ts',
+];
+// What earlier sessions spent, today first and then a day back each.
+const SAMPLE_DAYS = [3.06, 5.12, 2.47, 6.8, 4.15, 1.92, 3.38];
+
+// A status payload to preview with when the status line has saved none, and
+// the fields under a saved one.
 function samplePayload(nowMs: number): StatusData {
   const at = (ms: number) => Math.floor((nowMs + ms) / 1000);
   const hour = 3600 * 1000;
@@ -408,9 +580,115 @@ function samplePayload(nowMs: number): StatusData {
     rate_limits: {
       five_hour: { used_percentage: 9, resets_at: at(2 * hour) },
       seven_day: { used_percentage: 41, resets_at: at(3 * 24 * hour) },
+      seven_day_opus: { used_percentage: 58, resets_at: at(3 * 24 * hour) },
+      seven_day_sonnet: { used_percentage: 100, resets_at: at(3 * 24 * hour) },
+      spend_limit: { used_percentage: 31, used_usd: 62, limit_usd: 200 },
     },
-    cost: { total_duration_ms: 72 * 60 * 1000 },
+    cost: { total_duration_ms: 72 * 60 * 1000, total_cost_usd: 1.24, total_lines_added: 156, total_lines_removed: 23 },
+    session_name: 'Fix the login redirect',
+    transcript_path: SAMPLE_TRANSCRIPT,
+    version: '2.1.300',
+    thinking: { enabled: true },
+    fast_mode: true,
+    output_style: { name: 'Explanatory' },
+    pr: { number: 128, review_state: 'approved' },
+    agent: { name: 'reviewer' },
+    prompt_cache: { warm: true, hit_ratio: 0.92 },
   };
+}
+
+// What the sample session's transcript shows.
+function sampleActivity(nowMs: number): TranscriptActivity {
+  const minute = 60 * 1000;
+  return {
+    tools: { running: [{ name: 'Edit', target: 'src/auth/redirect.ts' }], completed: { Read: 12, Bash: 4, Grep: 3 } },
+    agents: [{ type: 'Explore', model: 'Haiku 4.5', description: 'Find the session store', startedAt: nowMs - 2 * minute }],
+    todos: [
+      { content: 'Find the redirect', status: 'completed' },
+      { content: 'Fix the check', status: 'completed' },
+      { content: 'Write the tests', activeForm: 'Writing the tests', status: 'in_progress' },
+      { content: 'Update the docs', status: 'pending' },
+      { content: 'Open the pull request', status: 'pending' },
+    ],
+    skills: ['tdd'],
+    mcp: [{ name: 'github' }],
+    compactions: 1,
+    lastReplyAt: nowMs - 2 * minute,
+    speed: 84,
+  };
+}
+
+// The sample cost ledger, keyed by local day as the status line keys it.
+function sampleLedger(nowMs: number): Ledger {
+  const now = new Date(nowMs);
+  const days: Record<string, number> = {};
+  SAMPLE_DAYS.forEach((usd, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    days[`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`] = usd;
+  });
+  return { days, sessions: {} };
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// The real value with the sample's under it, object by object: the sample
+// fills only what is missing or null.
+function underSample(real: unknown, sample: unknown): unknown {
+  if (real === undefined || real === null) return sample;
+  if (!isRecord(real) || !isRecord(sample)) return real;
+  const merged: Record<string, unknown> = { ...sample, ...real };
+  for (const key of Object.keys(sample)) merged[key] = underSample(real[key], sample[key]);
+  return merged;
+}
+
+// The payload with the sample's fields under it. thinking, fast and style
+// show nothing while they are off, so the preview shows the sample's. The
+// sample's worktree comes in only when `shown` holds the worktree part.
+function withSamplePayload(payload: StatusData, nowMs: number, shown: ReadonlySet<string>): StatusData {
+  const sample = samplePayload(nowMs);
+  const data = underSample(payload, sample) as StatusData;
+  if (shown.has('worktree') && !data.workspace?.git_worktree && !data.worktree?.name) data.workspace = { ...data.workspace, git_worktree: SAMPLE_WORKTREE };
+  if (!data.thinking?.enabled) data.thinking = sample.thinking;
+  if (!data.fast_mode) data.fast_mode = sample.fast_mode;
+  if (!data.output_style?.name || data.output_style.name === 'default') data.output_style = sample.output_style;
+  return data;
+}
+
+// What the transcript shows, with the sample's in each kind it shows none of.
+function withSampleActivity(real: TranscriptActivity, nowMs: number): TranscriptActivity {
+  const sample = sampleActivity(nowMs);
+  const { tools, agents = [], todos = [], skills = [], mcp = [], compactions, lastReplyAt, speed } = real;
+  const shownAgent = agents.some((a) => a.endedAt === undefined || nowMs - a.endedAt < AGENT_LINGER_MS);
+  return {
+    tools: tools.running.length || Object.keys(tools.completed).length ? tools : sample.tools,
+    agents: shownAgent ? agents : sample.agents,
+    todos: todos.length ? todos : sample.todos,
+    ...(skills.length || mcp.length ? { skills, mcp } : { skills: sample.skills, mcp: sample.mcp }),
+    compactions: compactions > 0 ? compactions : sample.compactions,
+    lastReplyAt: lastReplyAt ?? sample.lastReplyAt,
+    speed: speed ?? sample.speed,
+  };
+}
+
+// The git status, with the sample's branch where it names none, and, when
+// `withChanges`, the sample's changes where it has none. The changes are
+// for the git and files parts only: the branch part marks them with *, and
+// a clean folder shows no * there. Without a status in time, the branch
+// comes from HEAD.
+function withSampleStatus(status: string | undefined, branch: () => string, withChanges: boolean): string {
+  const lines = (status ?? '').split(/\r?\n/).filter(Boolean);
+  const head = lines.filter((line) => line.startsWith('#'));
+  const changes = lines.filter((line) => !line.startsWith('#'));
+  const named = status === undefined && branch() ? [`# branch.head ${branch()}`] : head;
+  const hasBranch = named.some((line) => /^# branch\.head (?!\(detached\))\S/.test(line));
+  return [...(hasBranch ? named : SAMPLE_GIT_HEAD), ...(changes.length || !withChanges ? changes : SAMPLE_GIT_CHANGES)].join('\n');
+}
+
+// What Claude Code loads, with the sample's counts where it loads nothing
+// and the sample's plan where neither plan nor user is known.
+function withSampleSetup(real: Setup): Setup {
+  const counts = real.claudeMd || real.rules || real.mcp || real.hooks ? {} : SAMPLE_ENV;
+  return { ...real, ...counts, ...(real.plan || real.user ? {} : { plan: SAMPLE_PLAN }) };
 }
 
 // The payload the status line saved, or the sample when there is none, or
@@ -425,11 +703,50 @@ function loadPayload(file: string, nowMs = Date.now()): StatusData {
   return samplePayload(nowMs);
 }
 
+type PreviewOptions = Omit<Parameters<typeof render>[1] & object, 'config'>;
+
 // The preview: the status line's rows for `payload`, with the given switches
-// as words, as the settings command passes them.
-function previewer(payload: StatusData, options: Omit<Parameters<typeof render>[1] & object, 'config'> = {}) {
-  return (switches: readonly string[]) => render(payload, { ...options, config: parseArgs([...switches]) });
+// as words, as the settings command passes them. A part with nothing to show
+// shows its sample, and only the preview does: the status line itself shows
+// nothing for it. The preview reads the transcript, git and the files Claude
+// Code loads, as the status line does, but never runs --command, and takes
+// the sample ledger in place of the real one.
+function previewer(payload: StatusData, options: PreviewOptions = {}) {
+  const { transcript = readTranscriptActivity, statusOf = gitStatus, branchOf = headBranch, memoryOf = readMemory } = options;
+  const setupOf = options.setupOf ?? ((cwd: string) => readSetup(cwd, { env: options.env ?? process.env }));
+  return (switches: readonly string[]) => {
+    const nowMs = options.nowMs ?? Date.now();
+    const config = parseArgs([...switches]);
+    const shown = new Set<string>((config.rows ?? DEFAULT_ROWS).flat());
+    return render(withSamplePayload(payload, nowMs, shown), {
+      ...options,
+      nowMs,
+      // Any command will do, as the preview runs none: the part shows the
+      // sample's output.
+      config: { ...config, text: config.text || SAMPLE_TEXT, command: config.command || 'sample' },
+      transcript: (file, read) => {
+        let real: TranscriptActivity = { tools: { running: [], completed: {} }, agents: [], todos: [], skills: [], mcp: [], compactions: 0 };
+        try {
+          if (file !== SAMPLE_TRANSCRIPT) real = transcript(file, read);
+        } catch {
+          /* a transcript that cannot be read shows the sample */
+        }
+        return withSampleActivity(real, nowMs);
+      },
+      statusOf: (cwd) => withSampleStatus(statusOf(cwd), () => branchOf(cwd), shown.has('git') || shown.has('files')),
+      setupOf: (cwd) => withSampleSetup(setupOf(cwd)),
+      memoryOf: () => memoryOf() ?? SAMPLE_MEMORY,
+      commandOutputOf: () => SAMPLE_COMMAND_OUTPUT,
+      ledger: options.ledger ?? sampleLedger(nowMs),
+    });
+  };
 }
+
+// What the questions read from: a terminal, or a pipe or file.
+type Input = NodeJS.ReadableStream & { isTTY?: boolean };
+
+// An io for the questions on a pair of streams, which `close` lets go of.
+type OpenIo = WizardIo & { close(): void };
 
 // What streamIo writes to: a terminal, or a pipe or file.
 interface Output {
@@ -446,7 +763,7 @@ interface Output {
 // on from the question. The questions are in
 // colour when the colour gate allows, and redraw the preview in place when
 // `output` is a terminal.
-function streamIo(input: NodeJS.ReadableStream & { isTTY?: boolean }, output: Output, color = colorEnabled(output)): WizardIo & { close(): void } {
+function streamIo(input: Input, output: Output, color = colorEnabled(output)): OpenIo {
   const rl = readline.createInterface({ input, crlfDelay: Infinity });
   const lines = rl[Symbol.asyncIterator]();
   return {
@@ -465,6 +782,28 @@ function streamIo(input: NodeJS.ReadableStream & { isTTY?: boolean }, output: Ou
   };
 }
 
-export { runWizard, offerStar, confirm, streamIo, EndOfAnswers, samplePayload, loadPayload, previewer, switchesFor };
+// Loads the Ink front end for the two streams. It rejects where Ink cannot be
+// loaded, such as the plugin's checkout, which has no node_modules. The
+// import() stays an import() in the build, which loads Ink, an ES module, on
+// every Node the package runs on; a require() would not.
+type LoadInk = (input: Input, output: Output, color: boolean) => Promise<OpenIo>;
+const loadInk: LoadInk = async (input, output, color) => (await import('./ink-io.js')).loadInkIo(input, output, color);
 
-export type { WizardIo, WizardOptions, WizardChoices, StarOptions };
+// The questions on a pair of streams: the Ink front end when both are a
+// terminal and Ink loads, else the readline one, with no warning, as for
+// piped answers.
+async function openIo(input: Input, output: Output, load: LoadInk = loadInk): Promise<OpenIo> {
+  const color = colorEnabled(output);
+  if (input.isTTY && output.isTTY) {
+    try {
+      return await load(input, output, color);
+    } catch {
+      /* no Ink here: the readline questions ask instead */
+    }
+  }
+  return streamIo(input, output, color);
+}
+
+export { runWizard, offerStar, confirm, streamIo, openIo, EndOfAnswers, Interrupted, samplePayload, loadPayload, previewer, tokenPreviewer, switchesFor };
+
+export type { WizardIo, WizardOptions, WizardChoices, StarOptions, ChoiceIo, Output, Input, OpenIo };

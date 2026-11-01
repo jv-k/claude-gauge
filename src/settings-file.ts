@@ -4,6 +4,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { GaugeError, message, plain } from './errors';
 
 type Json = Record<string, unknown>;
 
@@ -30,10 +31,10 @@ function readSettings(file: string): SettingsFile {
   try {
     settings = JSON.parse(text);
   } catch (err) {
-    throw new Error(`${file} is not valid JSON (${(err as Error).message}), so claude-gauge leaves it alone. Fix it by hand.`);
+    throw new GaugeError(message`${file} is not valid JSON (${plain((err as Error).message)}), so claude-gauge leaves it alone. Fix it by hand.`);
   }
   if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
-    throw new Error(`${file} does not hold a JSON object, so claude-gauge leaves it alone. Fix it by hand.`);
+    throw new GaugeError(message`${file} does not hold a JSON object, so claude-gauge leaves it alone. Fix it by hand.`);
   }
   return { settings: settings as Json, text };
 }

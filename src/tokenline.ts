@@ -13,17 +13,24 @@
 //   - with --latest: prints the line for the calling session, for Claude to
 //     paste into its reply where hook messages are not shown.
 //
+// Neither the hook input nor the transcript holds the context window size.
+// The status line gets it from Claude Code at each render and saves it per
+// session, and ctx reads it from there (docs/adr/0006).
+//
 // Switches:
 //   --show <parts>      parts to show, in order, comma-separated, from
 //                       time,req,out,cache,ctx (default: all of them)
 //   --segments <5|10>   cells in the context bar (default 5)
-//   --window <tokens>   context window size, e.g. 200k or 1m. Without it the
-//                       window is 200k, or 1M once the context passes 200k.
+//   --window <tokens>   context window size, e.g. 200k or 1m, over the size
+//                       the status line saved for the session. Without
+//                       either, the window is 200k, or 1M once the context
+//                       passes 200k.
 //   --latest            print the line for the calling session
 //   --instruct          as a SessionStart hook: in the VS Code extension and
 //                       the desktop app, tell Claude to end each reply with
 //                       the line; in the terminal CLI, print nothing
 
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -116,12 +123,14 @@ function parseSize(value: string | undefined): number {
   return Math.round(Number(m[1]) * scale);
 }
 
-// The transcript records the model but not its context window, so take the
-// window from --window when set. Otherwise assume Claude Code's default of
-// 200k, and 1M once the context is past that.
-function contextWindow(ctx: number, explicit?: string): number {
+// Neither the hook input nor the transcript holds the context window, so
+// take it from --window when set, then from the size the status line saved
+// for the session. Otherwise assume Claude Code's default of 200k, and 1M
+// once the context is past that.
+function contextWindow(ctx: number, explicit?: string, saved?: number): number {
   const size = parseSize(explicit);
   if (size > 0) return size;
+  if (saved !== undefined && saved > 0) return saved;
   return ctx > 200e3 ? 1e6 : 200e3;
 }
 
@@ -207,13 +216,15 @@ function tally(records: TranscriptRecord[]): Tally {
 interface SummarizeOptions {
   now?: Date;
   window?: string;
+  // The window size the status line saved for the session, if any.
+  savedWindow?: number;
   segments?: number | string;
   show?: readonly Part[];
 }
 
 // Builds the line from parsed transcript records; null when the run made no
 // API request yet, or when none of the chosen parts has anything to show.
-function summarize(records: TranscriptRecord[], { now = new Date(), window, segments, show = PARTS }: SummarizeOptions = {}): string | null {
+function summarize(records: TranscriptRecord[], { now = new Date(), window, savedWindow, segments, show = PARTS }: SummarizeOptions = {}): string | null {
   let start = 0;
   for (let i = records.length - 1; i >= 0; i--) {
     if (isHumanPrompt(records[i])) {
@@ -233,7 +244,7 @@ function summarize(records: TranscriptRecord[], { now = new Date(), window, segm
     cache: () => `cache w${fmt(run.cacheWrite)} r${fmt(run.cacheRead)}`,
     ctx: () => {
       if (!run.ctx) return '';
-      const pct = (run.ctx / contextWindow(run.ctx, window)) * 100;
+      const pct = (run.ctx / contextWindow(run.ctx, window, savedWindow)) * 100;
       return `ctx ${Math.round(pct)}% ${bar(pct, segmentsOf(segments))} ${fmt(run.ctx)}`;
     },
   };
@@ -262,6 +273,25 @@ function readRecords(transcriptPath: string): TranscriptRecord[] {
 // empty, else ~/.claude. The status line resolves it the same way, with its
 // own copy, because each script runs alone from the copy that setup makes.
 const configDirOf = (env: Record<string, string | undefined>, home: string) => env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+
+// The context window size the status line saved for `session`, from the
+// payload Claude Code sends it at each render (ADR 0006); undefined when it
+// saved none or the file cannot be read. src/statusline.ts writes the file,
+// named the same way: the SHA-1 of the session id, then .json.
+function savedWindowOf(session: string | undefined): number | undefined {
+  if (!session) return undefined;
+  const name = `${createHash('sha1').update(session).digest('hex')}.json`;
+  const file = path.join(configDirOf(process.env, os.homedir()), 'claude-gauge', '.state', 'windows', name);
+  try {
+    const size = Number(JSON.parse(fs.readFileSync(file, 'utf8'))?.context_window_size);
+    return Number.isFinite(size) && size > 0 ? size : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// A transcript's session id: its file name, as Claude Code names it.
+const sessionOf = (transcriptPath: string) => path.basename(transcriptPath, '.jsonl');
 
 function latestTranscript(cwd: string): string | null {
   const projects = path.join(configDirOf(process.env, os.homedir()), 'projects');
@@ -294,6 +324,12 @@ function latestTranscript(cwd: string): string | null {
 // it prints nothing. Claude Code names the host in CLAUDE_CODE_ENTRYPOINT,
 // which hooks inherit; an unknown or missing value counts as a host that
 // needs nothing.
+//
+// src/statusline.ts holds a copy of INSTRUCT_HOSTS, shellWord and
+// instruction(), because each script runs alone and imports no shared
+// module. Change both copies together. The test "the token line's
+// --instruct code is the status line's, apart from the prose" in
+// test/tokenline.test.js fails when they differ.
 const INSTRUCT_HOSTS = ['claude-vscode', 'claude-desktop', 'claude-desktop-3p'];
 
 // A shell word: as is when plain, else in single quotes. ~ stays bare so the
@@ -339,7 +375,7 @@ if (isMain) {
     if (text) process.stdout.write(text);
   } else if (latest) {
     const t = latestTranscript(process.cwd());
-    const line = t ? summarize(readRecords(t), opts) : null;
+    const line = t ? summarize(readRecords(t), { ...opts, savedWindow: savedWindowOf(sessionOf(t)) }) : null;
     if (line) process.stdout.write(line + '\n');
   } else {
     const chunks: Buffer[] = [];
@@ -347,9 +383,10 @@ if (isMain) {
     process.stdin.on('end', () => {
       let line: string | null = null;
       try {
-        const input: { transcript_path?: string } = JSON.parse(Buffer.concat(chunks).toString());
+        const input: { session_id?: unknown; transcript_path?: string } = JSON.parse(Buffer.concat(chunks).toString());
         if (input.transcript_path && fs.existsSync(input.transcript_path)) {
-          line = summarize(readRecords(input.transcript_path), opts);
+          const session = typeof input.session_id === 'string' && input.session_id ? input.session_id : sessionOf(input.transcript_path);
+          line = summarize(readRecords(input.transcript_path), { ...opts, savedWindow: savedWindowOf(session) });
         }
       } catch {
         /* never break the turn over a reporting hook */

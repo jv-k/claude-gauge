@@ -10,7 +10,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
@@ -27,13 +26,14 @@ for (const name of Object.keys(process.env)) {
   if (/^CLAUDE_CODE_USE_|^ANTHROPIC_BASE_URL$/.test(name)) delete process.env[name];
 }
 
+const { plain, tempDir } = require('./helpers');
+
 // A config folder of its own, so a terminal render here never saves usage
 // into the real one.
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-gauge-'));
+const tmp = tempDir('claude-gauge-');
 // No COLUMNS of the caller's: an example that needs a width names its own.
 const env = { ...process.env, CLAUDE_CONFIG_DIR: tmp };
 delete env.COLUMNS;
-const { plain } = require('./helpers');
 
 const envFor = (columns) => (columns ? { ...env, COLUMNS: String(columns) } : env);
 const node = (script, args, input, columns) =>
@@ -78,7 +78,8 @@ const statusExamples = [
   [
     ['--show', 'ctx,5h,7d', '--show', 'duration,repo,branch,model,effort', '--right', 'model,effort', '--no-reset'],
     'ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░░┃░ │ 7d 41% ▓▓░┃░\n1h12m │ project                       Opus 5.5 │ effort high\n',
-    60,
+    // A 64-column terminal: Claude Code keeps 2 columns free on each side, so the row is 60 wide.
+    64,
   ],
   [
     ['--show', 'ctx,5h,7d', '--theme', 'pastel', '--bar-filled', '█', '--bar-empty', '·', '--no-reset'],
