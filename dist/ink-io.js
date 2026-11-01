@@ -94,7 +94,9 @@ function inkIoWith({ ink, React, mount, ready }, output, color) {
             redraw((r) => r + 1);
         });
         // After useInput's own effect, which starts to read the keys.
-        React.useEffect(() => ready?.(), []);
+        React.useEffect(() => {
+            ready?.();
+        }, []);
         const now = state.current;
         return h(ink.Text, null, frame(view, now.cursor, now.ticked, now.warning));
     };
