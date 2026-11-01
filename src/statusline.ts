@@ -1498,7 +1498,7 @@ function readJson(file: string): JsonObject {
 }
 
 // Whether a value is a whole number above 0.
-const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value > 0;
+const isPositiveInteger = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value > 0;
 
 const objectAt = (value: unknown, key: string): JsonObject => (isObject(value) && isObject(value[key]) ? value[key] : {});
 const stringAt = (value: unknown, key: string): string | undefined => {
@@ -1757,7 +1757,7 @@ function readSetup(
     hooks: settings.reduce((n, s) => n + hooksIn(s), 0) + plugins.hooks,
     ...(plan ? { plan } : {}),
     ...(user ? { user } : {}),
-    ...(isCount(padding) ? { padding } : {}),
+    ...(isPositiveInteger(padding) ? { padding } : {}),
   };
 }
 
@@ -1905,7 +1905,7 @@ interface RenderOptions {
 // number above 0.
 const columnsOf = (value: number | string | undefined): number | undefined => {
   const n = Number(value);
-  return isCount(n) ? n : undefined;
+  return isPositiveInteger(n) ? n : undefined;
 };
 
 // The columns Claude Code keeps free on each side of the status line, before
