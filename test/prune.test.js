@@ -91,7 +91,7 @@ test('a prune that hits a missing file, or a missing folder, does not throw and 
     }
     return fs.rmSync(file, ...rest);
   };
-  assert.doesNotThrow(() => pruneTranscriptStates(dir, NOW, io));
+  assert.doesNotThrow(() => pruneTranscriptStates(dir, NOW, { fs: io }));
   assert.equal(fs.existsSync(old), false);
   assert.equal(fs.statSync(stamp).mtimeMs, NOW);
   assert.doesNotThrow(() => pruneTranscriptStates(path.join(dir, 'missing'), NOW));
@@ -154,4 +154,22 @@ test('a render prunes the state folder under the Claude config folder, after it 
     assert.equal(fs.existsSync(recent), true);
     assert.ok(fs.existsSync(path.join(config, 'claude-gauge', '.state', 'transcripts.pruned')));
   }
+});
+
+test('with no reader folder yet, the prune still writes the stamp, so the next render makes one stat and nothing more', () => {
+  const { dir, stamp } = stateFolder();
+  pruneTranscriptStates(dir, NOW);
+  assert.equal(fs.statSync(stamp).mtimeMs, NOW);
+  assert.equal(fs.existsSync(dir), false);
+
+  const calls = [];
+  const io = { ...fs };
+  for (const name of ['statSync', 'readdirSync', 'rmSync', 'writeFileSync', 'utimesSync']) {
+    io[name] = (...args) => {
+      calls.push(name);
+      return fs[name](...args);
+    };
+  }
+  pruneTranscriptStates(dir, NOW + HOUR, { fs: io });
+  assert.deepEqual(calls, ['statSync']);
 });

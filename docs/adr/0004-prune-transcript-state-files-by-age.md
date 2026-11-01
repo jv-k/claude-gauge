@@ -13,10 +13,10 @@ The transcript reader keeps one small JSON state file per transcript in `.state/
 The owner chose on 2026-10-11 to prune by age:
 
 - After a render prints, it removes every state file in that folder, session and subagent alike, whose last change time is 30 days or more ago.
-- The prune runs at most once a day. A stamp file, `transcripts.pruned` in the state folder beside `transcripts/`, holds the time of the last prune as its last change time. It stays out of `transcripts/`, so that folder holds the reader's state files alone. When the stamp is less than a day old, the render does nothing more than one `stat` of it. When the stamp is missing, or a day old or more, the render prunes and then touches the stamp. A stamp dated in the future, after the clock was put back, counts as old.
-- A render that uses a state file updates its last change time, even when its transcript gained nothing and the state is not written. So the state of a session that is still shown is never pruned.
+- The prune runs at most once a day. A stamp file, `transcripts.pruned` in the state folder beside `transcripts/`, holds the time of the last prune as its last change time. It stays out of `transcripts/`, so that folder holds the reader's state files alone. When the stamp is less than a day old, the render does nothing more than one `stat` of it. When the stamp is missing, or a day old or more, the render prunes and then touches the stamp, even when `transcripts/` does not exist yet. A stamp dated in the future, after the clock was put back, counts as old.
+- A render that uses a state file updates its last change time, even when its transcript gained nothing and the state is not written. So the state of a session that is still shown is never pruned. A state file's last change time is the file system's, from the wall clock, which is also what a write sets, so the touch uses the wall clock as well.
 - The two limits are `STATE_KEEP_MS` and `PRUNE_EVERY_MS` in `src/statusline.ts`. The prune reads the render clock (`nowMs`), so tests set it.
-- Only files named as the reader names them, the SHA-1 of a transcript's path then `.json`, are removed. The prune never fails the render and never prints: a file another render removed first, or a folder that cannot be read, is skipped.
+- Only files named as the reader names them, the SHA-1 of a transcript's path then `.json`, are removed. The prune never fails the render and never prints: a file another render removed first is skipped, and a folder that cannot be listed counts as empty.
 
 ## Options turned down
 

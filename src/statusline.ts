@@ -3122,14 +3122,12 @@ const pruneStampOf = (stateDir: string): string => `${path.resolve(stateDir)}.pr
 // The reader's state files: the SHA-1 of a transcript's path, then .json.
 const STATE_FILE_NAME = /^[0-9a-f]{40}\.json$/;
 
-type PruneFs = Pick<typeof fs, 'statSync' | 'readdirSync' | 'rmSync' | 'writeFileSync' | 'utimesSync'>;
-
 // When the stamp file is missing or PRUNE_EVERY_MS old, removes the state
-// files in stateDir, the reader's folder, last changed STATE_KEEP_MS or more before nowMs.
-// Otherwise it does nothing past one stat. Best effort: a file another
-// render removed first, or a folder that cannot be read, is skipped, and
-// nothing is printed.
-function pruneTranscriptStates(stateDir: string, nowMs: number, io: PruneFs = fs): void {
+// files in stateDir, the reader's folder, last changed STATE_KEEP_MS or
+// more before nowMs, then touches the stamp. Otherwise it does nothing past
+// one stat. Best effort: a file another render removed first is skipped, a
+// folder that cannot be listed counts as empty, and nothing is printed.
+function pruneTranscriptStates(stateDir: string, nowMs: number, { fs: io = fs }: { fs?: TranscriptFs } = {}): void {
   const stamp = pruneStampOf(stateDir);
   try {
     // A stamp from the future, after the clock was put back, counts as old.
@@ -3138,11 +3136,11 @@ function pruneTranscriptStates(stateDir: string, nowMs: number, io: PruneFs = fs
   } catch {
     /* no stamp yet: prune now */
   }
-  let names: string[];
+  let names: string[] = [];
   try {
     names = io.readdirSync(stateDir).map(String);
   } catch {
-    return;
+    /* no reader folder yet: nothing to remove, but stamp it */
   }
   for (const name of names) {
     if (!STATE_FILE_NAME.test(name)) continue;
