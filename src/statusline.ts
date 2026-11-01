@@ -1365,15 +1365,30 @@ function toolsPart({ theme, cwd, activity: activityOf }: PartContext): string {
 const AGENTS_SHOWN = 3;
 const AGENT_LINGER_MS = 60_000;
 const DESCRIPTION_CHARS = 30;
+// A subagent in the background whose own transcript has not changed for this
+// long shows a dim ? in place of the running mark, as its task notification
+// may never come. Issue #60 chose the time; ADR 0003 records the rule.
+const AGENT_STALE_MS = 10 * 60_000;
+
+// Whether a running subagent is stale, as it may have stopped without a
+// word: it runs in the background, and its own transcript was found but has
+// not changed for AGENT_STALE_MS. One in the foreground, or with no
+// transcript found, runs.
+const isStaleAgent = (agent: AgentRun, nowMs: number): boolean =>
+  agent.background === true && agent.activeAt !== undefined && nowMs - agent.activeAt >= AGENT_STALE_MS;
 
 // One subagent: ◐ Explore (Haiku 4.5) Find the config loader 1m while it
-// runs, ✓ when it finished, ✗ when it failed or was stopped.
+// runs, a dim ? in place of ◐ while it is stale, ✓ when it finished,
+// ✗ when it failed or was stopped.
 function agentItem(agent: AgentRun, theme: Theme, nowMs: number): string {
   const model = agent.model ? ` (${agent.model})` : '';
   const description = agent.description ? ` ${cut(agent.description, DESCRIPTION_CHARS)}` : '';
   const elapsed = agent.startedAt !== undefined ? ` ${formatDuration(Math.max(0, (agent.endedAt ?? nowMs) - agent.startedAt))}` : '';
   const text = `${agent.type}${model}${description}${elapsed}`;
-  if (agent.endedAt === undefined) return `${theme.accent}◐ ${text}${RESET}`;
+  if (agent.endedAt === undefined) {
+    const mark = isStaleAgent(agent, nowMs) ? `${theme.muted}?${RESET} ${theme.accent}` : `${theme.accent}◐ `;
+    return `${mark}${text}${RESET}`;
+  }
   return `${agent.failed ? `${theme.bad}✗` : `${theme.good}✓`}${RESET} ${theme.muted}${text}${RESET}`;
 }
 
@@ -2288,6 +2303,8 @@ interface AgentRun {
   // When its own transcript last changed, in ms since the epoch, while it
   // runs and that transcript is found.
   activeAt?: number;
+  // It runs in the background, so only its task notification ends it.
+  background?: boolean;
 }
 
 // A todo of the session's list: what to do, the form Claude Code shows
@@ -2334,8 +2351,9 @@ function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [
   const running = tools.running.map(({ name, target }) => ({ name: sanitise(name), ...(target ? { target: sanitise(target) } : {}) }));
   const completed: Record<string, number> = {};
   for (const [name, count] of Object.entries(tools.completed)) completed[sanitise(name)] = (completed[sanitise(name)] ?? 0) + count;
-  const cleanAgents = agents.map(({ type, model, description, ...times }) => ({
+  const cleanAgents = agents.map(({ type, model, description, background, ...times }) => ({
     ...times,
+    ...(background === true ? { background } : {}),
     type: sanitise(type),
     ...(model ? { model: sanitise(model) } : {}),
     ...(description ? { description: sanitise(description) } : {}),
@@ -2436,7 +2454,7 @@ interface TodoCall {
 // A subagent as the reader keeps it: by the id of the call that started it,
 // whether it runs in the background, and the agent id that names its own
 // transcript, once found.
-type AgentEntry = AgentRun & { id: string; background?: boolean; agentId?: string };
+type AgentEntry = AgentRun & { id: string; agentId?: string };
 
 // The ended calls kept at most, newest first: a call whose result never
 // came must not grow the state for ever. Running calls are all kept, so a
@@ -3053,8 +3071,9 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   if (changed) saveTranscriptState(io, stateFile, state);
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
   // A running subagent's own transcript names the model it runs on, version
-  // and all, so it wins over the alias the Agent call may give.
-  const agents = state.agents.map(({ id, background, agentId, ...agent }) =>
+  // and all, so it wins over the alias the Agent call may give. Its last
+  // change time, with the background flag, lets the part mark it as stale.
+  const agents = state.agents.map(({ id, agentId, ...agent }) =>
     subagents && agent.endedAt === undefined && agentId ? { ...agent, ...readSubagentTranscript(io, path.join(folder, `agent-${agentId}.jsonl`), stateDir) } : agent,
   );
   const todos = state.todos.map(({ id, ...todo }) => todo);
