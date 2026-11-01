@@ -156,6 +156,25 @@ test('a render prunes the state folder under the Claude config folder, after it 
   }
 });
 
+test('a render prunes the saved window sizes by the same rule, with a stamp of their own', () => {
+  for (const args of [['--show', 'model'], ['--latest', '--show', 'model']]) {
+    const config = tempDir();
+    const dir = path.join(config, 'claude-gauge', '.state', 'windows');
+    const old = fileAt(dir, stateName('old-session'), Date.now() - 31 * DAY);
+    const recent = fileAt(dir, stateName('recent-session'), Date.now() - 29 * DAY);
+    const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'dist', 'statusline.js'), ...args], {
+      cwd: config,
+      env: { ...process.env, CLAUDE_CONFIG_DIR: config, CLAUDE_CODE_SESSION_ID: '' },
+      input: JSON.stringify({ model: { display_name: 'Opus' } }),
+      encoding: 'utf8',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(fs.existsSync(old), false, `${args.join(' ')} left the old window file`);
+    assert.equal(fs.existsSync(recent), true);
+    assert.ok(fs.existsSync(path.join(config, 'claude-gauge', '.state', 'windows.pruned')));
+  }
+});
+
 test('with no reader folder yet, the prune still writes the stamp, so the next render makes one stat and nothing more', () => {
   const { dir, stamp } = stateFolder();
   pruneTranscriptStates(dir, NOW);
