@@ -22,7 +22,7 @@ Set CursorBlink false
 # the repo with gh. claude-gauge runs the build of this checkout. Without
 # DEMO_HOME, the chain stops at its first step and nothing is written.
 Hide
-Type 'cd "${DEMO_HOME:?run scripts/media.sh}/my-app" && export HOME="$DEMO_HOME" CLAUDE_CONFIG_DIR="$DEMO_HOME/.claude" PATH="$DEMO_HOME/bin:/usr/bin:/bin" PS1="\[\e[0;35m\]❯\[\e[0m\] " FORCE_COLOR=1 && claude-gauge() { node "$DEMO_CLI" "$@"; } && clear'
+Type 'cd "${DEMO_HOME:?run scripts/media.sh}/my-app" && export HOME="$DEMO_HOME" CLAUDE_CONFIG_DIR="$DEMO_HOME/.claude" PATH="$DEMO_HOME/bin" PS1="\[\e[0;35m\]❯\[\e[0m\] " FORCE_COLOR=1 && claude-gauge() { node "$DEMO_CLI" "$@"; } && printf "\\e[H\\e[2J"'
 Enter
 Sleep 500ms
 Type "claude-gauge setup"

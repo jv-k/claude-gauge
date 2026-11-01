@@ -11,6 +11,18 @@ out=docs/media
 now=$(date +%s)
 export FORCE_COLOR=1 COLUMNS=100
 
+# Every render runs in a fresh home folder with its own config folder, so the
+# script never writes the real ~/.claude. The folder has a fixed name, because
+# the GIF shows its path. If the folder exists, the script stops.
+demo=/tmp/claude-gauge-demo
+if [ -e "$demo" ]; then
+  echo "scripts/media.sh: $demo exists. Remove it, then run the script again." >&2
+  exit 1
+fi
+mkdir -p "$demo/bin" "$demo/my-app" "$demo/.claude" "$demo/stills"
+trap 'rm -rf "${demo:?}"' EXIT
+export CLAUDE_CONFIG_DIR="$demo/stills"
+
 # A payload with the README's figures, half-way through the 5-hour window.
 payload() {
   local five=$1 seven=${2:-41}
@@ -42,16 +54,7 @@ shot() {
   done
 } | sed '$d' | shot themes
 
-# The setup wizard, recorded from docs/media/demo.tape. The wizard runs in a
-# fresh home folder with its own config folder. So it never writes the real
-# ~/.claude. The folder has a fixed name, because the GIF shows its path. If
-# the folder exists, the script stops.
-demo=/tmp/claude-gauge-demo
-if [ -e "$demo" ]; then
-  echo "scripts/media.sh: $demo exists. Remove it, then run the script again." >&2
-  exit 1
-fi
-mkdir -p "$demo/bin" "$demo/my-app" "$demo/.claude"
-trap 'rm -rf "${demo:?}"' EXIT
+# The setup wizard, recorded from docs/media/demo.tape. Only node is on its
+# PATH, so setup does not find gh and offer to star the repo.
 ln -s "$(command -v node)" "$demo/bin/node"
 env -u COLUMNS DEMO_HOME="$demo" DEMO_CLI="$PWD/dist/cli.js" vhs "$out/demo.tape"
