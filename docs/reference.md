@@ -4,7 +4,7 @@ This page lists every part, switch, theme and install route. The [README](../REA
 
 ## Contents
 
-- [What the bars show](#what-the-bars-show)
+- [What the lines show](#what-the-lines-show)
   - [Status line](#status-line)
   - [More status line parts](#more-status-line-parts)
     - [Per-model windows](#per-model-windows)
@@ -33,7 +33,7 @@ This page lists every part, switch, theme and install route. The [README](../REA
 - [Development](#development)
   - [Releases](#releases)
 
-## What the bars show
+## What the lines show
 
 ### Status line
 
@@ -202,14 +202,14 @@ In Claude Code, add this repository as a plugin marketplace, install the plugin,
 /claude-gauge:setup
 ```
 
-Start a new session or run `/reload-plugins` after the install, so the setup command is there. Setup asks which bars you want, and whether to keep the defaults or choose the rows, bar size, theme and token line parts. It then runs `claude-gauge setup` with your answers as switches, which backs up `~/.claude/settings.json` and adds the bars to it. A plugin cannot set the status line itself, which is why setup writes your settings.
+Start a new session or run `/reload-plugins` after the install, so the setup command is there. Setup asks which lines you want, and whether to keep the defaults or choose the rows, bar style, bar size, theme and token line parts. It then runs `claude-gauge setup` with your answers as switches, which backs up `~/.claude/settings.json` and adds the lines to it. A plugin cannot set the status line itself, which is why setup writes your settings.
 
 The plugin has three commands:
 
 | Command | Effect |
 | --- | --- |
 | `/claude-gauge:setup` | Adds the status line and the token line. If your settings already run another status line, such as claude-hud, it asks before it replaces it, and saves it. |
-| `/claude-gauge:configure` | Changes the switches of a bar, adds the missing one, or takes one out. |
+| `/claude-gauge:configure` | Changes the switches of a line, adds the missing one, or takes one out. |
 | `/claude-gauge:uninstall` | Takes claude-gauge out of your settings and puts back the status line it replaced. |
 
 The settings run a small launcher in `~/.claude/claude-gauge/launcher/`, not the plugin's own folder. Claude Code keeps each plugin version in a folder of its own, so the launcher runs the newest installed version each time. A plugin update therefore needs no setup, and once the plugin is uninstalled the launcher prints nothing.
@@ -222,7 +222,7 @@ In a terminal, run setup with npx:
 npx @jv-k/claude-gauge setup
 ```
 
-Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, then whether to add the token line, and if so, which parts it shows. It does not ask for your context window, because the token line gets it from the status line. `configure` keeps a `--window` that you set up, as you wrote it. It redraws the status line from your last terminal session's figures. A part that has nothing to show from them shows an example value, such as `$1.24` for `cost`, so that each part you tick shows in the preview. The preview does not run your `--command`, and shows an example output in its place. Under the status line, the preview shows the token line for a sample turn, and redraws it as you tick its parts. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is yes, `[Y/n]`, so Enter stars it.
+Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar style, the bar size for the `classic` style, the theme and the labels, then whether to add the token line, and if so, which parts it shows. It does not ask for your context window, because the token line gets it from the status line. `configure` keeps a `--window` that you set up, as you wrote it. It redraws the status line from your last terminal session's figures. A part that has nothing to show from them shows an example value, such as `$1.24` for `cost`, so that each part you tick shows in the preview. The preview does not run your `--command`, and shows an example output in its place. Under the status line, the preview shows the token line for a sample turn, and redraws it as you tick its parts. The bar style applies to both lines. It then backs up `~/.claude/settings.json` and adds the lines to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is yes, `[Y/n]`, so Enter stars it.
 
 When stdin and stdout are both a terminal, each question is a choice, and these keys answer it:
 
@@ -233,24 +233,24 @@ When stdin and stdout are both a terminal, each question is a choice, and these 
 | Enter | Accepts the selection. The default answer is selected first, so Enter keeps it. |
 | Ctrl+C | Stops the questions. Nothing changes, and the command exits with code 130. |
 
-The status line redraws as the selection moves, before you accept it, so you see each theme, bar size and row before you choose it. The questions use [Ink](https://github.com/vadimdemedes/ink), which npm installs with claude-gauge.
+The status line redraws as the selection moves, before you accept it, so you see each bar style, theme, bar size and row before you choose it. While a question waits, the preview's `ctx`, `5h` and `7d` bars move up and down, so you see each bar style at every level and the pace marker in each colour. The other parts keep your figures. The questions use [Ink](https://github.com/vadimdemedes/ink), which npm installs with claude-gauge.
 
 When stdin or stdout is not a terminal, for example when you pipe the answers in, setup asks for a typed answer to each question, one line each. Enter gives the default in brackets. The plugin's own copy of claude-gauge has no Ink, so there the questions are always typed. In a terminal, the new status line then replaces the old one in place after each answer. With piped output, each one prints below the last.
 
-Setup copies the two scripts into `~/.claude/claude-gauge/runtime/` (under `$CLAUDE_CONFIG_DIR` when that is set) and points the settings there, so the bars keep working when npm clears its npx cache. To keep the `claude-gauge` command at hand instead of running it through npx, install it globally with `npm install -g @jv-k/claude-gauge`.
+Setup copies the two scripts into `~/.claude/claude-gauge/runtime/` (under `$CLAUDE_CONFIG_DIR` when that is set) and points the settings there, so the lines keep working when npm clears its npx cache. To keep the `claude-gauge` command at hand instead of running it through npx, install it globally with `npm install -g @jv-k/claude-gauge`.
 
 The `claude-gauge` command has four commands:
 
 | Command | Effect |
 | --- | --- |
 | `claude-gauge setup` | Adds the status line and the token line. |
-| `claude-gauge configure` | Changes the switches of a bar that setup added, adds the missing one, or takes one out. |
+| `claude-gauge configure` | Changes the switches of a line that setup added, adds the missing one, or takes one out. |
 | `claude-gauge uninstall` | Takes claude-gauge out of your settings and puts back the status line it replaced. |
 | `claude-gauge update` | Updates claude-gauge with the tool that installed it, and keeps your switches. See [Update](#update). |
 
-`configure` starts its questions from the bars you set up. The first question keeps them as they are, and each later question offers your current value. Switches that it does not ask about, such as `--text`, stay as they are.
+`configure` starts its questions from the lines you set up. The first question keeps them as they are, and each later question offers your current value. Switches that it does not ask about, such as `--text`, stay as they are.
 
-`setup` and `configure` ask their questions when you give them no bar switches. With bar switches they ask nothing, which suits scripts and dotfiles:
+`setup` and `configure` ask their questions when you give them no line switches. With line switches they ask nothing, which suits scripts and dotfiles:
 
 | Switch | Effect |
 | --- | --- |
@@ -258,22 +258,22 @@ The `claude-gauge` command has four commands:
 | `--no-status-line` | Leaves the status line out, or takes it out. |
 | `--token-line <switches>` | Adds the token line, run with these switches. `""` gives the defaults. |
 | `--no-token-line` | Leaves the token line out, or takes it out. |
-| `--replace` | Replaces a status line that is not claude-gauge's. Without it, a command with bar switches stops rather than replace it. |
-| `--yes` | With `setup` only: adds each bar that the switches above do not name, with the defaults. |
+| `--replace` | Replaces a status line that is not claude-gauge's. Without it, a command with line switches stops rather than replace it. |
+| `--yes` | With `setup` only: adds each line that the switches above do not name, with the defaults. |
 | `--dry-run` | With `update` only: prints the commands that `update` would run, and runs nothing. |
 
-For example, both bars with the defaults, and then 10-cell bars on the status line:
+For example, both lines with the defaults, and then 10-cell bars on the status line:
 
 ```sh
 npx @jv-k/claude-gauge setup --yes
 npx @jv-k/claude-gauge configure --status-line "--segments 10"
 ```
 
-The settings file is `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set. `claude-gauge --help` lists the commands and switches. The bars' own switches are in [Options](#options).
+The settings file is `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set. `claude-gauge --help` lists the commands and switches. The lines' own switches are in [Options](#options).
 
-`claude-gauge --help` prints the claude-gauge wordmark above its usage, as does the usage after a mistake, and `setup` and `configure` print it at the start of their questions. A `setup` or `configure` run with bar switches prints no wordmark.
+`claude-gauge --help` prints the claude-gauge wordmark above its usage, as does the usage after a mistake, and `setup` and `configure` print it at the start of their questions. A `setup` or `configure` run with line switches prints no wordmark.
 
-The command's output has the look of [VerBump](https://github.com/jv-k/VerBump). Each part of a run starts with a header in capitals, such as `SETUP`, `STATUS LINE`, `TOKEN LINE` or `DONE`, in an inverted cyan bar. A question that waits for your answer has a magenta `CONFIRM` or `INPUT` header, and an error has a red `ERROR` header. A green ✔ starts a line that reports a change, a yellow ! a warning, a red ✖ an error and a cyan ℹ information. A dim ↳ starts a detail under the line before it. Paths, commands, part names and versions are green, and the default answer in brackets, such as `[Y/n]`, is dim. For example, `setup --yes` prints:
+The command's output has the look of [VerBump](https://github.com/jv-k/VerBump). Each part of a run starts with a header in capitals, such as `SETUP`, `STATUS LINE`, `TOKEN LINE` or `DONE`, in an inverted cyan pill. A question that waits for your answer has a magenta `CONFIRM` or `INPUT` header, and an error has a red `ERROR` header. A green ✔ starts a line that reports a change, a yellow ! a warning, a red ✖ an error and a cyan ℹ information. A dim ↳ starts a detail under the line before it. Paths, commands, part names and versions are green, and the default answer in brackets, such as `[Y/n]`, is dim. For example, `setup --yes` prints:
 
 ```text
 SETUP
@@ -296,7 +296,7 @@ Paste this into a Claude Code session:
 Install claude-gauge: clone https://github.com/jv-k/claude-gauge to ~/.claude/claude-gauge, then follow INSTALL-WITH-CLAUDE.md in it.
 ```
 
-Claude asks which bars and parts you want, checks that they run, backs up your settings and merges the new entries into them. If you also use the VS Code extension or the desktop app, it adds the hooks that paste the bars into its replies there. To update later, ask the same again.
+Claude asks which lines and parts you want, checks that they run, backs up your settings and merges the new entries into them. If you also use the VS Code extension or the desktop app, it adds the hooks that paste the lines into its replies there. To update later, ask the same again.
 
 ### By hand
 
@@ -306,7 +306,7 @@ Clone the repo into your Claude Code folder:
 git clone https://github.com/jv-k/claude-gauge.git ~/.claude/claude-gauge
 ```
 
-Then add one or both bars to `~/.claude/settings.json`. If the file already has a `hooks` block, add the `Stop` entry to it rather than replacing it.
+Then add one or both lines to `~/.claude/settings.json`. If the file already has a `hooks` block, add the `Stop` entry to it rather than replacing it.
 
 **Status line:**
 
@@ -347,10 +347,10 @@ curl -fsSL https://raw.githubusercontent.com/jv-k/claude-gauge/main/dist/tokenli
 
 ### In VS Code and the desktop app
 
-Claude Code runs a custom status line and shows Stop hook messages only in the terminal CLI. At the time of writing, the VS Code extension and the desktop app show neither. You can still see both bars there in two ways:
+Claude Code runs a custom status line and shows Stop hook messages only in the terminal CLI. At the time of writing, the VS Code extension and the desktop app show neither. You can still see both lines there in two ways:
 
-- **Run `claude` in VS Code's integrated terminal.** That is the terminal CLI, so both bars show as usual.
-- **Have Claude paste the bars into its replies.** A SessionStart hook asks it to, in those two hosts only.
+- **Run `claude` in VS Code's integrated terminal.** That is the terminal CLI, so both lines show as usual.
+- **Have Claude paste the lines into its replies.** A SessionStart hook asks it to, in those two hosts only.
 
 For the second way, keep the settings entries above and add one hook per bar you want in the replies:
 
@@ -363,7 +363,7 @@ For the second way, keep the settings entries above and add one hook per bar you
 }
 ```
 
-`--instruct` reads the host from the `CLAUDE_CODE_ENTRYPOINT` variable, which Claude Code sets and its hooks inherit. In the VS Code extension (`claude-vscode`) and the desktop app (`claude-desktop`, `claude-desktop-3p`) it prints an instruction into Claude's context: end every reply with the output of the same command with `--latest` in place of `--instruct`, run as the last tool call of the turn and pasted verbatim in one code block, never guessed and never reused from an earlier turn. In the terminal CLI (`cli`) it prints nothing. One settings file therefore serves every host, and the terminal, which shows the bars already, stays as it is. Any other or missing value also prints nothing: the variable is not documented, so a host under a new name gets a quiet session rather than a wrong one. `echo $CLAUDE_CODE_ENTRYPOINT` in Claude's shell shows the value.
+`--instruct` reads the host from the `CLAUDE_CODE_ENTRYPOINT` variable, which Claude Code sets and its hooks inherit. In the VS Code extension (`claude-vscode`) and the desktop app (`claude-desktop`, `claude-desktop-3p`) it prints an instruction into Claude's context: end every reply with the output of the same command with `--latest` in place of `--instruct`, run as the last tool call of the turn and pasted verbatim in one code block, never guessed and never reused from an earlier turn. In the terminal CLI (`cli`) it prints nothing. One settings file therefore serves every host, and the terminal, which shows the lines already, stays as it is. Any other or missing value also prints nothing: the variable is not documented, so a host under a new name gets a quiet session rather than a wrong one. `echo $CLAUDE_CODE_ENTRYPOINT` in Claude's shell shows the value.
 
 The hook runs when a session starts, resumes, is cleared with `/clear`, or compacts, so the instruction survives all four. The reply in the VS Code panel then ends like this:
 
@@ -373,7 +373,7 @@ ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░┃░░ → 14:10 │ 7d 41% ▓
 4 req │ out 3.4k (1.2k think) │ cache w6.5k r1.69M
 ```
 
-Each hook takes its bar's usual switches, such as `--show` and `--segments`, and passes them on to the command it names. The token line hook above shows no `time` and no `ctx`, because the status line shows both: `ctx` starts its first row and `time` starts its second. On a 1M-context model, add `--window 1m` to both, for the reason in [Token line options](#token-line-options). Each reply costs one or two short tool calls more.
+Each hook takes its line's usual switches, such as `--show` and `--segments`, and passes them on to the command it names. The token line hook above shows no `time` and no `ctx`, because the status line shows both: `ctx` starts its first row and `time` starts its second. On a 1M-context model, add `--window 1m` to both, for the reason in [Token line options](#token-line-options). Each reply costs one or two short tool calls more.
 
 `--latest` finds the calling session by the `CLAUDE_CODE_SESSION_ID` variable, which Claude Code sets for the commands it runs. Without that variable, it takes the newest transcript of the current folder. It prints no colours, because a reply shows colour codes as junk.
 
@@ -612,7 +612,7 @@ npx @jv-k/claude-gauge setup
 
 Setup finds claude-hud's status line in your settings, shows it to you, and asks before it replaces it. It saves claude-hud's command, so `/claude-gauge:uninstall` or `claude-gauge uninstall` puts it back. claude-hud's command runs a launcher that prints nothing once the claude-hud plugin is uninstalled, so keep claude-hud installed until you are sure that you will not go back.
 
-Setup does not read claude-hud's `config.json`. claude-gauge has no configuration file: each choice is a part named in `--show`, or a switch, in the bar's `command` in your settings. Each repeated `--show` is one row, and the parts show in the order you name them. This table gives the claude-gauge part or switch for claude-hud's main options, as claude-hud's README listed them on 2026-10-09:
+Setup does not read claude-hud's `config.json`. claude-gauge has no configuration file: each choice is a part named in `--show`, or a switch, in the line's `command` in your settings. Each repeated `--show` is one row, and the parts show in the order you name them. This table gives the claude-gauge part or switch for claude-hud's main options, as claude-hud's README listed them on 2026-10-09:
 
 | claude-hud option | claude-gauge |
 | --- | --- |

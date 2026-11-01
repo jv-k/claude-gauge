@@ -89,7 +89,7 @@ function toggle(list, ...names) {
 }
 
 test('setup: the customise path by key presses gives the answers that the same typed answers give', async () => {
-  const typed = await runWizard(scripted(['n', '3', 'ctx,7d', 'model', 'time, cost', '10', 'pastel', 'n', 'n', 'y']), { preview });
+  const typed = await runWizard(scripted(['n', '3', 'ctx,7d', 'model', 'time, cost', '', '10', 'pastel', 'n', 'n', 'y']), { preview });
   const { io, answer } = await driver();
   const run = runWizard(io, { preview });
   await answer(KEY.down, KEY.enter); // the defaults: No
@@ -97,6 +97,7 @@ test('setup: the customise path by key presses gives the answers that the same t
   await answer(...toggle(PARTS, '5h')); // row 1: ctx,5h,7d without 5h
   await answer(...toggle(PARTS, 'time', 'duration', 'repo', 'branch', 'effort')); // row 2: model alone
   await answer(...toggle(PARTS, 'time', 'cost')); // row 3: time, then cost
+  await answer(KEY.enter); // bar style: classic
   await answer(KEY.down, KEY.enter); // 10 cells
   await answer(KEY.down, KEY.down, KEY.down, KEY.enter); // pastel
   await answer(KEY.down, KEY.enter); // labels: No
@@ -134,22 +135,22 @@ test('configure: Enter at every question keeps what is set up, as typed Enters d
     statusLine: ['--text', 'a b', '--show', 'ctx,bogus,5h', '--segments=10', '--frobnicate', '--theme', 'mono', '--no-labels', '--right', 'ctx'],
     tokenLine: ['--window', '1m', '--show', 'req,ctx'],
   };
-  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', 'y']), { preview, installed });
+  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', '', 'y']), { preview, installed });
   const { io, answer } = await driver();
   const run = runWizard(io, { preview, installed });
-  await answer(KEY.down, KEY.enter); // keep the bars: No
-  for (let i = 0; i < 7; i++) await answer(KEY.enter);
+  await answer(KEY.down, KEY.enter); // keep the lines: No
+  for (let i = 0; i < 8; i++) await answer(KEY.enter);
   await answer(KEY.enter); // write: Yes
   assert.deepEqual(await run, typed);
 });
 
 test('configure: a changed token line by key presses gives the answers that the same typed answers give, its --window kept', async () => {
   const installed = { statusLine: ['--segments', '10'], tokenLine: ['--window', '1m', '--show', 'req,ctx'] };
-  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', 'req,ctx,out', 'y']), { preview, installed });
+  const typed = await runWizard(scripted(['n', '', '', '', '', '', '', '', '', 'req,ctx,out', 'y']), { preview, installed });
   const { io, answer, out } = await driver();
   const run = runWizard(io, { preview, installed });
-  await answer(KEY.down, KEY.enter); // keep the bars: No
-  for (let i = 0; i < 7; i++) await answer(KEY.enter); // rows, two rows, cells, theme, labels, token line
+  await answer(KEY.down, KEY.enter); // keep the lines: No
+  for (let i = 0; i < 8; i++) await answer(KEY.enter); // rows, two rows, bar style, cells, theme, labels, token line
   await answer(...toggle(TOKEN_PARTS, 'out')); // req,ctx then out
   const write = await answer(KEY.enter);
   assert.match(write, /Write these choices/, 'no context window question');
@@ -162,7 +163,7 @@ test('the preview redraws as the selection moves, before the answer is accepted'
   const { io, next, press, answer } = await driver();
   const run = runWizard(io, { preview });
   await answer(KEY.down, KEY.enter); // customise
-  for (let i = 0; i < 4; i++) await answer(KEY.enter); // rows, two rows, cells
+  for (let i = 0; i < 5; i++) await answer(KEY.enter); // rows, two rows, bar style, cells
   const theme = await next();
   assert.match(plain(theme.lastFrame()), /<>\n[\s\S]*❯ default/);
   await press(theme, KEY.down);
@@ -179,6 +180,48 @@ test('the preview redraws as the selection moves, before the answer is accepted'
   assert.deepEqual(await run, { statusLine: ['--theme', 'pastel'], tokenLine: [] });
 });
 
+test('a bar style other than classic skips the cells question, and both lines get it', async () => {
+  const { io, next, press, answer } = await driver();
+  const run = runWizard(io, { preview });
+  await answer(KEY.down, KEY.enter); // customise
+  for (let i = 0; i < 3; i++) await answer(KEY.enter); // rows, two rows
+  const style = await next();
+  assert.match(plain(style.lastFrame()), /INPUT\nBar style\?\n❯ classic\n {2}steps/);
+  await press(style, KEY.down);
+  assert.match(plain(style.lastFrame()), /<--bar-style steps>\n[\s\S]*❯ steps/, 'the preview shows the style the selection is on');
+  await press(style, KEY.enter);
+  const theme = await next();
+  assert.match(plain(theme.lastFrame()), /Theme\?/, 'no cells question');
+  await press(theme, KEY.enter);
+  for (let i = 0; i < 4; i++) await answer(KEY.enter); // labels, token line, token line parts, write
+  const typed = await runWizard(scripted(['n', '', '', '', 'steps', '', '', '', '', 'y']), { preview });
+  assert.deepEqual(await run, typed);
+  assert.deepEqual(typed, { statusLine: ['--bar-style', 'steps'], tokenLine: ['--bar-style', 'steps'] });
+});
+
+test('with animate set, a question redraws its preview with the clock, with no key pressed', async () => {
+  const ink = await import('ink');
+  const React = (await import('react')).default;
+  const { render } = await import('ink-testing-library');
+  let question;
+  let ready = false;
+  const deps = { ink, React, mount: (tree) => (question = render(tree)), ready: () => (ready = true), animate: true };
+  const io = inkIoWith(deps, { write: () => {} }, false);
+  let frame = 0;
+  io.choices.preview(() => `frame ${++frame}`);
+  const asked = io.choices.one({ kind: 'CONFIRM', message: 'Go?', options: [{ label: 'Yes', value: true }], initial: 0 });
+  while (!ready) await delay(1);
+  const first = plain(question.lastFrame());
+  await delay(400);
+  assert.notEqual(plain(question.lastFrame()), first, 'a later frame of the preview');
+  assert.ok(frame > 2, `${frame} frames`);
+  question.stdin.write(KEY.enter);
+  assert.equal(await asked, true);
+  const after = frame;
+  await delay(200);
+  assert.equal(frame, after, 'an answered question draws no more frames');
+});
+
 test('a row with no part ticked is not accepted, and says why', async () => {
   const { io, next, press, answer } = await driver();
   const run = runWizard(io, { preview });
@@ -188,7 +231,7 @@ test('a row with no part ticked is not accepted, and says why', async () => {
   await press(row, KEY.space, KEY.down, KEY.space, KEY.down, KEY.space, KEY.enter); // untick ctx, 5h, 7d
   assert.match(plain(row.lastFrame()), /Tick at least one part/);
   await press(row, KEY.space, KEY.enter); // tick 7d
-  for (let i = 0; i < 6; i++) await answer(KEY.enter);
+  for (let i = 0; i < 7; i++) await answer(KEY.enter);
   assert.deepEqual(await run, { statusLine: ['--show', '7d'], tokenLine: [] });
 });
 
@@ -257,7 +300,7 @@ test('dist/cli.js from a copy with no node_modules runs the readline wizard, wit
   const bin = tempDir('claude-gauge-bin-');
   const r = runCli(dir, ['setup'], { cli: path.join(copy, 'cli.js'), input: 'y\n', env: { NO_COLOR: '1', PATH: bin, Path: bin } });
   ok(r);
-  assert.match(r.stdout, /Use the defaults: both bars, with the parts above\? \[Y\/n\] y\n/, 'the typed question');
+  assert.match(r.stdout, /Use the defaults: both lines, with the parts above\? \[Y\/n\] y\n/, 'the typed question');
   assert.equal(r.stderr, '');
   assert.ok(fs.existsSync(path.join(dir, 'settings.json')));
 });

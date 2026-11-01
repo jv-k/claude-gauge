@@ -5,11 +5,11 @@ allowed-tools: Bash(node:*), AskUserQuestion, Read
 
 # Configure claude-gauge
 
-You are changing the switches of claude-gauge's bars in the user's Claude Code settings: the **status line** and the **token line**. The claude-gauge command does the writing. Your job is to ask the questions, turn the answers into switches, and run it once. Never edit `settings.json` yourself.
+You are changing the switches of claude-gauge's lines in the user's Claude Code settings: the **status line** and the **token line**. The claude-gauge command does the writing. Your job is to ask the questions, turn the answers into switches, and run it once. Never edit `settings.json` yourself.
 
 ## 1. Read what is set up now
 
-Read the user's settings file: `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`. claude-gauge's status line is the `statusLine` command that runs a `claude-gauge` `statusline.js`, and its token line is the `hooks.Stop` command that runs a `claude-gauge` `tokenline.js`. The switches after the script are the bar's current choices.
+Read the user's settings file: `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`. claude-gauge's status line is the `statusLine` command that runs a `claude-gauge` `statusline.js`, and its token line is the `hooks.Stop` command that runs a `claude-gauge` `tokenline.js`. The switches after the script are the line's current choices.
 
 If neither is there, tell the user to run `/claude-gauge:setup` first, and stop.
 
@@ -19,12 +19,13 @@ If neither is there, tell the user to run `/claude-gauge:setup` first, and stop.
 
 First ask one question, with one `AskUserQuestion` call:
 
-- **What to change?** Offer the status line, the token line, and taking a bar out. When only one bar is set up, offer to add the missing one in place of the bar that is not there.
+- **What to change?** Offer the status line, the token line, and taking a line out. When only one line is set up, offer to add the missing one in place of the line that is not there.
 
-Then ask a second `AskUserQuestion` call with only the questions for the bar the user chose, the recommended option first in each. For the status line:
+Then ask a second `AskUserQuestion` call with only the questions for the line the user chose, the recommended option first in each. For the status line:
 
 - **Rows?** Keep them (recommended), the default two rows (`ctx,5h,7d` above `time,duration,repo,branch,model,effort`), or one row of usage only (`--show 5h,7d`). The user can also type their own rows: each `--show` is one row, its parts separated by commas, from the parts tables in the claude-gauge README.
-- **Bar size?** Keep it (recommended), 5 cells (the default), or 10 (`--segments 10`).
+- **Bar style?** Keep it (recommended), or two of `classic` (the default, `▓▓┃░░`), `steps` (`▅▅▅▁▁▁`) and `hairline` (`━━╋───`) that are not the current one (`--bar-style <name>`). The user can also type `rising`, `dots`, `spark` or `underline`. A bar style applies to both lines: when it changes, set the same `--bar-style` in the token line's switches too, if a token line is set up.
+- **Bar size?** Ask only when the bar style is `classic`. Keep it (recommended), 5 cells (the default), or 10 (`--segments 10`).
 - **Theme?** Keep it (recommended), or one of `default`, `mono`, `high-contrast` and `pastel` (`--theme <name>`) that is not the current one.
 
 For the token line:
@@ -33,17 +34,17 @@ For the token line:
 
 Do not ask for the context window. The token line takes it from the status line. Keep a `--window` that is set up now, as it is written.
 
-To take a bar out, ask which one. To add the missing bar, ask the same questions for it, with its defaults in place of "Keep", and pass its switches to `configure` as for a changed bar: `configure` adds a bar that is not there.
+To take a line out, ask which one. To add the missing line, ask the same questions for it, with its defaults in place of "Keep", and pass its switches to `configure` as for a changed line: `configure` adds a line that is not there. A token line added next to a status line with a `--bar-style` takes the same `--bar-style`.
 
 ## 3. Run configure
 
-A bar's switches replace all of its current ones, so start from its current switches and change only what the user changed. Pass each changed bar's full switches as one single-quoted argument, and leave a bar the user did not change out of the command:
+A line's switches replace all of its current ones, so start from its current switches and change only what the user changed. Pass each changed line's full switches as one single-quoted argument, and leave a line the user did not change out of the command:
 
 ```sh
 node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" configure --status-line '<status line switches>' --token-line '<token line switches>'
 ```
 
-To take a bar out, pass `--no-status-line` or `--no-token-line` in place of its pair. Taking the status line out puts back the status line that setup replaced, if there was one.
+To take a line out, pass `--no-status-line` or `--no-token-line` in place of its pair. Taking the status line out puts back the status line that setup replaced, if there was one.
 
 If the command exits 1 because the settings run another status line, show the user the command it printed and ask with `AskUserQuestion` whether to replace it, recommending to replace it, since claude-gauge saves it. With consent, run the same command again with `--replace` added.
 

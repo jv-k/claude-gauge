@@ -34,6 +34,7 @@ import {
   AGENT_LINGER_MS,
   PARTS,
   THEMES,
+  BAR_STYLES,
   DEFAULT_ROWS,
 } from './statusline';
 import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, summarize } from './tokenline';
@@ -57,6 +58,9 @@ interface WizardIo {
   // Set by a front end that offers each question as a choice. The wizard then
   // asks through it, and `ask` goes unused.
   choices?: ChoiceIo;
+  // Set by a front end that redraws its preview with the clock, so the
+  // preview can animate.
+  animated?: boolean;
 }
 
 // One option of a choice: the words it shows, and the answer it gives.
@@ -89,16 +93,18 @@ interface PickMany<P extends string> {
 
 // A front end that asks with choices. Each question rejects with
 // EndOfAnswers when it is stopped, such as at Ctrl+C. `preview` sets the
-// preview that the questions after it show, or none for ''.
+// preview that the questions after it show, or none for ''. A function
+// gives the preview as it is now, for a front end that animates it.
 interface ChoiceIo {
   one<T>(question: PickOne<T>): Promise<T>;
   many<P extends string>(question: PickMany<P>): Promise<P[]>;
-  preview(text: string): void;
+  preview(text: string | (() => string)): void;
 }
 
 interface WizardOptions {
-  // The status line's rows when run with these switches.
-  preview: (statusLineSwitches: readonly string[]) => string;
+  // The status line's rows when run with these switches, as plain text when
+  // `plain` is set.
+  preview: (statusLineSwitches: readonly string[], plain?: boolean) => string;
   // The token line when run with these switches, else the sample run's.
   tokenPreview?: (tokenLineSwitches: readonly string[]) => string;
   // The bars configure found. The wizard starts from them, and from the
@@ -130,9 +136,11 @@ class Interrupted extends EndOfAnswers {
 const MAX_ROWS = 3;
 const SEGMENTS = [5, 10] as const;
 
-// The status line choices, as the wizard builds them up.
+// The status line choices, as the wizard builds them up. The bar style is
+// the token line's too.
 interface StatusChoices {
   rows: Part[][];
+  barStyle: string;
   segments: (typeof SEGMENTS)[number];
   theme: string;
   labels: boolean;
@@ -140,7 +148,7 @@ interface StatusChoices {
   others: string[];
 }
 
-const DEFAULT_CHOICES: StatusChoices = { rows: DEFAULT_ROWS, segments: 5, theme: 'default', labels: true, others: [] };
+const DEFAULT_CHOICES: StatusChoices = { rows: DEFAULT_ROWS, barStyle: 'classic', segments: 5, theme: 'default', labels: true, others: [] };
 
 // Where the wizard starts: the status line choices, whether the token line
 // is on, and the token line's switches to keep when it stays on.
@@ -155,10 +163,11 @@ const same = (a: readonly unknown[], b: readonly unknown[]) => JSON.stringify(a)
 
 // The fewest switches that give `choices`: none for the defaults, then the
 // switches the wizard does not ask about. A row not chosen yet is left out.
-function switchesFor({ rows, segments, theme, labels, others }: StatusChoices): string[] {
+function switchesFor({ rows, barStyle, segments, theme, labels, others }: StatusChoices): string[] {
   const chosen = rows.filter((row) => row.length);
   const words: string[] = [];
   if (!same(chosen, DEFAULT_ROWS)) for (const row of chosen) words.push('--show', row.join(','));
+  if (barStyle !== 'classic') words.push('--bar-style', barStyle);
   if (segments !== 5) words.push('--segments', String(segments));
   if (theme !== 'default') words.push('--theme', theme);
   if (!labels) words.push('--no-labels');
@@ -166,7 +175,7 @@ function switchesFor({ rows, segments, theme, labels, others }: StatusChoices): 
 }
 
 // The status line choices that `switches` give, read as the status line reads
-// them, so the last --segments or --theme wins. A part name or theme the
+// them, so the last --bar-style, --segments or --theme wins. A part name or theme the
 // status line does not know reads as the status line shows it: left out, or
 // the default theme.
 function statusChoicesOf(switches: readonly string[]): StatusChoices {
@@ -175,7 +184,8 @@ function statusChoicesOf(switches: readonly string[]): StatusChoices {
     if (name === '--show') {
       const row = value.split(',').map((p) => p.trim()).filter((p): p is Part => (PARTS as readonly string[]).includes(p));
       if (row.length) status.rows.push(row);
-    } else if (name === '--segments') status.segments = Number(value) === 10 ? 10 : 5;
+    } else if (name === '--bar-style') status.barStyle = (BAR_STYLES as readonly string[]).includes(value.trim()) ? value.trim() : 'classic';
+    else if (name === '--segments') status.segments = Number(value) === 10 ? 10 : 5;
     else if (name === '--theme') status.theme = THEMES.includes(value.trim()) ? value.trim() : 'default';
     else if (name === '--no-labels') status.labels = false;
     else status.others.push(...words);
@@ -279,6 +289,13 @@ function tokenSwitchesFor(parts: TokenPart[], installed: string[]): string[] {
   return same(parts, TOKEN_PARTS) ? others : ['--show', parts.join(','), ...others];
 }
 
+// The token line's `switches` with the status line's bar style, so the two
+// lines draw their bars alike. classic needs no switch.
+const withBarStyle = (switches: readonly string[], barStyle: string): string[] => [
+  ...without(switches, '--bar-style'),
+  ...(barStyle === 'classic' ? [] : ['--bar-style', barStyle]),
+];
+
 // Reads the token line's parts: `all` for all five, else a list as readParts
 // reads it.
 function readTokenParts(fallback: TokenPart[]) {
@@ -322,7 +339,7 @@ function screenOf(io: WizardIo) {
     column = 0;
     live = false;
   };
-  const screen: WizardIo & { keep(text: string): void; preview(text: string): void; clear(): void } = {
+  const screen: WizardIo & { keep(text: string): void; preview(text: string | (() => string)): void; clear(): void } = {
     color: io.color,
     terminal: io.terminal,
     choices: io.choices,
@@ -338,12 +355,13 @@ function screenOf(io: WizardIo) {
       write(text);
       live = false;
     },
-    // A front end with choices shows the preview with its questions.
+    // A front end with choices shows the preview with its questions, and
+    // takes the function, to call as often as it redraws.
     preview: (text) => {
       if (io.choices) return io.choices.preview(text);
       clear();
       live = true;
-      write(text);
+      write(typeof text === 'function' ? text() : text);
     },
     clear,
   };
@@ -372,22 +390,27 @@ async function askAll(userIo: WizardIo, { preview, tokenPreview = tokenPreviewer
   // text when the questions take no colour, under `heading` when one is given.
   // With the token line on, its line with `withTokenSwitches` comes under it.
   const previewOf = (choices: StatusChoices, withTokenLine = tokenLine, heading = '', withTokenSwitches = tokenSwitches) => {
-    const rendered = preview(switchesFor(choices));
+    const rendered = preview(switchesFor(choices), !io.color);
     const rows = io.color ? rendered : stripOwnCodes(rendered);
-    const token = withTokenLine ? `on, when each turn ends\n  ${tokenPreview(withTokenSwitches)}` : 'off';
+    const token = withTokenLine ? `on, when each turn ends\n  ${tokenPreview(withBarStyle(withTokenSwitches, choices.barStyle))}` : 'off';
     return `${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${token}\n`;
   };
-  const show = (heading = '') => io.preview(previewOf(status, tokenLine, heading));
+  // A function, so a front end that animates the preview can redraw it.
+  const show = (heading = '') => {
+    const now = status;
+    const line = tokenLine;
+    io.preview(() => previewOf(now, line, heading));
+  };
   // The preview with `change` made to the choices so far, for a choice whose
   // selection moves.
   const previewWith = (change: Partial<StatusChoices>) => previewOf({ ...status, ...change });
 
   if (isSetUp(installed)) {
     show(installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n');
-    if (await confirm(io, 'Keep the current bars as they are?', true)) return {};
+    if (await confirm(io, 'Keep the current lines as they are?', true)) return {};
   } else {
     show('The status line with the defaults:\n');
-    if (await confirm(io, 'Use the defaults: both bars, with the parts above?', true)) return { statusLine: [], tokenLine: [] };
+    if (await confirm(io, 'Use the defaults: both lines, with the parts above?', true)) return { statusLine: [], tokenLine: [] };
   }
 
   // A row set up, else the default row there.
@@ -427,15 +450,31 @@ async function askAll(userIo: WizardIo, { preview, tokenPreview = tokenPreviewer
     show();
   }
 
-  const segments = await askFor(
+  const barStyle = await askFor(
     io,
-    `Cells per bar, ${SEGMENTS.join(' or ')}? ${hint(s, start.status.segments)} `,
-    (answer) => SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` },
+    `Bar style: ${BAR_STYLES.join(', ')}? ${hint(s, start.status.barStyle)} `,
+    (answer) => {
+      const name = answer.toLowerCase() || start.status.barStyle;
+      return (BAR_STYLES as readonly string[]).includes(name) ? name : { retry: `Unknown bar style: ${answer}. Answer one of ${BAR_STYLES.join(', ')}.` };
+    },
     'INPUT',
-    oneOf('Cells per bar?', SEGMENTS, start.status.segments, (n) => previewWith({ segments: n })),
+    oneOf('Bar style?', BAR_STYLES as readonly string[], start.status.barStyle, (name) => previewWith({ barStyle: name })),
   );
-  status = { ...status, segments };
+  status = { ...status, barStyle };
   show();
+
+  // Only classic takes a number of cells: each other style has its own.
+  if (barStyle === 'classic') {
+    const segments = await askFor(
+      io,
+      `Cells per bar, ${SEGMENTS.join(' or ')}? ${hint(s, start.status.segments)} `,
+      (answer) => SEGMENTS.find((n) => String(n) === (answer || String(start.status.segments))) ?? { retry: `Answer ${SEGMENTS.join(' or ')}.` },
+      'INPUT',
+      oneOf('Cells per bar?', SEGMENTS, start.status.segments, (n) => previewWith({ segments: n })),
+    );
+    status = { ...status, segments };
+    show();
+  }
 
   const theme = await askFor(
     io,
@@ -478,7 +517,7 @@ async function askAll(userIo: WizardIo, { preview, tokenPreview = tokenPreviewer
   }
 
   if (!(await confirm(io, 'Write these choices?', true))) return null;
-  return { statusLine: switchesFor(status), tokenLine: tokenLine ? tokenSwitches : null };
+  return { statusLine: switchesFor(status), tokenLine: tokenLine ? withBarStyle(tokenSwitches, status.barStyle) : null };
 }
 
 // The token line's sample run since the last prompt: four requests, the last
@@ -510,8 +549,8 @@ const SAMPLE_WINDOW = 200000;
 // as the token line reads them.
 function tokenPreviewer(nowMs?: number) {
   return (switches: readonly string[]) => {
-    const { show, segments, window } = parseTokenArgs([...switches]);
-    return summarize(SAMPLE_RUN, { now: nowMs === undefined ? new Date() : new Date(nowMs), show, segments, window, savedWindow: SAMPLE_WINDOW }) ?? '';
+    const { show, segments, barStyle, window } = parseTokenArgs([...switches]);
+    return summarize(SAMPLE_RUN, { now: nowMs === undefined ? new Date() : new Date(nowMs), show, segments, barStyle, window, savedWindow: SAMPLE_WINDOW }) ?? '';
   };
 }
 
@@ -703,7 +742,48 @@ function loadPayload(file: string, nowMs = Date.now()): StatusData {
   return samplePayload(nowMs);
 }
 
-type PreviewOptions = Omit<Parameters<typeof render>[1] & object, 'config'>;
+// The preview's options: render's, and `sweep` to animate the bars.
+type PreviewOptions = Omit<Parameters<typeof render>[1] & object, 'config' | 'plain'> & { sweep?: boolean };
+
+// The payload with the context, 5h and 7d bars moved to where they are at
+// `nowMs` in the preview's animation. Each climbs and falls on its own
+// period, and "now" moves through each window, so the pace marker walks
+// and changes colour. The other fields stay as they are.
+function swept(payload: StatusData, nowMs: number): StatusData {
+  const wave = (period: number, phase: number) => {
+    const x = (((nowMs / period + phase) % 1) + 1) % 1;
+    return x < 0.5 ? x * 2 : 2 - x * 2;
+  };
+  const pct = (period: number, phase: number) => {
+    const x = wave(period, phase);
+    return Math.round(100 * x * x * (3 - 2 * x));
+  };
+  const resetsAt = (seconds: number, period: number, phase: number) => Math.floor(nowMs / 1000 + seconds * (0.92 - 0.84 * wave(period, phase)));
+  // Without the token counts, ctx counts its tokens from the percentage.
+  const context = { context_window_size: 200000, ...payload.context_window, used_percentage: pct(8000, 0.5) };
+  delete context.current_usage;
+  delete context.total_input_tokens;
+  return {
+    ...payload,
+    context_window: context,
+    rate_limits: {
+      ...payload.rate_limits,
+      five_hour: { used_percentage: pct(6000, 0), resets_at: resetsAt(5 * 3600, 7000, 0.15) },
+      seven_day: { used_percentage: pct(9000, 0.3), resets_at: resetsAt(7 * 86400, 11000, 0.6) },
+    },
+  };
+}
+
+// `read` with each answer kept by its key, for an animated preview, which
+// renders many times a second and must not run git or read files each time.
+function kept<A extends unknown[], R>(read: (...args: A) => R): (...args: A) => R {
+  const answers = new Map<string, R>();
+  return (...args) => {
+    const key = JSON.stringify(args);
+    if (!answers.has(key)) answers.set(key, read(...args));
+    return answers.get(key) as R;
+  };
+}
 
 // The preview: the status line's rows for `payload`, with the given switches
 // as words, as the settings command passes them. A part with nothing to show
@@ -712,15 +792,22 @@ type PreviewOptions = Omit<Parameters<typeof render>[1] & object, 'config'>;
 // Code loads, as the status line does, but never runs --command, and takes
 // the sample ledger in place of the real one.
 function previewer(payload: StatusData, options: PreviewOptions = {}) {
-  const { transcript = readTranscriptActivity, statusOf = gitStatus, branchOf = headBranch, memoryOf = readMemory } = options;
-  const setupOf = options.setupOf ?? ((cwd: string) => readSetup(cwd, { env: options.env ?? process.env }));
-  return (switches: readonly string[]) => {
+  const { sweep = false, ...renderOptions } = options;
+  const keep = <A extends unknown[], R>(read: (...args: A) => R) => (sweep ? kept(read) : read);
+  const transcript = keep(options.transcript ?? readTranscriptActivity);
+  const statusOf = keep(options.statusOf ?? gitStatus);
+  const branchOf = keep(options.branchOf ?? headBranch);
+  const memoryOf = keep(options.memoryOf ?? readMemory);
+  const setupOf = keep(options.setupOf ?? ((cwd: string) => readSetup(cwd, { env: options.env ?? process.env })));
+  return (switches: readonly string[], plain = false) => {
     const nowMs = options.nowMs ?? Date.now();
     const config = parseArgs([...switches]);
     const shown = new Set<string>((config.rows ?? DEFAULT_ROWS).flat());
-    return render(withSamplePayload(payload, nowMs, shown), {
-      ...options,
+    const data = withSamplePayload(payload, nowMs, shown);
+    return render(sweep ? swept(data, nowMs) : data, {
+      ...renderOptions,
       nowMs,
+      plain,
       // Any command will do, as the preview runs none: the part shows the
       // sample's output.
       config: { ...config, text: config.text || SAMPLE_TEXT, command: config.command || 'sample' },
