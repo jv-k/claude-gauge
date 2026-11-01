@@ -26,7 +26,7 @@
 // registry disagree. test/snapshots/themes/ holds the default rows in every
 // theme.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.COMMAND_TIMEOUT_MS = exports.payloadFile = exports.INSTRUCT_HOSTS = exports.SWITCHES = exports.DEFAULT_ROWS = exports.THEMES = exports.PARTS = exports.stripOwnCodes = void 0;
+exports.AGENT_LINGER_MS = exports.COMMAND_TIMEOUT_MS = exports.payloadFile = exports.INSTRUCT_HOSTS = exports.SWITCHES = exports.DEFAULT_ROWS = exports.THEMES = exports.PARTS = exports.stripOwnCodes = void 0;
 exports.render = render;
 exports.parseArgs = parseArgs;
 exports.readSwitches = readSwitches;
@@ -38,9 +38,12 @@ exports.repoFromRemote = repoFromRemote;
 exports.worktreeFromGitDir = worktreeFromGitDir;
 exports.instruction = instruction;
 exports.readTranscriptActivity = readTranscriptActivity;
+exports.pruneTranscriptStates = pruneTranscriptStates;
 exports.readSetup = readSetup;
 exports.readMemory = readMemory;
 exports.runCommand = runCommand;
+exports.gitStatus = gitStatus;
+exports.headBranch = headBranch;
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -1001,14 +1004,18 @@ const dayKey = (ms) => {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 // What the session has spent since the ledger last recorded it: all of its
-// cost when the ledger has not seen it, or when its cost fell, which means it
-// started again from zero.
+// cost when the ledger has not seen it, else what its cost has risen by. A
+// cost that fell adds nothing. When Claude Code resumes a session after a
+// crash, it keeps the session id but restores the total from the last clean
+// exit, which the ledger has already counted (issue #52).
 function unrecorded(ledger, data) {
     const usd = finite(data.cost?.total_cost_usd);
     if (usd === undefined)
         return 0;
     const recorded = data.session_id ? finite(ledger.sessions[data.session_id]?.usd) : undefined;
-    return recorded === undefined || usd < recorded ? usd : usd - recorded;
+    if (recorded === undefined)
+        return usd;
+    return Math.max(0, usd - recorded);
 }
 // The local days a period covers, newest first: today alone, or each day
 // back to Monday.
@@ -1062,16 +1069,29 @@ function toolsPart({ theme, cwd, activity: activityOf }) {
 // a finished one for AGENT_LINGER_MS. A description is cut to DESCRIPTION_CHARS.
 const AGENTS_SHOWN = 3;
 const AGENT_LINGER_MS = 60_000;
+exports.AGENT_LINGER_MS = AGENT_LINGER_MS;
 const DESCRIPTION_CHARS = 30;
+// A subagent in the background whose own transcript has not changed for this
+// long shows a dim ? in place of the running mark, as its task notification
+// may never come. Issue #60 chose the time; ADR 0003 records the rule.
+const AGENT_STALE_MS = 10 * 60_000;
+// Whether a running subagent is stale, as it may have stopped without a
+// word: it runs in the background, and its own transcript was found but has
+// not changed for AGENT_STALE_MS. One in the foreground, or with no
+// transcript found, runs.
+const isStaleAgent = (agent, nowMs) => agent.background === true && agent.activeAt !== undefined && nowMs - agent.activeAt >= AGENT_STALE_MS;
 // One subagent: ◐ Explore (Haiku 4.5) Find the config loader 1m while it
-// runs, ✓ when it finished, ✗ when it failed or was stopped.
+// runs, a dim ? in place of ◐ while it is stale, ✓ when it finished,
+// ✗ when it failed or was stopped.
 function agentItem(agent, theme, nowMs) {
     const model = agent.model ? ` (${agent.model})` : '';
     const description = agent.description ? ` ${cut(agent.description, DESCRIPTION_CHARS)}` : '';
     const elapsed = agent.startedAt !== undefined ? ` ${formatDuration(Math.max(0, (agent.endedAt ?? nowMs) - agent.startedAt))}` : '';
     const text = `${agent.type}${model}${description}${elapsed}`;
-    if (agent.endedAt === undefined)
-        return `${theme.accent}◐ ${text}${RESET}`;
+    if (agent.endedAt === undefined) {
+        const mark = isStaleAgent(agent, nowMs) ? `${theme.muted}?${RESET} ${theme.accent}` : `${theme.accent}◐ `;
+        return `${mark}${text}${RESET}`;
+    }
     return `${agent.failed ? `${theme.bad}✗` : `${theme.good}✓`}${RESET} ${theme.muted}${text}${RESET}`;
 }
 // The subagents running now, oldest first, then those finished in the last
@@ -1165,6 +1185,8 @@ function readJson(file) {
         return {};
     }
 }
+// Whether a value is a whole number above 0.
+const isPositiveInteger = (value) => typeof value === 'number' && Number.isInteger(value) && value > 0;
 const objectAt = (value, key) => (isObject(value) && isObject(value[key]) ? value[key] : {});
 const stringAt = (value, key) => {
     const field = isObject(value) ? value[key] : undefined;
@@ -1207,13 +1229,20 @@ function foldersDownTo(cwd) {
             return folders;
     }
 }
+// Whether a path that exists belongs to another user: its owner is not the
+// current user's id. No path does where the OS has no user ids, as on
+// Windows. A missing path throws.
+function ownedByAnotherUser(file) {
+    const uid = process.getuid?.();
+    return uid !== undefined && fs.statSync(file).uid !== uid;
+}
 // The folder Claude Code reads .claude/settings.local.json from: the root of
 // the git repository the launch folder is in, and inside a linked worktree
 // the main checkout's root, the folder above the .git folder the worktree's
 // .git file names. The launch folder itself outside a repository, where the
 // root is the home folder, on Windows, and where the root, its .git entry or
 // its .claude folder is not the current user's.
-function localSettingsDir(project, home, platform) {
+function localSettingsDir(project, home, platform, ownedByOther) {
     if (platform === 'win32')
         return project;
     try {
@@ -1226,12 +1255,9 @@ function localSettingsDir(project, home, platform) {
         const root = linked ? path.dirname(path.dirname(worktrees)) : entry.dir;
         if (root === path.resolve(home))
             return project;
-        const uid = process.getuid?.();
-        if (uid !== undefined) {
-            for (const owned of [root, path.join(root, '.git'), path.join(root, '.claude')]) {
-                if (fs.existsSync(owned) && fs.statSync(owned).uid !== uid)
-                    return project;
-            }
+        for (const candidate of [root, path.join(root, '.git'), path.join(root, '.claude')]) {
+            if (fs.existsSync(candidate) && ownedByOther(candidate))
+                return project;
         }
         return root;
     }
@@ -1270,26 +1296,54 @@ function declaredIn(root, manifest, key, first) {
 }
 // A plugin's own name from its enabledPlugins key, name@marketplace.
 const pluginNameOf = (id) => id.split('@')[0];
+// The install folder of a plugin from its records in
+// plugins/installed_plugins.json. A project or local install applies only
+// where its projectPath is one of installFolders: the launch folder and the
+// repository root the local settings file is read from. A user or managed
+// install, or one with no scope, applies everywhere. The docs give no order
+// for install records when several apply, so this follows the order they
+// give for enabledPlugins and takes the most specific: managed, then local,
+// then project, then user. An install with no installPath is passed over.
+const INSTALL_SCOPES = ['managed', 'local', 'project', 'user'];
+function installPathOf(installs, installFolders) {
+    const rankOf = (scope) => {
+        const i = INSTALL_SCOPES.indexOf(scope);
+        return i === -1 ? INSTALL_SCOPES.length : i;
+    };
+    return installs
+        .map((install) => ({
+        scope: stringAt(install, 'scope') ?? 'user',
+        installPath: stringAt(install, 'installPath'),
+        projectPath: stringAt(install, 'projectPath'),
+    }))
+        .filter(({ scope, installPath, projectPath }) => {
+        if (!installPath)
+            return false;
+        if (scope !== 'project' && scope !== 'local')
+            return true;
+        return projectPath !== undefined && installFolders.includes(path.resolve(projectPath));
+    })
+        .sort((a, b) => rankOf(a.scope) - rankOf(b.scope))[0]?.installPath;
+}
 // The hooks and MCP servers of the plugins turned on: each plugin that
 // enabledPlugins sets to true, read from the install folder that
-// plugins/installed_plugins.json in the config folder names for it. Hooks
-// come from hooks/hooks.json and from the hook files and inline event maps
-// the manifest's hooks field names. Servers come from .mcp.json and the
+// plugins/installed_plugins.json in the config folder names for it, as
+// installPathOf picks it for installFolders. Hooks come from hooks/hooks.json
+// and from the hook files and inline event maps the manifest's hooks field
+// names. Servers come from .mcp.json and the
 // .json files and inline maps the manifest's mcpServers field names, each
 // named plugin:<plugin>:<server> as Claude Code names it, so a plugin's
 // github is not the user's. A bundle the field names, .mcpb or .dxt, is not
 // opened. A plugin, manifest or file that is missing or not JSON adds
 // nothing.
-function readPlugins(config, enabled) {
+function readPlugins(config, enabled, installFolders) {
     const installed = objectAt(readJson(path.join(config, 'plugins', 'installed_plugins.json')), 'plugins');
     let hooks = 0;
     const mcp = [];
     for (const [id, on] of Object.entries(enabled)) {
         if (on !== true)
             continue;
-        const installPath = listAt(installed, id)
-            .map((install) => stringAt(install, 'installPath'))
-            .find(Boolean);
+        const installPath = installPathOf(listAt(installed, id), installFolders);
         if (!installPath)
             continue;
         const root = path.resolve(installPath);
@@ -1306,7 +1360,7 @@ function readPlugins(config, enabled) {
     }
     return { hooks, mcp };
 }
-function readSetup(cwd, { env = process.env, home = os.homedir(), platform = process.platform, managedDir = managedDirOf(platform) } = {}) {
+function readSetup(cwd, { env = process.env, home = os.homedir(), platform = process.platform, managedDir = managedDirOf(platform), ownedByOther = ownedByAnotherUser, } = {}) {
     const config = configDirOf(env, home);
     const project = path.resolve(cwd);
     const folders = foldersDownTo(project);
@@ -1325,14 +1379,14 @@ function readSetup(cwd, { env = process.env, home = os.homedir(), platform = pro
     // turned on. The local file is the repository root's; one in the launch
     // folder under it is read too, and the root's value applies where both
     // set a key.
-    const localDir = localSettingsDir(project, home, platform);
+    const localDir = localSettingsDir(project, home, platform, ownedByOther);
     const localIn = (dir) => readJson(path.join(dir, '.claude', 'settings.local.json'));
     const local = localDir === project ? localIn(project) : { ...localIn(project), ...localIn(localDir) };
     const settings = [path.join(config, 'settings.json'), path.join(project, '.claude', 'settings.json')]
         .filter((file, i, all) => all.indexOf(file) === i)
         .map(readJson)
         .concat(local, readJson(path.join(managedDir, 'managed-settings.json')));
-    const plugins = readPlugins(config, Object.assign({}, ...settings.map((s) => objectAt(s, 'enabledPlugins'))));
+    const plugins = readPlugins(config, Object.assign({}, ...settings.map((s) => objectAt(s, 'enabledPlugins'))), [project, localDir]);
     // MCP servers: user and local scope in .claude.json, the project's
     // .mcp.json and the managed file, each name once, less the project servers
     // turned off.
@@ -1359,6 +1413,15 @@ function readSetup(cwd, { env = process.env, home = os.homedir(), platform = pro
     const plan = planName(stringAt(oauth, 'subscriptionType'), stringAt(oauth, 'rateLimitTier')) ??
         planName(/^claude_(\w+)$/.exec(stringAt(account, 'organizationType') ?? '')?.[1], stringAt(account, 'organizationRateLimitTier'));
     const user = stringAt(account, 'emailAddress');
+    // statusLine.padding, from the last settings file that sets one, as
+    // Claude Code applies a later file over an earlier one. A later statusLine
+    // that sets no padding leaves the earlier padding in place: were Claude
+    // Code to drop it instead, the row would only end short of the edge, where
+    // the other way round it would be cut. Only a whole number above 0 counts.
+    const padding = settings
+        .map((s) => objectAt(s, 'statusLine'))
+        .filter((line) => 'padding' in line)
+        .pop()?.padding;
     return {
         claudeMd: claudeMd.size,
         rules: rules.size,
@@ -1366,6 +1429,7 @@ function readSetup(cwd, { env = process.env, home = os.homedir(), platform = pro
         hooks: settings.reduce((n, s) => n + hooksIn(s), 0) + plugins.hooks,
         ...(plan ? { plan } : {}),
         ...(user ? { user } : {}),
+        ...(isPositiveInteger(padding) ? { padding } : {}),
     };
 }
 // A number after a name in text such as /proc/meminfo or vm_stat's output.
@@ -1467,8 +1531,16 @@ function runCommand(command, cwd) {
 // number above 0.
 const columnsOf = (value) => {
     const n = Number(value);
-    return Number.isInteger(n) && n > 0 ? n : undefined;
+    return isPositiveInteger(n) ? n : undefined;
 };
+// The columns Claude Code keeps free on each side of the status line, before
+// statusLine.padding adds its own. Measured on Claude Code 2.1.296 (issue
+// #45): a 100-column terminal shows a row of at most 96 columns, and 92 with
+// padding 2. A wider row is cut and ends in an ellipsis.
+const STATUS_LINE_MARGIN = 2;
+// The columns a status line row may take in a terminal of the given width,
+// with the given statusLine.padding.
+const usableColumns = (columns, padding) => columns - 2 * (STATUS_LINE_MARGIN + padding);
 // Characters that take exactly one terminal column: printable Latin,
 // Greek and Cyrillic, and the punctuation, arrows, maths signs, box drawing,
 // blocks and the git part's ✘ that claude-gauge draws with. CJK and emoji
@@ -1488,13 +1560,15 @@ const LINKABLE = /^[\x21-\x7e]+$/;
 const hyperlink = (url, text) => `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
 // A row's shown parts joined by the separator. With a known width, the parts
 // named in right move to the end of the row, in row order, and spaces fill
-// the gap so the row ends at the terminal's edge. A row with none of those
-// parts, with text of uncertain width, or with too little room for a gap as
-// wide as the separator, is left as it is.
-function joinRow(shown, separator, right, columns) {
+// the gap so the row ends at the last column Claude Code shows. widthOf gives
+// that width, and is asked only for a row that has parts to move. A row with
+// none of those parts, with text of uncertain width, or with too little room
+// for a gap as wide as the separator, is left as it is.
+function joinRow(shown, separator, right, widthOf) {
     const join = (parts) => parts.map((p) => p.text).join(separator);
     const atEnd = shown.filter((p) => right.includes(p.part));
-    if (columns === undefined || !atEnd.length)
+    const columns = atEnd.length ? widthOf() : undefined;
+    if (columns === undefined)
         return join(shown);
     const left = join(shown.filter((p) => !atEnd.includes(p)));
     const end = join(atEnd);
@@ -1520,7 +1594,7 @@ function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = g
         if (typeof file !== 'string' || !file)
             return emptyActivity();
         try {
-            return sanitiseActivity(transcript(file));
+            return sanitiseActivity(transcript(file, { subagents: config.rows.some((row) => row.includes('agents')) }));
         }
         catch {
             return emptyActivity();
@@ -1555,7 +1629,11 @@ function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = g
         commandOutput: () => (commandOutput ??= config.command ? commandOutputOf(config.command, cwd) : ''),
     };
     const separator = separatorOf(config, theme);
-    const width = columnsOf(columns);
+    const terminal = columnsOf(columns);
+    // The width a --right row fills: the terminal's, less Claude Code's margins
+    // and statusLine.padding on both sides. The settings are read only for a
+    // row with parts to move.
+    const widthOf = () => (terminal === undefined ? undefined : usableColumns(terminal, input.setup().padding ?? 0));
     // One output line per row. A part with nothing to show drops out of its
     // row, and a row left with no parts drops out of the status line.
     return config.rows
@@ -1571,7 +1649,7 @@ function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = g
         const url = text && config.links ? spec.link?.(input) : undefined;
         return { part, text: url && LINKABLE.test(url) ? hyperlink(url, text) : text };
     })
-        .filter((p) => p.text), separator, config.right, width))
+        .filter((p) => p.text), separator, config.right, widthOf))
         .filter(Boolean)
         .join('\n');
 }
@@ -1608,6 +1686,31 @@ function savePayload(data) {
     const text = JSON.stringify(data);
     if (text.length <= MAX_SAVED_PAYLOAD)
         replaceQuietly(fs, payloadFile(), text);
+}
+// The context window size of each session, as its payload names it, saved
+// for the token line, which reads neither the payload nor a size in the
+// transcript (ADR 0006). One file per session, named as the reader names its
+// state files, with the session id in place of the transcript's path, so the
+// prune of ADR 0004 keeps this folder too. src/tokenline.ts reads it with its
+// own copy of the name and the folder, because each script runs alone.
+const windowStateDir = () => stateFile('windows');
+// Best effort, like savePayload. A size the file holds already writes
+// nothing, so most renders cost one small read.
+function saveWindow(data) {
+    const id = data.session_id;
+    const size = data.context_window?.context_window_size;
+    if (typeof id !== 'string' || !id || typeof size !== 'number' || !Number.isFinite(size) || size <= 0)
+        return;
+    const file = stateFileOf(windowStateDir(), id);
+    const text = JSON.stringify({ context_window_size: size });
+    try {
+        if (fs.readFileSync(file, 'utf8') === text)
+            return;
+    }
+    catch {
+        /* none saved yet */
+    }
+    replaceQuietly(fs, file, text);
 }
 // The saved windows, without any that have reset since they were saved.
 function loadUsage(nowMs) {
@@ -1712,10 +1815,11 @@ function withLock(file, write) {
 // Records what the session has spent since the ledger last recorded it,
 // against today, and returns the ledger as it now stands. It writes only when
 // the cost has changed and LEDGER_THROTTLE_MS has passed since the session
-// last wrote. Under the lock it reads the file again, so a write never loses
-// another session's, and it replaces the file in one rename, so a reader never
-// sees half a ledger. Best effort: a failed write never breaks the status
-// line.
+// last wrote, or at once when the cost fell, so that later spend counts from
+// the lower value. Under the lock it reads the file again, so a write never
+// loses another session's, and it replaces the file in one rename, so a
+// reader never sees half a ledger. Best effort: a failed write never breaks
+// the status line.
 function recordCost(data, { file = ledgerFile(), nowMs = Date.now() } = {}) {
     let ledger = readLedger(file);
     const id = data.session_id;
@@ -1723,10 +1827,12 @@ function recordCost(data, { file = ledgerFile(), nowMs = Date.now() } = {}) {
     if (typeof id !== 'string' || !id || usd === undefined)
         return ledger;
     const last = ledger.sessions[id];
-    if (finite(last?.usd) === usd)
+    const recorded = finite(last?.usd);
+    if (recorded === usd)
         return ledger;
+    const fell = recorded !== undefined && usd < recorded;
     const since = nowMs - (finite(last?.at) ?? -Infinity);
-    if (since >= 0 && since < LEDGER_THROTTLE_MS)
+    if (!fell && since >= 0 && since < LEDGER_THROTTLE_MS)
         return ledger;
     const temp = `${file}.${process.pid}.tmp`;
     try {
@@ -1781,8 +1887,9 @@ function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [
     const completed = {};
     for (const [name, count] of Object.entries(tools.completed))
         completed[sanitise(name)] = (completed[sanitise(name)] ?? 0) + count;
-    const cleanAgents = agents.map(({ type, model, description, ...times }) => ({
+    const cleanAgents = agents.map(({ type, model, description, background, ...times }) => ({
         ...times,
+        ...(background === true ? { background } : {}),
         type: sanitise(type),
         ...(model ? { model: sanitise(model) } : {}),
         ...(description ? { description: sanitise(description) } : {}),
@@ -1809,7 +1916,10 @@ function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [
 }
 // What the reader keeps between renders. version changes when the shape
 // does, so a state from an older claude-gauge is rebuilt, not misread.
-const TRANSCRIPT_STATE_VERSION = 5;
+const TRANSCRIPT_STATE_VERSION = 6;
+// Whether a saved cursor still points into this file: the same file, not
+// replaced, and no shorter than the cursor's offset.
+const cursorHolds = (saved, file, stat) => !!saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
 // The ended calls kept at most, newest first: a call whose result never
 // came must not grow the state for ever. Running calls are all kept, so a
 // large parallel batch counts in full. Ended subagents are capped the same,
@@ -1817,9 +1927,12 @@ const TRANSCRIPT_STATE_VERSION = 5;
 const ENDED_KEPT = 20;
 // The tool that starts a subagent: Agent, named Task before Claude Code 2.1.
 const AGENT_TOOLS = ['Agent', 'Task'];
-// The tools that write the todo list: TodoWrite replaces it whole, and the
-// task tools that replaced it in Claude Code 2.1 add a task and change one.
-const TODO_TOOLS = ['TodoWrite', 'TaskCreate', 'TaskUpdate'];
+// The tools that write or read the todo list: TodoWrite replaces it whole,
+// and the task tools that replaced it in Claude Code 2.1 add a task, change
+// one, list the shared task list and read one task of it.
+const TODO_TOOLS = ['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'];
+// The task tools whose calls count from a subagent's records too.
+const SUBAGENT_TODO_TOOLS = ['TaskCreate', 'TaskUpdate'];
 // The skills and the MCP servers kept at most, each the most recently used.
 const RECENT_KEPT = 20;
 // The text Claude Code adds as a meta message when a skill runs.
@@ -1877,6 +1990,9 @@ function agentResult(agent, block, record, at) {
     const model = agentModel(result.resolvedModel);
     if (model)
         agent.model = model;
+    const agentId = stringAt(result, 'agentId');
+    if (agentId)
+        agent.agentId = agentId;
     if (result.isAsync === true || result.status === 'async_launched') {
         agent.background = true;
         return;
@@ -1931,15 +2047,46 @@ function createdTaskId(block, record) {
     const task = isObject(record.toolUseResult) ? record.toolUseResult.task : undefined;
     return idAt(task, 'id') ?? /Task #(\S+) created/.exec(textOf(block.content))?.[1];
 }
+// A task as a TaskList or TaskGet result names it, with the active form the
+// reader already knew for its id, as neither result names one. One with no
+// id or no subject drops out, and one with a status the part does not know
+// counts as pending.
+function readTask(state, task) {
+    const id = idAt(task, 'id');
+    if (id === undefined)
+        return undefined;
+    const known = state.todos.find((t) => t.id === id);
+    return todoOf(textAt(task, 'subject'), known?.activeForm, (isObject(task) && todoStatus(task.status)) || 'pending', id);
+}
 // A todo tool's call applied to the list, once its result says it worked:
 // TodoWrite replaces the list, TaskCreate adds a pending task, and
-// TaskUpdate changes one, or drops it when it is deleted.
+// TaskUpdate changes one, or drops it when it is deleted. A TaskList result
+// replaces the list with the shared task list it names, and a TaskGet result
+// changes or adds the one task it names, or drops it when it names none.
 function applyTodoCall(state, todoCall, block, record) {
     if (resultFailed(block, record))
         return;
     const input = isObject(todoCall.input) ? todoCall.input : {};
+    const data = isObject(record.toolUseResult) ? record.toolUseResult : {};
     if (todoCall.name === 'TodoWrite') {
         state.todos = writtenTodos(input);
+    }
+    else if (todoCall.name === 'TaskList') {
+        if (Array.isArray(data.tasks))
+            state.todos = data.tasks.flatMap((task) => readTask(state, task) ?? []);
+    }
+    else if (todoCall.name === 'TaskGet') {
+        // A null task is one the shared list no longer holds.
+        if (data.task === null) {
+            const id = idAt(input, 'taskId');
+            state.todos = state.todos.filter((t) => t.id !== id);
+            return;
+        }
+        const task = readTask(state, data.task);
+        if (!task)
+            return;
+        const at = state.todos.findIndex((t) => t.id === task.id);
+        state.todos = at < 0 ? [...state.todos, task] : state.todos.map((t, i) => (i === at ? task : t));
     }
     else if (todoCall.name === 'TaskCreate') {
         const task = todoOf(textAt(input, 'subject'), textAt(input, 'activeForm'), 'pending', createdTaskId(block, record));
@@ -2000,9 +2147,11 @@ function capAgents(state) {
 // starts a response, timed from the prompt or tool result that asked for it,
 // and each block after it moves the response's end. A reply Claude Code
 // writes itself, such as an API error, is no response of the model's.
+// A reply Claude Code writes itself names this model.
+const SYNTHETIC_MODEL = '<synthetic>';
 function applyResponse(state, record, at) {
     const message = record.message;
-    if (at === undefined || typeof message?.id !== 'string' || message.model === '<synthetic>')
+    if (at === undefined || typeof message?.id !== 'string' || message.model === SYNTHETIC_MODEL)
         return;
     const tokens = finite(message.usage?.output_tokens) ?? 0;
     if (state.response?.id === message.id) {
@@ -2019,15 +2168,42 @@ function speedOf(response) {
     const seconds = response ? (response.endedAt - response.askedAt) / 1000 : 0;
     return response && response.tokens > 0 && seconds > 0 ? response.tokens / seconds : undefined;
 }
+// A todo tool's call kept until its result comes, or its result applied to
+// the list, for the tools counted.
+function trackTodoBlock(state, record, block, counted) {
+    if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+        if (counted.includes(block.name))
+            state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
+    }
+    else if (record.type === 'user' && block.type === 'tool_result') {
+        const todoCall = state.todoCalls.find((c) => c.id === block.tool_use_id);
+        if (!todoCall)
+            return;
+        state.todoCalls = state.todoCalls.filter((c) => c !== todoCall);
+        applyTodoCall(state, todoCall, block, record);
+    }
+}
+// The blocks of a record's message that are objects.
+const blocksOf = (record) => {
+    const content = record.message?.content;
+    return Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
+};
 // One transcript record applied to the state. Subagent records are left out,
-// as they are for --latest. A prompt from the user ends the turn, so a call
-// still running then was interrupted: it no longer shows as running, and a
-// subagent in the foreground shows as stopped. One in the background runs on
-// until its task notification. A prompt that runs a command names a skill
-// when the next record is the skill's text.
+// as they are for --latest, but for a subagent's calls to TaskCreate and
+// TaskUpdate: the task list they change is the session's too. A prompt from
+// the user ends the turn, so a call still running then was interrupted: it
+// no longer shows as running, and a subagent in the foreground shows as
+// stopped. One in the background runs on until its task notification. A
+// prompt that runs a command names a skill when the next record is the
+// skill's text.
 function applyRecord(state, record) {
-    if (!record || typeof record !== 'object' || record.isSidechain)
+    if (!record || typeof record !== 'object')
         return;
+    if (record.isSidechain) {
+        for (const block of blocksOf(record))
+            trackTodoBlock(state, record, block, SUBAGENT_TODO_TOOLS);
+        return;
+    }
     const at = timeOf(record);
     if (record.type === 'system' && record.subtype === 'compact_boundary')
         state.compactions++;
@@ -2036,7 +2212,7 @@ function applyRecord(state, record) {
     if (record.type === 'user' && at !== undefined)
         state.askedAt = at;
     const content = record.message?.content;
-    const blocks = Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
+    const blocks = blocksOf(record);
     const results = blocks.some((b) => b.type === 'tool_result');
     const { command } = state;
     delete state.command;
@@ -2068,6 +2244,7 @@ function applyRecord(state, record) {
         return;
     }
     for (const block of blocks) {
+        trackTodoBlock(state, record, block, TODO_TOOLS);
         if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
             const target = toolTarget(block.input);
             const skill = block.name === 'Skill' ? skillName(stringAt(block.input, 'skill')) : undefined;
@@ -2077,18 +2254,11 @@ function applyRecord(state, record) {
                 useServer(state, server);
             if (AGENT_TOOLS.includes(block.name))
                 startAgent(state, block, at);
-            if (TODO_TOOLS.includes(block.name))
-                state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
         }
         else if (record.type === 'user' && block.type === 'tool_result') {
             const agent = state.agents.find((a) => a.id === block.tool_use_id);
             if (agent)
                 agentResult(agent, block, record, at);
-            const todoCall = state.todoCalls.find((c) => c.id === block.tool_use_id);
-            if (todoCall) {
-                state.todoCalls = state.todoCalls.filter((c) => c !== todoCall);
-                applyTodoCall(state, todoCall, block, record);
-            }
             const call = state.pending.find((p) => p.id === block.tool_use_id);
             if (!call)
                 continue;
@@ -2155,6 +2325,7 @@ function loadTranscriptState(io, stateFile) {
             Array.isArray(state.skills) &&
             Array.isArray(state.mcp) &&
             Number.isInteger(state.compactions) &&
+            (state.subagentCalls === undefined || isObject(state.subagentCalls)) &&
             state.completed &&
             typeof state.completed === 'object';
         return valid ? state : undefined;
@@ -2186,13 +2357,129 @@ function replaceQuietly(io, file, text) {
         }
     }
 }
+// Marks a state file as used now, so the prune keeps it while its transcript
+// is still shown. Best effort, as a save is.
+function touchQuietly(io, file) {
+    try {
+        const now = new Date();
+        io.utimesSync(file, now, now);
+    }
+    catch {
+        /* removed by a prune, or a read-only home: the next save writes it */
+    }
+}
 // A state that is not saved makes the next render read from the start.
 function saveTranscriptState(io, stateFile, state) {
     replaceQuietly(io, stateFile, JSON.stringify(state));
 }
+// A subagent's own transcript. Claude Code writes it beside the session
+// transcript <session>.jsonl, as <session>/subagents/agent-<agentId>.jsonl,
+// with agent-<agentId>.meta.json, whose toolUseId is the id of the Agent call
+// in the session transcript that started it. The launch result of a subagent
+// in the background names its agentId as well. A skill that runs in a fork
+// writes a transcript there too, with no toolUseId, and no Agent call names
+// it. The reader keeps a byte offset per subagent transcript, as it does for
+// the session's, in a state file beside the session's, and reads one only
+// while its subagent runs.
+const SUBAGENT_STATE_VERSION = 1;
+const subagentsFolder = (file) => path.join(file.replace(/\.jsonl$/, ''), 'subagents');
+const stateFileOf = (stateDir, file) => path.join(stateDir, `${(0, node_crypto_1.createHash)('sha1').update(file).digest('hex')}.json`);
+// Links each running subagent that has no agent id yet to its own
+// transcript, by the toolUseId in the meta files of the subagents folder.
+// Each meta file is read once: the toolUseId it names is kept in the state.
+// True when the state changed.
+function linkSubagentTranscripts(io, folder, state) {
+    const wanted = state.agents.filter((a) => a.endedAt === undefined && !a.agentId);
+    if (!wanted.length)
+        return false;
+    let names;
+    try {
+        names = io.readdirSync(folder).map(String);
+    }
+    catch {
+        return false;
+    }
+    const calls = (state.subagentCalls ??= {});
+    let changed = false;
+    for (const name of names) {
+        const agentId = /^agent-(.+)\.meta\.json$/.exec(name)?.[1];
+        if (!agentId || agentId in calls)
+            continue;
+        try {
+            calls[agentId] = stringAt(JSON.parse(String(io.readFileSync(path.join(folder, name), 'utf8'))), 'toolUseId') ?? '';
+            changed = true;
+        }
+        catch {
+            /* not written yet, or not JSON: read it again next render */
+        }
+    }
+    const linked = new Set(state.agents.map((a) => a.agentId));
+    for (const [agentId, toolUseId] of Object.entries(calls)) {
+        const agent = !linked.has(agentId) && toolUseId ? wanted.find((a) => a.id === toolUseId && !a.agentId) : undefined;
+        if (agent) {
+            agent.agentId = agentId;
+            changed = true;
+        }
+    }
+    return changed;
+}
+function loadSubagentState(io, stateFile) {
+    try {
+        const state = JSON.parse(String(io.readFileSync(stateFile, 'utf8')));
+        return state?.version === SUBAGENT_STATE_VERSION && Number.isInteger(state.offset) ? state : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+// What a subagent's own transcript shows: the model of its latest response,
+// and when the file last changed. Reads only the bytes it gained since the
+// last call. A transcript that does not exist shows nothing.
+function readSubagentTranscript(io, file, stateDir) {
+    let stat;
+    try {
+        stat = io.statSync(file);
+    }
+    catch {
+        return {};
+    }
+    const stateFile = stateFileOf(stateDir, file);
+    const saved = loadSubagentState(io, stateFile);
+    const unchanged = cursorHolds(saved, file, stat);
+    const state = unchanged ? saved : { version: SUBAGENT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0 };
+    if (stat.size > state.offset || !unchanged) {
+        // A transcript that goes away or cannot be read after the stat shows
+        // nothing, rather than taking the session's activity down with it.
+        try {
+            state.offset = readLines(io, file, state.offset, stat.size, (line) => {
+                if (!line.includes('"assistant"'))
+                    return;
+                try {
+                    const record = JSON.parse(line);
+                    const model = record?.type === 'assistant' ? record.message?.model : undefined;
+                    if (typeof model === 'string' && model.trim() && model !== SYNTHETIC_MODEL)
+                        state.model = model;
+                }
+                catch {
+                    /* not a record: skip it */
+                }
+            });
+        }
+        catch {
+            return {};
+        }
+        replaceQuietly(io, stateFile, JSON.stringify(state));
+    }
+    else {
+        touchQuietly(io, stateFile);
+    }
+    const model = agentModel(state.model);
+    return { ...(model ? { model } : {}), activeAt: stat.mtimeMs };
+}
 // What the transcript shows, reading only what it gained since the last
-// call. A transcript that does not exist shows nothing.
-function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io = fs } = {}) {
+// call. A transcript that does not exist shows nothing. A running subagent
+// shows the model its own transcript names, when it names one.
+function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io = fs, subagents = true } = {}) {
     let stat;
     try {
         stat = io.statSync(file);
@@ -2200,9 +2487,9 @@ function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io 
     catch {
         return emptyActivity();
     }
-    const stateFile = path.join(stateDir, `${(0, node_crypto_1.createHash)('sha1').update(file).digest('hex')}.json`);
+    const stateFile = stateFileOf(stateDir, file);
     const saved = loadTranscriptState(io, stateFile);
-    const unchanged = saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
+    const unchanged = cursorHolds(saved, file, stat);
     const state = unchanged
         ? saved
         : {
@@ -2220,7 +2507,9 @@ function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io 
             mcp: [],
             compactions: 0,
         };
+    let changed = false;
     if (stat.size > state.offset || !unchanged) {
+        changed = true;
         state.offset = readLines(io, file, state.offset, stat.size, (line) => {
             // Only lines that can hold a tool call, a result, a prompt, a response
             // or a compaction are parsed.
@@ -2233,10 +2522,19 @@ function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io 
                 /* not a record: skip it */
             }
         });
-        saveTranscriptState(io, stateFile, state);
     }
+    const folder = subagentsFolder(file);
+    if (subagents && linkSubagentTranscripts(io, folder, state))
+        changed = true;
+    if (changed)
+        saveTranscriptState(io, stateFile, state);
+    else
+        touchQuietly(io, stateFile);
     const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
-    const agents = state.agents.map(({ id, background, ...agent }) => agent);
+    // A running subagent's own transcript names the model it runs on, version
+    // and all, so it wins over the alias the Agent call may give. Its last
+    // change time, with the background flag, lets the part mark it as stale.
+    const agents = state.agents.map(({ id, agentId, ...agent }) => subagents && agent.endedAt === undefined && agentId ? { ...agent, ...readSubagentTranscript(io, path.join(folder, `agent-${agentId}.jsonl`), stateDir) } : agent);
     const todos = state.todos.map(({ id, ...todo }) => todo);
     const mcp = state.mcp.map((server) => ({ ...server }));
     const lastReplyAt = state.response?.endedAt;
@@ -2251,6 +2549,65 @@ function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io 
         ...(lastReplyAt !== undefined ? { lastReplyAt } : {}),
         ...(speed !== undefined ? { speed } : {}),
     };
+}
+// The prune of the reader's state files (issue #51, ADR 0004). The reader
+// writes one per transcript, session and subagent alike, and a render touches
+// each one it uses, so a file no render has touched for STATE_KEEP_MS belongs
+// to a transcript nobody looks at any more. The same prune keeps the saved
+// window sizes, in a folder of their own (ADR 0006). Those are not touched:
+// one the prune removes from a session still shown is saved again at the
+// next render.
+const STATE_KEEP_MS = 30 * 86400 * 1000;
+// The prune runs at most once per PRUNE_EVERY_MS. A stamp file beside the
+// reader's folder, transcripts.pruned in the state folder, holds as its last
+// change time when the prune last ran. It stays out of the reader's folder,
+// which holds the reader's state files alone.
+const PRUNE_EVERY_MS = 86400 * 1000;
+const pruneStampOf = (stateDir) => `${path.resolve(stateDir)}.pruned`;
+// The reader's state files: the SHA-1 of a transcript's path, then .json.
+const STATE_FILE_NAME = /^[0-9a-f]{40}\.json$/;
+// When the stamp file is missing or PRUNE_EVERY_MS old, removes the state
+// files in stateDir, the reader's folder, last changed STATE_KEEP_MS or
+// more before nowMs, then touches the stamp. Otherwise it does nothing past
+// one stat. Best effort: a file another render removed first is skipped, a
+// folder that cannot be listed counts as empty, and nothing is printed.
+function pruneTranscriptStates(stateDir, nowMs, { fs: io = fs } = {}) {
+    const stamp = pruneStampOf(stateDir);
+    try {
+        // A stamp from the future, after the clock was put back, counts as old.
+        const age = nowMs - io.statSync(stamp).mtimeMs;
+        if (age >= 0 && age < PRUNE_EVERY_MS)
+            return;
+    }
+    catch {
+        /* no stamp yet: prune now */
+    }
+    let names = [];
+    try {
+        names = io.readdirSync(stateDir).map(String);
+    }
+    catch {
+        /* no reader folder yet: nothing to remove, but stamp it */
+    }
+    for (const name of names) {
+        if (!STATE_FILE_NAME.test(name))
+            continue;
+        const file = path.join(stateDir, name);
+        try {
+            if (nowMs - io.statSync(file).mtimeMs >= STATE_KEEP_MS)
+                io.rmSync(file, { force: true });
+        }
+        catch {
+            /* gone already, or not ours to remove */
+        }
+    }
+    try {
+        io.writeFileSync(stamp, '');
+        io.utimesSync(stamp, nowMs / 1000, nowMs / 1000);
+    }
+    catch {
+        /* a read-only folder: the next render tries again */
+    }
 }
 // claude-opus-5-5 → Opus 5.5; claude-haiku-4-5-20251001 → Haiku 4.5.
 function modelName(id) {
@@ -2355,6 +2712,12 @@ function latestTranscript(cwd) {
 // it prints nothing. Claude Code names the host in CLAUDE_CODE_ENTRYPOINT,
 // which hooks inherit; an unknown or missing value counts as a host that
 // needs nothing.
+//
+// src/tokenline.ts holds a copy of INSTRUCT_HOSTS, shellWord and
+// instruction(), because each script runs alone and imports no shared
+// module. Change both copies together. The test "the token line's
+// --instruct code is the status line's, apart from the prose" in
+// test/tokenline.test.js fails when they differ.
 const INSTRUCT_HOSTS = ['claude-vscode', 'claude-desktop', 'claude-desktop-3p'];
 exports.INSTRUCT_HOSTS = INSTRUCT_HOSTS;
 // A shell word: as is when plain, else in single quotes. ~ stays bare so the
@@ -2401,6 +2764,8 @@ if (isMain) {
         // Plain text: it is pasted into a reply, where colour codes and links
         // show as junk.
         process.stdout.write(stripOwnCodes(render(data, { config, nowMs, ledger: readLedger(ledgerFile()) })) + '\n');
+        pruneTranscriptStates(transcriptStateDir(), nowMs);
+        pruneTranscriptStates(windowStateDir(), nowMs);
     }
     else {
         const chunks = [];
@@ -2418,10 +2783,15 @@ if (isMain) {
             saveUsage(data, nowMs);
             // Only a payload that holds something replaces the one the wizard
             // previews with.
-            if (parsed && isObject(data) && Object.keys(data).length)
+            if (parsed && isObject(data) && Object.keys(data).length) {
                 savePayload(data);
+                saveWindow(data);
+            }
             const ledger = recordCost(data, { nowMs });
             process.stdout.write(render(data, { config, nowMs, ledger, columns: columnsOf(process.env.COLUMNS) }) + '\n');
+            // After the render, which touches the state files it uses.
+            pruneTranscriptStates(transcriptStateDir(), nowMs);
+            pruneTranscriptStates(windowStateDir(), nowMs);
         });
     }
 }

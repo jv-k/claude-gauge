@@ -13,12 +13,18 @@
 //   - with --latest: prints the line for the calling session, for Claude to
 //     paste into its reply where hook messages are not shown.
 //
+// Neither the hook input nor the transcript holds the context window size.
+// The status line gets it from Claude Code at each render and saves it per
+// session, and ctx reads it from there (docs/adr/0006).
+//
 // Switches:
 //   --show <parts>      parts to show, in order, comma-separated, from
 //                       time,req,out,cache,ctx (default: all of them)
 //   --segments <5|10>   cells in the context bar (default 5)
-//   --window <tokens>   context window size, e.g. 200k or 1m. Without it the
-//                       window is 200k, or 1M once the context passes 200k.
+//   --window <tokens>   context window size, e.g. 200k or 1m, over the size
+//                       the status line saved for the session. Without
+//                       either, the window is 200k, or 1M once the context
+//                       passes 200k.
 //   --latest            print the line for the calling session
 //   --instruct          as a SessionStart hook: in the VS Code extension and
 //                       the desktop app, tell Claude to end each reply with
@@ -31,6 +37,7 @@ exports.readSwitches = readSwitches;
 exports.parseSize = parseSize;
 exports.contextWindow = contextWindow;
 exports.instruction = instruction;
+const node_crypto_1 = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -90,13 +97,16 @@ function parseSize(value) {
     const scale = SCALES[m[2].toLowerCase()];
     return Math.round(Number(m[1]) * scale);
 }
-// The transcript records the model but not its context window, so take the
-// window from --window when set. Otherwise assume Claude Code's default of
-// 200k, and 1M once the context is past that.
-function contextWindow(ctx, explicit) {
+// Neither the hook input nor the transcript holds the context window, so
+// take it from --window when set, then from the size the status line saved
+// for the session. Otherwise assume Claude Code's default of 200k, and 1M
+// once the context is past that.
+function contextWindow(ctx, explicit, saved) {
     const size = parseSize(explicit);
     if (size > 0)
         return size;
+    if (saved !== undefined && saved > 0)
+        return saved;
     return ctx > 200e3 ? 1e6 : 200e3;
 }
 // Bars come in 5 or 10 cells; anything else falls back to 5.
@@ -149,7 +159,7 @@ function tally(records) {
 }
 // Builds the line from parsed transcript records; null when the run made no
 // API request yet, or when none of the chosen parts has anything to show.
-function summarize(records, { now = new Date(), window, segments, show = PARTS } = {}) {
+function summarize(records, { now = new Date(), window, savedWindow, segments, show = PARTS } = {}) {
     let start = 0;
     for (let i = records.length - 1; i >= 0; i--) {
         if (isHumanPrompt(records[i])) {
@@ -169,7 +179,7 @@ function summarize(records, { now = new Date(), window, segments, show = PARTS }
         ctx: () => {
             if (!run.ctx)
                 return '';
-            const pct = (run.ctx / contextWindow(run.ctx, window)) * 100;
+            const pct = (run.ctx / contextWindow(run.ctx, window, savedWindow)) * 100;
             return `ctx ${Math.round(pct)}% ${bar(pct, segmentsOf(segments))} ${fmt(run.ctx)}`;
         },
     };
@@ -198,6 +208,25 @@ function readRecords(transcriptPath) {
 // empty, else ~/.claude. The status line resolves it the same way, with its
 // own copy, because each script runs alone from the copy that setup makes.
 const configDirOf = (env, home) => env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+// The context window size the status line saved for `session`, from the
+// payload Claude Code sends it at each render (ADR 0006); undefined when it
+// saved none or the file cannot be read. src/statusline.ts writes the file,
+// named the same way: the SHA-1 of the session id, then .json.
+function savedWindowOf(session) {
+    if (!session)
+        return undefined;
+    const name = `${(0, node_crypto_1.createHash)('sha1').update(session).digest('hex')}.json`;
+    const file = path.join(configDirOf(process.env, os.homedir()), 'claude-gauge', '.state', 'windows', name);
+    try {
+        const size = Number(JSON.parse(fs.readFileSync(file, 'utf8'))?.context_window_size);
+        return Number.isFinite(size) && size > 0 ? size : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+// A transcript's session id: its file name, as Claude Code names it.
+const sessionOf = (transcriptPath) => path.basename(transcriptPath, '.jsonl');
 function latestTranscript(cwd) {
     const projects = path.join(configDirOf(process.env, os.homedir()), 'projects');
     if (!fs.existsSync(projects))
@@ -231,6 +260,12 @@ function latestTranscript(cwd) {
 // it prints nothing. Claude Code names the host in CLAUDE_CODE_ENTRYPOINT,
 // which hooks inherit; an unknown or missing value counts as a host that
 // needs nothing.
+//
+// src/statusline.ts holds a copy of INSTRUCT_HOSTS, shellWord and
+// instruction(), because each script runs alone and imports no shared
+// module. Change both copies together. The test "the token line's
+// --instruct code is the status line's, apart from the prose" in
+// test/tokenline.test.js fails when they differ.
 const INSTRUCT_HOSTS = ['claude-vscode', 'claude-desktop', 'claude-desktop-3p'];
 exports.INSTRUCT_HOSTS = INSTRUCT_HOSTS;
 // A shell word: as is when plain, else in single quotes. ~ stays bare so the
@@ -266,7 +301,7 @@ if (isMain) {
     }
     else if (latest) {
         const t = latestTranscript(process.cwd());
-        const line = t ? summarize(readRecords(t), opts) : null;
+        const line = t ? summarize(readRecords(t), { ...opts, savedWindow: savedWindowOf(sessionOf(t)) }) : null;
         if (line)
             process.stdout.write(line + '\n');
     }
@@ -278,7 +313,8 @@ if (isMain) {
             try {
                 const input = JSON.parse(Buffer.concat(chunks).toString());
                 if (input.transcript_path && fs.existsSync(input.transcript_path)) {
-                    line = summarize(readRecords(input.transcript_path), opts);
+                    const session = typeof input.session_id === 'string' && input.session_id ? input.session_id : sessionOf(input.transcript_path);
+                    line = summarize(readRecords(input.transcript_path), { ...opts, savedWindow: savedWindowOf(session) });
                 }
             }
             catch {

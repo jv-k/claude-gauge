@@ -32,7 +32,10 @@ const wizard_1 = require("./wizard");
 const statusline_1 = require("./statusline");
 const wordmark_1 = require("./wordmark");
 const styles_1 = require("./styles");
-const USAGE = `Usage: claude-gauge <setup | configure | uninstall | update> [switches]
+const errors_1 = require("./errors");
+// The usage, after its heading. Without colour the heading is `Usage: ` on
+// the first line; in colour it is a USAGE pill on a line of its own.
+const USAGE = `claude-gauge <setup | configure | uninstall | update> [switches]
 
   setup        add the status line and the token line to Claude Code's settings
   configure    change the switches of a bar that setup added, or take it out
@@ -56,17 +59,22 @@ parts you want, and show the status line after each answer.
 The bars' switches are in README.md, under Options. The settings file is
 $CLAUDE_CONFIG_DIR/settings.json, else ~/.claude/settings.json.
 `;
-// The wordmark and a blank line, in colour when `stream` takes colour. The
-// usage and the questions start with it. Scripts and the plugin's slash
-// commands run the commands with switches, and those print no wordmark.
-const banner = (stream) => `${(0, wordmark_1.wordmark)((0, wordmark_1.colorEnabled)(stream))}\n`;
-// The usage, under the wordmark, for `stream`.
-const usage = (stream) => banner(stream) + USAGE;
-// A mistake in the command line: exit 2, with the usage.
-class UsageError extends Error {
+// The usage, under the wordmark and a blank line, for `stream`. In colour a
+// USAGE pill heads it, as a pill heads each command's result. Without colour
+// the pill would be the bare word USAGE, so the plain usage keeps its
+// `Usage: ` line. Scripts and the plugin's slash commands run the commands
+// with switches, and those print no wordmark.
+const usage = (stream) => {
+    const color = (0, wordmark_1.colorEnabled)(stream);
+    return (0, wordmark_1.wordmark)(color) + (color ? (0, styles_1.styles)(color).pill('Usage') : '\nUsage: ') + USAGE;
+};
+// A mistake in the command line: exit 2, with the usage. A word that
+// claude-gauge does not know goes in plain, and a known command or switch as
+// a value.
+class UsageError extends errors_1.GaugeError {
 }
 // A tool that update needs is not on PATH: exit 2, with no usage.
-class MissingTool extends Error {
+class MissingTool extends errors_1.GaugeError {
 }
 const COMMANDS = ['setup', 'configure', 'uninstall', 'update'];
 // The words of a bar switch's value, `--show ctx,5h,7d --segments 10`, split
@@ -94,31 +102,31 @@ function parseArgs(argv) {
         const [name, inline] = argv[i].split(/=(.*)/s);
         if (!name.startsWith('-')) {
             if (args.command)
-                throw new UsageError(`Unexpected word: ${name}`);
+                throw new UsageError((0, errors_1.message) `Unexpected word: ${(0, errors_1.plain)(name)}`);
             if (name === 'help')
                 args.help = true;
             else if (COMMANDS.includes(name))
                 args.command = name;
             else
-                throw new UsageError(`Unknown command: ${name}`);
+                throw new UsageError((0, errors_1.message) `Unknown command: ${(0, errors_1.plain)(name)}`);
             continue;
         }
         const known = SWITCHES.find((s) => s.names.includes(name));
         if (!known)
-            throw new UsageError(`Unknown switch: ${name}`);
+            throw new UsageError((0, errors_1.message) `Unknown switch: ${(0, errors_1.plain)(name)}`);
         // A value is the next word whatever it holds, since switches start with --.
         known.apply(args, () => {
             const v = inline ?? argv[++i];
             if (v === undefined)
-                throw new UsageError(`${name} needs a value: the switches for that bar, or "" for none.`);
+                throw new UsageError((0, errors_1.message) `${name} needs a value: the switches for that bar, or "" for none.`);
             return v;
         });
         seen.push(known);
     }
     const { command } = args;
     const stray = command && seen.find((s) => !s.commands.includes(command));
-    if (stray)
-        throw new UsageError(`${args.command} takes no ${stray.names[0]}`);
+    if (command && stray)
+        throw new UsageError((0, errors_1.message) `${command} takes no ${stray.names[0]}`);
     return args;
 }
 // The folders and files it works with.
@@ -212,7 +220,7 @@ function savedStatusLine() {
     catch (err) {
         if (err.code === 'ENOENT')
             return undefined;
-        throw new Error(`Cannot read ${file}: ${err.message}. Fix or delete it by hand.`);
+        throw new errors_1.GaugeError((0, errors_1.message) `Cannot read ${file}: ${(0, errors_1.plain)(err.message)}. Fix or delete it by hand.`);
     }
     let saved;
     try {
@@ -223,7 +231,7 @@ function savedStatusLine() {
     }
     const statusLine = saved?.statusLine;
     if (typeof saved !== 'object' || saved === null || !(statusLine === null || (typeof statusLine === 'object' && !Array.isArray(statusLine)))) {
-        throw new Error(`${file} does not hold a saved status line, so claude-gauge cannot tell what to put back. Fix or delete it by hand.`);
+        throw new errors_1.GaugeError((0, errors_1.message) `${file} does not hold a saved status line, so claude-gauge cannot tell what to put back. Fix or delete it by hand.`);
     }
     return statusLine;
 }
@@ -246,13 +254,10 @@ function apply({ statusLine, tokenLine }, replace, heading) {
     };
     const next = (0, settings_1.plan)(settings, choices);
     if (next.blocked) {
-        const current = settings.statusLine.command ?? JSON.stringify(settings.statusLine);
+        // The settings file is not checked, so the command may not be a string.
+        const current = String(settings.statusLine.command ?? JSON.stringify(settings.statusLine));
         const whose = next.found === 'claude-hud' ? "claude-hud's status line" : 'another status line';
-        throw new Error([
-            `${file} already runs ${whose}:`,
-            `  ${current}`,
-            'Run again with --replace to replace it. claude-gauge saves it, and claude-gauge uninstall puts it back.',
-        ].join('\n'));
+        throw new errors_1.GaugeError((0, errors_1.message) `${file} already runs ${(0, errors_1.plain)(whose)}:\n  ${current}\nRun again with --replace to replace it. claude-gauge saves it, and claude-gauge uninstall puts it back.`);
     }
     // The scripts go in first, so the settings never name a missing file.
     if (typeof choices.statusLine === 'string' || typeof choices.tokenLine === 'string') {
@@ -283,9 +288,10 @@ const starWithGh = () => (0, node_child_process_1.spawnSync)('gh', ['api', '--me
 // setup or configure with no bar switches: asks before it replaces another
 // status line, then asks for the bars, and writes them. configure starts the
 // questions from the bars set up, setup from the defaults. setup ends with
-// the star offer.
+// the star offer. On a terminal the questions are Ink's choices where Ink
+// loads, else typed answers, as for piped ones.
 async function interactive(command, replace) {
-    const io = (0, wizard_1.streamIo)(process.stdin, process.stdout);
+    const io = await (0, wizard_1.openIo)(process.stdin, process.stdout);
     const s = (0, styles_1.stylesFor)(process.stdout);
     try {
         io.write((0, wordmark_1.wordmark)((0, wordmark_1.colorEnabled)(process.stdout)) + s.pill(command));
@@ -326,7 +332,7 @@ async function setup(args) {
 async function configure(args) {
     const file = settingsFile();
     if (!(0, settings_1.installed)((0, settings_file_1.readSettings)(file).settings).any) {
-        throw new Error(`claude-gauge is not set up in ${file}. Run claude-gauge setup first.`);
+        throw new errors_1.GaugeError((0, errors_1.message) `claude-gauge is not set up in ${file}. Run claude-gauge setup first.`);
     }
     if (args.statusLine === undefined && args.tokenLine === undefined)
         return interactive('configure', args.replace);
@@ -407,12 +413,12 @@ function runSteps(method, steps, dryRun) {
         return;
     const missing = steps.find((step) => !path.isAbsolute(step.argv[0]) && !onPath(step.argv[0]));
     if (missing)
-        throw new MissingTool(`${missing.argv[0]} is not on PATH, so run ${shown(missing)} by hand.`);
+        throw new MissingTool((0, errors_1.message) `${missing.argv[0]} is not on PATH, so run ${shown(missing)} by hand.`);
     for (const step of steps) {
         const [program, ...rest] = step.argv;
         const r = (0, node_child_process_1.spawnSync)(program, rest, { stdio: 'inherit', env: { ...process.env, ...step.env }, shell: viaShell(program) });
         if (r.status !== 0)
-            throw new Error(`${shown(step)} failed.`);
+            throw new errors_1.GaugeError((0, errors_1.message) `${shown(step)} failed.`);
     }
 }
 // The scripts that the settings run, for update. scripts() goes by where this
@@ -447,7 +453,7 @@ function update(dryRun) {
         return;
     }
     if (!fs.existsSync(path.join(dir, 'statusline.js'))) {
-        throw new Error(`There is no copy of claude-gauge in ${dir} to update. Run claude-gauge setup first.`);
+        throw new errors_1.GaugeError((0, errors_1.message) `There is no copy of claude-gauge in ${dir} to update. Run claude-gauge setup first.`);
     }
     const fetch = copySteps();
     if (fetch) {
@@ -461,11 +467,14 @@ function update(dryRun) {
     copyRuntime(dir);
     say(s.pill('Update'), s.ok(`Updated claude-gauge in ${s.value(dir)} to ${s.value(version())}.`));
 }
-// An error on stderr: a red pill, then a red ✖ before the first line of
-// `message` and a ↳ before each line after it.
-function failure(message) {
+// The text of `err` for `s`: a GaugeError with its values styled, any other
+// error as its plain message.
+const describe = (err, s) => (err instanceof errors_1.GaugeError ? err.render(s) : err.message);
+// An error on stderr: a red pill, then a red ✖ before the first line of its
+// text and a ↳ before each line after it.
+function failure(err) {
     const s = (0, styles_1.stylesFor)(process.stderr);
-    const [first, ...rest] = message.split('\n');
+    const [first, ...rest] = describe(err, s).split('\n');
     return s.pill('Error', 'error') + s.error(first) + rest.map((line) => s.trace(line.trim())).join('');
 }
 async function main(argv) {
@@ -481,7 +490,7 @@ async function main(argv) {
             return 0;
         }
         if (!args.command)
-            throw new UsageError('Name a command.');
+            throw new UsageError((0, errors_1.message) `Name a command.`);
         switch (args.command) {
             case 'setup':
                 await setup(args);
@@ -500,14 +509,19 @@ async function main(argv) {
     }
     catch (err) {
         if (err instanceof UsageError) {
-            process.stderr.write(`${failure(err.message)}\n${usage(process.stderr)}`);
+            process.stderr.write(`${failure(err)}\n${usage(process.stderr)}`);
             return 2;
+        }
+        // Ctrl+C at a question: nothing changed, and the shell's code for it.
+        if (err instanceof wizard_1.Interrupted) {
+            process.stderr.write((0, styles_1.stylesFor)(process.stderr).info(err.message));
+            return 130;
         }
         if (err instanceof MissingTool) {
-            process.stderr.write(failure(err.message));
+            process.stderr.write(failure(err));
             return 2;
         }
-        process.stderr.write(failure(err.message));
+        process.stderr.write(failure(err));
         return 1;
     }
 }

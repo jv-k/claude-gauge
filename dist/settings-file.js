@@ -8,6 +8,7 @@ exports.writeSettings = writeSettings;
 exports.writeAtomic = writeAtomic;
 const fs = require("node:fs");
 const path = require("node:path");
+const errors_1 = require("./errors");
 // Reads settings.json. A missing or empty file reads as {}. A file that is
 // not a JSON object stops the write: claude-gauge never guesses at a file it
 // cannot read.
@@ -28,10 +29,10 @@ function readSettings(file) {
         settings = JSON.parse(text);
     }
     catch (err) {
-        throw new Error(`${file} is not valid JSON (${err.message}), so claude-gauge leaves it alone. Fix it by hand.`);
+        throw new errors_1.GaugeError((0, errors_1.message) `${file} is not valid JSON (${(0, errors_1.plain)(err.message)}), so claude-gauge leaves it alone. Fix it by hand.`);
     }
     if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
-        throw new Error(`${file} does not hold a JSON object, so claude-gauge leaves it alone. Fix it by hand.`);
+        throw new errors_1.GaugeError((0, errors_1.message) `${file} does not hold a JSON object, so claude-gauge leaves it alone. Fix it by hand.`);
     }
     return { settings: settings, text };
 }
