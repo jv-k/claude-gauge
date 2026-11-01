@@ -332,8 +332,14 @@ test('with no agents part to show, the reader leaves the subagents folder and tr
   const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
   const { file, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5', at(70))] });
   const io = countingFs();
-  io.readdirSync = () => assert.fail('the subagents folder was listed');
+  // The reader catches a listing error, so the test counts the listings.
+  let listings = 0;
+  io.readdirSync = (...args) => {
+    listings += 1;
+    return fs.readdirSync(...args);
+  };
   const [agent] = readTranscriptActivity(file, { stateDir, fs: io, subagents: false }).agents;
+  assert.equal(listings, 0, 'the subagents folder was listed');
   assert.deepEqual(agent, { type: 'Explore', description: 'Map the reader', startedAt: at(72) });
   assert.equal(io.bytes, fs.statSync(file).size);
 
