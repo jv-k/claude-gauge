@@ -347,7 +347,8 @@ async function interactive(command: 'setup' | 'configure', replace: boolean): Pr
       }
       replace = true;
     }
-    const preview = previewer(loadPayload(payloadFile()));
+    // A front end that redraws with the clock gets bars that move.
+    const preview = previewer(loadPayload(payloadFile()), { sweep: io.animated === true });
     const choices = await runWizard(io, { preview, installed: command === 'configure' ? installedSwitches(settings) : undefined });
     if (!choices) {
       say(s.info('Nothing changed.'));

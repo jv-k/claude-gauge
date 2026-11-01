@@ -57,8 +57,8 @@ test('the defaults path completes in one confirmation, after a preview of the de
   }
 });
 
-test('the customise path covers rows, parts, segments, theme, labels and the token line, and previews after each answer', async () => {
-  const io = scripted(['n', '3', 'ctx,7d', 'model', 'time, cost', '10', 'pastel', 'n', 'n', 'y']);
+test('the customise path covers rows, parts, bar style, segments, theme, labels and the token line, and previews after each answer', async () => {
+  const io = scripted(['n', '3', 'ctx,7d', 'model', 'time, cost', '', '10', 'pastel', 'n', 'n', 'y']);
   const { preview, calls } = fakePreview();
   const result = await runWizard(io, { preview });
   assert.deepEqual(result, {
@@ -73,6 +73,8 @@ test('the customise path covers rows, parts, segments, theme, labels and the tok
     `--show ctx,7d --show ${defaultRows[1]}`,
     '--show ctx,7d --show model',
     '--show ctx,7d --show model --show time,cost',
+    // the bar style, kept as classic
+    '--show ctx,7d --show model --show time,cost',
     '--show ctx,7d --show model --show time,cost --segments 10',
     '--show ctx,7d --show model --show time,cost --segments 10 --theme pastel',
     '--show ctx,7d --show model --show time,cost --segments 10 --theme pastel --no-labels',
@@ -81,12 +83,12 @@ test('the customise path covers rows, parts, segments, theme, labels and the tok
   ]);
   assert.match(io.output, /Token line: off/);
   // Each question comes after the preview of the answer before it.
-  assert.equal(io.questions.length, 10);
+  assert.equal(io.questions.length, 11);
   assert.match(io.questions.at(-1), /Write these choices/);
 });
 
 test('the token line shows under the status line, and redraws with the parts answered', async () => {
-  const io = scripted(['n', '1', 'ctx', '', '', 'y', 'y', 'req,ctx', 'y']);
+  const io = scripted(['n', '1', 'ctx', '', '', '', 'y', 'y', 'req,ctx', 'y']);
   const { preview } = fakePreview();
   const tokenCalls = [];
   const tokenPreview = (switches) => {
@@ -108,26 +110,27 @@ test("the token line's sample run shows each part, and follows its switches", ()
 });
 
 test('customising with Enter at every question keeps the defaults, which need no switches', async () => {
-  const io = scripted(['n', '', '', '', '', '', '', '', '', '']);
+  const io = scripted(['n', '', '', '', '', '', '', '', '', '', '']);
   const { preview } = fakePreview();
   assert.deepEqual(await runWizard(io, { preview }), { statusLine: [], tokenLine: [] });
-  assert.equal(io.questions.length, 10, 'two default rows: one question for each');
+  assert.equal(io.questions.length, 11, 'two default rows: one question for each');
 });
 
 test('an answer the wizard cannot use is asked again, with the reason', async () => {
-  const io = scripted(['maybe', 'n', '9', '1', 'ctx,bogus', ',', 'ctx', '7', '10', 'neon', 'mono', 'perhaps', 'y', 'y', '', 'y']);
+  const io = scripted(['maybe', 'n', '9', '1', 'ctx,bogus', ',', 'ctx', 'wavy', '', '7', '10', 'neon', 'mono', 'perhaps', 'y', 'y', '', 'y']);
   const { preview } = fakePreview();
   assert.deepEqual(await runWizard(io, { preview }), { statusLine: ['--show', 'ctx', '--segments', '10', '--theme', 'mono'], tokenLine: [] });
   assert.match(io.output, /Answer y or n/);
   assert.match(io.output, /a number from 1 to 3/);
   assert.match(io.output, /Unknown part: bogus/);
   assert.match(io.output, /Name at least one part/);
+  assert.match(io.output, /Unknown bar style: wavy\. Answer one of classic, steps, rising, hairline, dots, spark, underline\./);
   assert.match(io.output, /5 or 10/);
   assert.match(io.output, /Unknown theme: neon/);
 });
 
 // The status line questions on the customise path, each answered with Enter.
-const enterAtStatusLine = ['n', '', '', '', '', '', ''];
+const enterAtStatusLine = ['n', '', '', '', '', '', '', ''];
 
 test('a yes to the token line asks for its parts: Enter writes no --show, and any other answer writes it', async () => {
   const { preview } = fakePreview();
@@ -233,7 +236,7 @@ const pick = (label) => (q) => {
 };
 
 // The status line questions on the customise path, each answered with Enter.
-const enterAtStatusLineChoices = [pick('No'), enter, enter, enter, enter, enter, enter];
+const enterAtStatusLineChoices = [pick('No'), enter, enter, enter, enter, enter, enter, enter];
 
 test('as a choice, the token line asks no context window question, and configure keeps a --window set up', async () => {
   const { preview } = fakePreview();
@@ -246,13 +249,13 @@ test('as a choice, the token line asks no context window question, and configure
 });
 
 // configure: the wizard starts from the switches set up now.
-test('configure offers to keep the bars set up now, and a yes leaves both as they are', async () => {
+test('configure offers to keep the lines set up now, and a yes leaves both as they are', async () => {
   const io = scripted(['y']);
   const { preview, calls } = fakePreview();
   const installed = { statusLine: ['--theme', 'mono', '--segments', '10'] };
   assert.deepEqual(await runWizard(io, { preview, installed }), {});
   assert.equal(io.questions.length, 1);
-  assert.match(io.questions[0], /Keep the current bars/);
+  assert.match(io.questions[0], /Keep the current lines/);
   assert.match(io.output, /as set up now/);
   assert.deepEqual(calls, ['--segments 10 --theme mono'], 'the preview starts from the installed layout');
   assert.match(io.output, /Token line: off/);
@@ -267,7 +270,7 @@ test('configure offers to keep the bars set up now, and a yes leaves both as the
 });
 
 test('configure: each question defaults to the installed value, and the switches it does not ask about stay', async () => {
-  const io = scripted(['n', '', '', '', '', '', '', '', 'y']);
+  const io = scripted(['n', '', '', '', '', '', '', '', '', 'y']);
   const { preview, calls } = fakePreview();
   const installed = {
     statusLine: ['--text', 'a b', '--show', 'ctx,bogus,5h', '--segments=10', '--frobnicate', '--theme', 'mono', '--no-labels', '--right', 'ctx'],
@@ -281,27 +284,28 @@ test('configure: each question defaults to the installed value, and the switches
   assert.equal(calls[0], '--show ctx,5h --segments 10 --theme mono --no-labels --text a b --frobnicate --right ctx');
   assert.match(io.questions[1], /\[1\] $/, 'one row set up');
   assert.match(io.questions[2], /\[ctx,5h\] $/);
-  assert.match(io.questions[3], /\[10\] $/);
-  assert.match(io.questions[4], /\[mono\] $/);
-  assert.match(io.questions[5], /\[y\/N\] $/, 'labels are off');
-  assert.match(io.questions[6], /token line.*\[Y\/n\] $/, 'a token line is set up');
+  assert.match(io.questions[3], /\[classic\] $/);
+  assert.match(io.questions[4], /\[10\] $/);
+  assert.match(io.questions[5], /\[mono\] $/);
+  assert.match(io.questions[6], /\[y\/N\] $/, 'labels are off');
+  assert.match(io.questions[7], /token line.*\[Y\/n\] $/, 'a token line is set up');
 });
 
 test('configure: the token line defaults to no when none is set up, and answers change only what they name', async () => {
   const { preview } = fakePreview();
   const installed = { statusLine: ['--text', 'a b', '--segments', '10'] };
   // No --show: the two default rows, one question each.
-  const io = scripted(['n', '', '', '', '5', 'pastel', '', '', 'y']);
+  const io = scripted(['n', '', '', '', '', '5', 'pastel', '', '', 'y']);
   assert.deepEqual(await runWizard(io, { preview, installed }), { statusLine: ['--theme', 'pastel', '--text', 'a b'], tokenLine: null });
-  assert.match(io.questions[7], /token line.*\[y\/N\] $/);
-  assert.deepEqual(await runWizard(scripted(['n', '', '', '', '', '', '', 'y', '', 'y']), { preview, installed }), { statusLine: ['--segments', '10', '--text', 'a b'], tokenLine: [] });
+  assert.match(io.questions[8], /token line.*\[y\/N\] $/);
+  assert.deepEqual(await runWizard(scripted(['n', '', '', '', '', '', '', '', 'y', '', 'y']), { preview, installed }), { statusLine: ['--segments', '10', '--text', 'a b'], tokenLine: [] });
   // Two rows asked for where one is set up: the second offers the default row.
-  const rows = scripted(['n', '2', '', '', '', '', '', '', 'y']);
+  const rows = scripted(['n', '2', '', '', '', '', '', '', '', 'y']);
   await runWizard(rows, { preview, installed: { statusLine: ['--show', 'ctx'] } });
   assert.match(rows.questions[3], new RegExp(`\\[${DEFAULT_ROWS[1].join(',')}\\] $`));
   // More rows set up than the wizard offers: Enter keeps them all.
   const four = ['--show', 'ctx', '--show', '5h', '--show', '7d', '--show', 'model'];
-  const many = scripted(['n', '', '', '', '', '', '', '', '', '', 'y']);
+  const many = scripted(['n', '', '', '', '', '', '', '', '', '', '', 'y']);
   assert.deepEqual(await runWizard(many, { preview, installed: { statusLine: four } }), { statusLine: four, tokenLine: null });
   assert.match(many.questions[1], /1 to 4\? \[4\] $/);
 });
@@ -317,7 +321,7 @@ test('setup, or configure with no bar set up, starts from the factory defaults',
 
 test('a no at the last question changes nothing, and the end of the answers stops the wizard', async () => {
   const { preview } = fakePreview();
-  assert.equal(await runWizard(scripted(['n', '', '', '', '', '', '', '', '', 'n']), { preview }), null);
+  assert.equal(await runWizard(scripted(['n', '', '', '', '', '', '', '', '', '', 'n']), { preview }), null);
   await assert.rejects(runWizard(scripted([]), { preview }), EndOfAnswers);
   await assert.rejects(runWizard(scripted(['n', '2', 'ctx']), { preview }), EndOfAnswers);
 });
@@ -378,6 +382,25 @@ test('the preview uses the payload the status line saved, else a sample', () => 
   assert.match(plain(sample(['--show', 'ctx', '--segments', '10'])), /^ctx \d+% [▓░]{10} /);
 });
 
+test('with sweep, the preview moves the ctx, 5h and 7d bars with the clock, keeps the other parts, and runs git once', () => {
+  const now = new Date(2026, 10, 1, 12, 0).getTime();
+  let gitCalls = 0;
+  const options = (nowMs) => ({ nowMs, env: {}, statusOf: () => (gitCalls++, '# branch.head main\n'), branchOf: () => 'main', sweep: true });
+  const shown = ['--show', 'ctx,5h,7d,model', '--no-reset'];
+  const frames = [0, 1000, 2000, 3000].map((ms) => plain(previewer(samplePayload(now), options(now + ms))(shown)));
+  assert.equal(new Set(frames).size, frames.length, JSON.stringify(frames));
+  for (const frame of frames) assert.match(frame, /^ctx \d+% [▓░]{5} [\d.]+k? │ 5h \d+% \S+ │ 7d \d+% \S+ │ Opus$/);
+  // Without sweep, the payload's own figures.
+  assert.match(plain(previewer(samplePayload(now), { nowMs: now, env: {} })(shown)), /^ctx 43% /);
+  // One previewer renders many frames, with git run once.
+  gitCalls = 0;
+  const preview = previewer(samplePayload(now), options(undefined));
+  for (let i = 0; i < 5; i++) preview(['--show', 'branch']);
+  assert.equal(gitCalls, 1);
+  // plain draws underline as classic, as --latest does.
+  assert.match(preview([...shown, '--bar-style', 'underline'], true), /[▓░]{5}/);
+});
+
 test('the preview shows every part, alone, from a fresh config folder outside git', () => {
   const dir = tempDir('claude-gauge-wizard-');
   const now = new Date(2026, 9, 7, 12, 0, 0).getTime();
@@ -431,7 +454,7 @@ async function runOn(output, answers) {
 }
 
 // One row of ctx, the rest with Enter, no token line, and a yes to write.
-const oneRow = ['n', '1', 'ctx', '', '', '', 'n', 'y'];
+const oneRow = ['n', '1', 'ctx', '', '', '', '', 'n', 'y'];
 
 // The code that moves the cursor up `n` rows to the start of the old
 // preview, and clears from there to the end of the screen.
@@ -442,7 +465,7 @@ test('on a terminal, each preview after an answer moves up over the last one and
   const output = fakeOutput(true, 80);
   const { result, calls } = await runOn(output, oneRow);
   assert.deepEqual(result, { statusLine: ['--show', 'ctx'], tokenLine: null });
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 8);
   // A no to the defaults clears the first preview with its heading and the
   // question under it: the heading, the preview's blank line, its row, the
   // token line row and the token line's sample of 81 characters, which takes
@@ -450,11 +473,11 @@ test('on a terminal, each preview after an answer moves up over the last one and
   // answer, nine rows. The STATUS LINE pill takes their
   // place, and the first preview after it starts fresh.
   const rewinds = [...output.text.matchAll(REWIND)];
-  assert.equal(rewinds.length, 6, JSON.stringify(output.text));
+  assert.equal(rewinds.length, 7, JSON.stringify(output.text));
   assert.equal(rewinds[0][0], rewind(9));
   assert.ok(rewinds[0].index < output.text.indexOf('STATUS LINE'));
   assert.ok(output.text.indexOf('STATUS LINE') < rewinds[1].index);
-  // Each of the five after it replaces the preview before: its blank line,
+  // Each of the six after it replaces the preview before: its blank line,
   // its row, the token line row and its two-row sample, the INPUT pill and
   // its blank line, then the question and its answer: eight rows.
   assert.equal(rewinds[1][0], rewind(8));

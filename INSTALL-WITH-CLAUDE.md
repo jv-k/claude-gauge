@@ -31,10 +31,10 @@ Done when you can name the parts `--show` accepts for each line.
 
 Ask with one `AskUserQuestion` call, the recommended option first in each question:
 
-- **Which bars?** The status line, the token line, or both. Recommend both.
+- **Which lines?** The status line, the token line, or both. Recommend both.
 - **Which status line layout?** Recommend the default two rows (no `--show`): `ctx,5h,7d` above `time,duration,repo,branch,model,effort`. Offer one row of usage only (`--show 5h,7d`), and a custom layout: each `--show` is one row, built from the parts in the README's two parts tables.
-- **Bar size?** 5 cells (the default) or 10 (`--segments 10`).
-- **Also in VS Code and the desktop app?** The VS Code extension and the desktop app show neither the status line nor hook messages. A SessionStart hook per bar, with `--instruct` (step 7), has you paste that bar at the end of each reply in those two hosts, and does nothing in the terminal CLI. Recommend it for every bar the user chose.
+- **Bar style?** `classic` with 5 cells (the default, `▓▓┃░░`; recommend it), `classic` with 10 cells (`--segments 10`), `steps` (`--bar-style steps`, `▅▅▅▁▁▁`) or `hairline` (`--bar-style hairline`, `━━╋───`). The user can also type `rising`, `dots`, `spark` or `underline` for `--bar-style`. A `--bar-style` goes in the switches of both lines.
+- **Also in VS Code and the desktop app?** The VS Code extension and the desktop app show neither the status line nor hook messages. A SessionStart hook per line, with `--instruct` (step 7), has you paste that line at the end of each reply in those two hosts, and does nothing in the terminal CLI. Recommend it for every line the user chose.
 
 Do not ask for the context window. The token line takes it from the status line. Only if the user chose the token line without the status line, and your own context window is 1M tokens, add `--window 1m` to the token line, so its percentage is right from the first turn.
 
@@ -69,7 +69,7 @@ Done when settings.json parses and holds the entries the user chose, or the user
 
 ## 7. Add the SessionStart hooks (if chosen)
 
-For each bar the user wants in VS Code and the desktop app, append `{ "hooks": [ { "type": "command", "command": "<command>" } ] }` to the `hooks.SessionStart` array of `~/.claude/settings.json`, creating `hooks` and `SessionStart` as needed. The command is the bar's step 5 command with `--instruct` added, for example `node ~/.claude/claude-gauge/dist/statusline.js --instruct --window 1m`. For the token line, use a `--show` without `time` and `ctx`, such as `--show req,out,cache`, when the status line hook shows them already. If an entry already runs that script with `--instruct`, at either the old or the `dist/` path, update it instead of adding a second one. Keep the user's other hooks, and confirm the file parses as in step 6.
+For each line the user wants in VS Code and the desktop app, append `{ "hooks": [ { "type": "command", "command": "<command>" } ] }` to the `hooks.SessionStart` array of `~/.claude/settings.json`, creating `hooks` and `SessionStart` as needed. The command is the line's step 5 command with `--instruct` added, for example `node ~/.claude/claude-gauge/dist/statusline.js --instruct --window 1m`. For the token line, use a `--show` without `time` and `ctx`, such as `--show req,out,cache`, when the status line hook shows them already. If an entry already runs that script with `--instruct`, at either the old or the `dist/` path, update it instead of adding a second one. Keep the user's other hooks, and confirm the file parses as in step 6.
 
 Check each hook:
 
@@ -81,7 +81,7 @@ prints an instruction that names the `--latest` command. The same command withou
 
 If `~/.claude/CLAUDE.md` holds an older claude-gauge instruction that mentions `--latest`, tell the user the hook replaces it, and remove it with their consent.
 
-Done when settings.json holds one SessionStart entry per chosen bar, or the user has the JSON to merge.
+Done when settings.json holds one SessionStart entry per chosen line, or the user has the JSON to merge.
 
 ## 8. Report
 
@@ -89,7 +89,7 @@ Tell the user, in a few lines:
 
 - what you installed, with each command;
 - that the changes take effect in a new Claude Code session;
-- that the bars show in the terminal CLI, and, with the step 7 hooks, at the end of each reply in the VS Code extension and the desktop app;
+- that the lines show in the terminal CLI, and, with the step 7 hooks, at the end of each reply in the VS Code extension and the desktop app;
 - where the settings backup is, and that `git -C ~/.claude/claude-gauge pull` updates claude-gauge.
 
 ## The npm route
@@ -99,12 +99,12 @@ The `claude-gauge` command from npm does the fetch and the settings merge itself
 1. **Check the prerequisites.** Run `node --version` and `npm --version`. Done when Node.js is 18 or later and npm is present. If not, stop and tell the user claude-gauge needs Node.js 18 or later, with npm.
 2. **Learn the switches.** Read the **Options** section of the reference, at `https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/reference.md`. Done when you can name the parts `--show` accepts for each line.
 3. **Ask the user what to install,** as in step 4. Done when every question that applies has an answer.
-4. **Run setup with the answers as switches.** It asks nothing when it gets bar switches:
+4. **Run setup with the answers as switches.** It asks nothing when it gets line switches:
 
    ```sh
    npx @jv-k/claude-gauge setup --status-line "<status line switches>" --token-line "<token line switches>"
    ```
 
-   Give `""` for a bar with no switches, and `--no-token-line` or `--no-status-line` in place of a bar the user does not want. If setup stops because the settings run another status line, show that command to the user, and run again with `--replace` only with their consent. Setup saves the status line it replaces, and `npx @jv-k/claude-gauge uninstall` puts it back. Done when setup prints the commands it set up.
-5. **Add the SessionStart hooks (if chosen),** as in step 7, with commands that name `~/.claude/claude-gauge/runtime/` in place of `~/.claude/claude-gauge/dist/`. Done when settings.json holds one SessionStart entry per chosen bar, or the user has the JSON to merge.
+   Give `""` for a line with no switches, and `--no-token-line` or `--no-status-line` in place of a line the user does not want. If setup stops because the settings run another status line, show that command to the user, and run again with `--replace` only with their consent. Setup saves the status line it replaces, and `npx @jv-k/claude-gauge uninstall` puts it back. Done when setup prints the commands it set up.
+5. **Add the SessionStart hooks (if chosen),** as in step 7, with commands that name `~/.claude/claude-gauge/runtime/` in place of `~/.claude/claude-gauge/dist/`. Done when settings.json holds one SessionStart entry per chosen line, or the user has the JSON to merge.
 6. **Report,** as in step 8, with the backup path if setup printed one. It makes no backup when there was no settings file. The update command is `npx @jv-k/claude-gauge@latest update`, which keeps the user's switches.

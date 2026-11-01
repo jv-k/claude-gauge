@@ -76,7 +76,7 @@ test('setup and configure ask their questions with AskUserQuestion, then pass th
   }
 });
 
-test('the commands name only switches the CLI and the two bars take', () => {
+test('the commands name only switches the CLI and the two lines take', () => {
   const usage = cliSource();
   const reference = fs.readFileSync(path.join(root, 'docs', 'reference.md'), 'utf8');
   for (const name of ['setup', 'configure', 'uninstall']) {

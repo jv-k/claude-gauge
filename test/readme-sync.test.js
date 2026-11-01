@@ -205,5 +205,5 @@ test('a part name with a hyphen, a capital or an underscore in the migration col
 // The README's short table of the default parts lists the default rows' parts,
 // in row order, as the reference's "### Status line" table does.
 test("the README's default parts table lists the default rows in order", () => {
-  assert.deepEqual(tableNames(readme, '## What the bars show'), DEFAULT_ROWS.flat());
+  assert.deepEqual(tableNames(readme, '## What the lines show'), DEFAULT_ROWS.flat());
 });

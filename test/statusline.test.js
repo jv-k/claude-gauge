@@ -198,6 +198,52 @@ test('--bar-filled and --bar-empty change the bar characters', () => {
   }
 });
 
+test('--bar-style draws every bar in that style, at its own width, and an unknown style gives classic', () => {
+  // ctx at 43%, and 5h at 62% with 3 of its 5 hours gone.
+  const data = payload({ five_hour: { used_percentage: 62, resets_at: at(NOW + 2 * HOUR) } });
+  const show = ['--show', 'ctx,5h', '--no-reset'];
+  const styled = (style, ...more) => run(data, [...show, '--bar-style', style, ...more]);
+  assert.equal(styled('classic'), 'ctx 43% ▓▓░░░ 86.0k │ 5h 62% ▓▓▓┃░');
+  // The cell where "now" falls takes the pace colour, so it shows as itself here.
+  assert.equal(styled('steps'), 'ctx 43% ▅▅▅▁▁▁ 86.0k │ 5h 62% ▅▅▅▅▁▁');
+  assert.equal(styled('rising'), 'ctx 43% ▅▁·▕ 86.0k │ 5h 62% ▅▄·▕•');
+  assert.equal(styled('hairline'), 'ctx 43% ━━━───── 86.0k │ 5h 62% ━━━━━╋──');
+  assert.equal(styled('dots'), 'ctx 43% •••··· 86.0k │ 5h 62% ••••|·');
+  assert.equal(styled('spark'), 'ctx 43% ▄ 86.0k │ 5h 62% ▅•');
+  assert.equal(styled('underline'), 'ctx 43% 86.0k │ 5h 62%', 'the underline is the bar');
+  assert.equal(styled('wavy'), styled('classic'));
+  assert.equal(styled(' steps '), styled('steps'), 'the name is trimmed');
+  // Only classic takes --segments.
+  assert.equal(styled('steps', '--segments', '10'), styled('steps'));
+  // --bar-filled and --bar-empty work in the styles with filled and empty cells.
+  assert.equal(styled('steps', '--bar-filled', '█'), 'ctx 43% ███▁▁▁ 86.0k │ 5h 62% ████▁▁');
+  assert.equal(styled('rising', '--bar-filled', '█'), styled('rising'));
+  // --no-bars drops every style's bar.
+  assert.equal(styled('spark', '--no-bars'), 'ctx 43% 86.0k │ 5h 62%');
+});
+
+test('--bar-style underline underlines the share used, and colours the character where "now" falls', () => {
+  const data = payload({ five_hour: { used_percentage: 62, resets_at: at(NOW + 2 * HOUR) } });
+  const raw = (...args) => render(data, { nowMs: NOW, statusOf: onMain, config: parseArgs(['--show', '5h', '--no-reset', '--bar-style', 'underline', ...args]) });
+  // 62% of "5h 62%" is its first 4 characters; 3 of 5 hours gone is the 5th.
+  assert.match(raw(), /\x1b\[4m5h 6\x1b\[24m\x1b\[38;5;\d+m2\x1b\[0m/);
+  assert.match(raw('--theme', 'mono'), /\x1b\[4m5h 6\x1b\[24m\x1b\[7m2\x1b\[27m%/, 'inverted without colour');
+});
+
+test('without colour, steps draws ┃ for the pace marker, rising and spark drop the dot, and plain text draws underline as classic', () => {
+  const data = payload({ five_hour: { used_percentage: 62, resets_at: at(NOW + 2 * HOUR) } });
+  const show = ['--show', '5h', '--no-reset'];
+  assert.equal(run(data, [...show, '--bar-style', 'steps', '--theme', 'mono']), '5h 62% ▅▅▅▅┃▁');
+  assert.equal(run(data, [...show, '--bar-style', 'spark', '--theme', 'mono']), '5h 62% ▅');
+  const asPlain = (style) => plain(render(data, { nowMs: NOW, statusOf: onMain, config: parseArgs([...show, '--bar-style', style]), plain: true }));
+  assert.equal(asPlain('steps'), '5h 62% ▅▅▅▅┃▁');
+  assert.equal(asPlain('rising'), '5h 62% ▅▄·▕');
+  assert.equal(asPlain('underline'), '5h 62% ▓▓▓┃░');
+  // Early in the window there is no pace colour yet: steps marks nothing.
+  const early = payload({ five_hour: { used_percentage: 4, resets_at: at(NOW + 5 * HOUR - 5 * 60 * 1000) } });
+  assert.equal(run(early, [...show, '--bar-style', 'steps', '--theme', 'mono']), '5h 4% ▁▁▁▁▁▁');
+});
+
 // Per-model weekly windows, as Anthropic's usage API names them.
 const modelWindows = (extra = {}) =>
   payload({
