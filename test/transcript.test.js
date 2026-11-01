@@ -11,7 +11,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { render, parseArgs, readTranscriptActivity } = require('../dist/statusline.js');
 
-const { plain, tempDir } = require('./helpers');
+const { plain, tempDir, countingFs } = require('./helpers');
 
 const CWD = '/home/me/project';
 // A path relative to CWD as the part prints it, with this system's separator.
@@ -42,17 +42,6 @@ const renderTools = (file, { args = ['--show', 'tools'], stateDir = path.join(te
       { config: parseArgs(args), branchOf: () => 'main', transcript: reader ?? ((f) => readTranscriptActivity(f, { stateDir })) },
     ),
   );
-
-// The real fs, counting the transcript bytes it reads.
-function countingFs() {
-  const io = { ...fs, bytes: 0 };
-  io.readSync = (...args) => {
-    const n = fs.readSync(...args);
-    io.bytes += n;
-    return n;
-  };
-  return io;
-}
 
 test('tools shows the running tool with its target, and completed tools with counts', () => {
   const activity = { tools: { running: [{ name: 'Edit', target: `${CWD}/src/a.ts` }], completed: { Read: 12, Bash: 3 } } };

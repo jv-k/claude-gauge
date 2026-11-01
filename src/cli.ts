@@ -285,7 +285,8 @@ function apply({ statusLine, tokenLine }: Bars, replace: boolean, heading: strin
   };
   const next = plan(settings, choices);
   if (next.blocked) {
-    const current = (settings.statusLine as StatusLineSetting).command ?? JSON.stringify(settings.statusLine);
+    // The settings file is not checked, so the command may not be a string.
+    const current = String((settings.statusLine as StatusLineSetting).command ?? JSON.stringify(settings.statusLine));
     const whose = next.found === 'claude-hud' ? "claude-hud's status line" : 'another status line';
     throw new GaugeError(
       message`${file} already runs ${plain(whose)}:\n  ${current}\nRun again with --replace to replace it. claude-gauge saves it, and claude-gauge uninstall puts it back.`,
