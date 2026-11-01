@@ -78,7 +78,8 @@ const statusExamples = [
   [
     ['--show', 'ctx,5h,7d', '--show', 'duration,repo,branch,model,effort', '--right', 'model,effort', '--no-reset'],
     'ctx 43% ▓▓░░░ 86.0k │ 5h 9% ░░░┃░ │ 7d 41% ▓▓░┃░\n1h12m │ project                       Opus 5.5 │ effort high\n',
-    60,
+    // A 64-column terminal: Claude Code keeps 2 columns free on each side, so the row is 60 wide.
+    64,
   ],
   [
     ['--show', 'ctx,5h,7d', '--theme', 'pastel', '--bar-filled', '█', '--bar-empty', '·', '--no-reset'],
