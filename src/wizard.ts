@@ -104,10 +104,10 @@ class EndOfAnswers extends Error {
 }
 
 // Ctrl+C stopped the questions: nothing is written, as at the end of the
-// input.
+// input. The star offer, after the settings are written, says so instead.
 class Interrupted extends EndOfAnswers {
-  constructor() {
-    super('Stopped at Ctrl+C. Nothing changed.');
+  constructor(message = 'Stopped at Ctrl+C. Nothing changed.') {
+    super(message);
   }
 }
 
@@ -505,13 +505,15 @@ interface StarOptions {
 }
 
 // The end of setup: with gh at hand, offers to star the repo, and stars it
-// on a yes or Enter. Without gh it says nothing. The end of the input is a no.
+// on a yes or Enter. Without gh it says nothing. The end of the input is a no,
+// and Ctrl+C stops setup, as at any other question.
 async function offerStar(io: WizardIo, { hasGh, star }: StarOptions): Promise<void> {
   if (!hasGh()) return;
   let yes: boolean;
   try {
     yes = await confirm(io, `Star ${REPO} on GitHub with gh?`, true);
   } catch (err) {
+    if (err instanceof Interrupted) throw new Interrupted('Stopped at Ctrl+C. The settings are written, and the repo is not starred.');
     if (err instanceof EndOfAnswers) return;
     throw err;
   }

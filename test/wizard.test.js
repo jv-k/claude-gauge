@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { Readable } = require('node:stream');
-const { runWizard, offerStar, streamIo, EndOfAnswers, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
+const { runWizard, offerStar, streamIo, EndOfAnswers, Interrupted, loadPayload, samplePayload, previewer } = require('../dist/wizard.js');
 const { DEFAULT_ROWS } = require('../dist/statusline.js');
 
 const { plain } = require('./helpers');
@@ -328,6 +328,13 @@ test('the star offer defaults to yes, runs the star on a yes or Enter, and is sk
   const io = scripted(['y']);
   await offerStar(io, { hasGh: () => true, star: () => false });
   assert.match(io.output, /could not star/);
+});
+
+test('Ctrl+C at the star offer stops setup, as at any other question, and stars nothing', async () => {
+  const stopped = { ...scripted([]), choices: { one: async () => { throw new Interrupted(); }, many: async () => [], preview: () => {} } };
+  let starred = 0;
+  await assert.rejects(offerStar(stopped, { hasGh: () => true, star: () => { starred++; return true; } }), (err) => err instanceof Interrupted && /settings are written/.test(err.message));
+  assert.equal(starred, 0);
 });
 
 test('the preview uses the payload the status line saved, else a sample', () => {
