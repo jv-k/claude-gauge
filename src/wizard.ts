@@ -64,6 +64,9 @@ interface WizardIo {
   // Set by a front end that redraws its preview with the clock, so the
   // preview can animate.
   animated?: boolean;
+  // The time a moving preview shows, set by a front end that can pause the
+  // animation: it stops while the animation is paused.
+  clock?: () => number;
 }
 
 // One option of a choice: the words it shows, and the answer it gives.
@@ -886,21 +889,32 @@ function loadPayload(file: string, nowMs = Date.now()): StatusData {
 // The preview's options: render's, and `sweep` to let the bars move with the
 // clock in a preview asked for `moving`. With sweep set, the reads of git and
 // the files are kept, as an animated preview renders many times a second.
-type PreviewOptions = Omit<Parameters<typeof render>[1] & object, 'config' | 'plain'> & { sweep?: boolean };
+// `clock`, when set, gives the time the moving bars show, in place of now.
+type PreviewOptions = Omit<Parameters<typeof render>[1] & object, 'config' | 'plain'> & { sweep?: boolean; clock?: () => number };
+
+// Where a bar is at `nowMs` in the preview's animation: 0 to 1 and back on
+// `period`, from `phase`, as a triangle wave, and as a percentage that eases
+// at each end.
+const waveAt = (nowMs: number, period: number, phase: number) => {
+  const x = (((nowMs / period + phase) % 1) + 1) % 1;
+  return x < 0.5 ? x * 2 : 2 - x * 2;
+};
+const levelAt = (nowMs: number, period: number, phase: number) => {
+  const x = waveAt(nowMs, period, phase);
+  return Math.round(100 * x * x * (3 - 2 * x));
+};
+
+// The memory with the ram bar moved to where it is at `nowMs` in the
+// preview's animation, as swept moves the others.
+const sweptMemory = ({ total }: { used: number; total: number }, nowMs: number) => ({ used: (total * levelAt(nowMs, 7000, 0.8)) / 100, total });
 
 // The payload with the context, 5h and 7d bars moved to where they are at
 // `nowMs` in the preview's animation. Each climbs and falls on its own
 // period, and "now" moves through each window, so the pace marker walks
 // and changes colour. The other fields stay as they are.
 function swept(payload: StatusData, nowMs: number): StatusData {
-  const wave = (period: number, phase: number) => {
-    const x = (((nowMs / period + phase) % 1) + 1) % 1;
-    return x < 0.5 ? x * 2 : 2 - x * 2;
-  };
-  const pct = (period: number, phase: number) => {
-    const x = wave(period, phase);
-    return Math.round(100 * x * x * (3 - 2 * x));
-  };
+  const wave = (period: number, phase: number) => waveAt(nowMs, period, phase);
+  const pct = (period: number, phase: number) => levelAt(nowMs, period, phase);
   const resetsAt = (seconds: number, period: number, phase: number) => Math.floor(nowMs / 1000 + seconds * (0.92 - 0.84 * wave(period, phase)));
   // Without the token counts, ctx counts its tokens from the percentage.
   const context = { context_window_size: 200000, ...payload.context_window, used_percentage: pct(8000, 0.5) };
@@ -947,7 +961,10 @@ function previewer(payload: StatusData, options: PreviewOptions = {}) {
     const config = parseArgs([...switches]);
     const shown = new Set<string>((config.rows ?? DEFAULT_ROWS).flat());
     const data = withSamplePayload(payload, nowMs, shown);
-    return render(sweep && moving ? swept(data, nowMs) : data, {
+    // The moving bars show the clock's time, which stops while paused.
+    const move = sweep && moving;
+    const at = move && options.clock ? options.clock() : nowMs;
+    return render(move ? swept(data, at) : data, {
       ...renderOptions,
       nowMs,
       plain,
@@ -965,7 +982,10 @@ function previewer(payload: StatusData, options: PreviewOptions = {}) {
       },
       statusOf: (cwd) => withSampleStatus(statusOf(cwd), () => branchOf(cwd), shown.has('git') || shown.has('files')),
       setupOf: (cwd) => withSampleSetup(setupOf(cwd)),
-      memoryOf: () => memoryOf() ?? SAMPLE_MEMORY,
+      memoryOf: () => {
+        const memory = memoryOf() ?? SAMPLE_MEMORY;
+        return move ? sweptMemory(memory, at) : memory;
+      },
       commandOutputOf: () => SAMPLE_COMMAND_OUTPUT,
       ledger: options.ledger ?? sampleLedger(nowMs),
     });

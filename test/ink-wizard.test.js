@@ -255,6 +255,40 @@ test('with animate set, a question whose preview moves redraws it with the clock
   assert.equal(frame, after, 'an answered question draws no more frames');
 });
 
+test('Space pauses a moving preview and plays it again, and the io clock stops while it is paused', async () => {
+  const ink = await import('ink');
+  const React = (await import('react')).default;
+  const { render } = await import('ink-testing-library');
+  let question;
+  let ready = false;
+  const deps = { ink, React, mount: (tree) => (question = render(tree)), ready: () => (ready = true), animate: true };
+  const io = inkIoWith(deps, { write: () => {} }, false);
+  let frame = 0;
+  io.choices.preview(() => `frame ${++frame}`);
+  const asked = io.choices.one({ kind: 'INPUT', message: 'Style?', options: [{ label: 'a', value: 'a' }, { label: 'b', value: 'b' }], initial: 0, moving: true });
+  while (!ready) await delay(1);
+  assert.match(plain(question.lastFrame()), /Space to pause, Enter to accept/);
+  question.stdin.write(' ');
+  await delay(50);
+  assert.match(plain(question.lastFrame()), /Space to play, Enter to accept/);
+  const paused = frame;
+  const stopped = io.clock();
+  await delay(300);
+  assert.equal(frame, paused, 'no frames while paused');
+  assert.equal(io.clock(), stopped, 'the clock stops');
+  question.stdin.write(KEY.down);
+  await delay(50);
+  assert.ok(frame > paused, 'a move still redraws');
+  assert.equal(io.clock(), stopped);
+  question.stdin.write(' ');
+  await delay(300);
+  assert.ok(io.clock() > stopped, 'the clock runs again');
+  assert.ok(io.clock() < Date.now() - 250, 'from where it stopped');
+  assert.ok(frame > paused + 2, 'frames again');
+  question.stdin.write(KEY.enter);
+  assert.equal(await asked, 'b');
+});
+
 test('a row with no part ticked is not accepted, and says why', async () => {
   const { io, next, press, answer } = await driver();
   const run = runWizard(io, { preview });

@@ -487,6 +487,22 @@ test('with sweep, a moving preview moves the ctx, 5h and 7d bars with the clock,
   assert.match(preview([...shown, '--bar-style', 'underline'], true), /[▓░]{5}/);
 });
 
+test('a moving preview moves the ram bar too, and shows the time of the clock it is given', () => {
+  const now = new Date(2026, 10, 1, 12, 0).getTime();
+  const memory = { used: 8 * 1024 ** 3, total: 16 * 1024 ** 3 };
+  let time = now;
+  const options = (nowMs) => ({ nowMs, env: {}, memoryOf: () => memory, sweep: true, clock: () => time });
+  const shown = ['--show', 'ctx,ram'];
+  const at = (ms) => ((time = now + ms), plain(previewer(samplePayload(now), options(now))(shown, false, true)));
+  const frames = [0, 1500, 3000, 4500].map(at);
+  assert.equal(new Set(frames.map((f) => f.split(' │ ')[1])).size, frames.length, JSON.stringify(frames));
+  // The clock, not nowMs, sets the moving bars: the same clock time, the same frame.
+  time = now + 1500;
+  assert.equal(plain(previewer(samplePayload(now), options(now + 99999))(shown, false, true)), frames[1]);
+  // Still, ram shows the memory as it is.
+  assert.match(plain(previewer(samplePayload(now), options(now))(shown)), /ram 50% /);
+});
+
 test('the preview shows every part, alone, from a fresh config folder outside git', () => {
   const dir = tempDir('claude-gauge-wizard-');
   const now = new Date(2026, 9, 7, 12, 0, 0).getTime();

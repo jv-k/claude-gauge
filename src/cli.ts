@@ -348,7 +348,7 @@ async function interactive(command: 'setup' | 'configure', replace: boolean): Pr
       replace = true;
     }
     // A front end that redraws with the clock gets bars that move.
-    const preview = previewer(loadPayload(payloadFile()), { sweep: io.animated === true });
+    const preview = previewer(loadPayload(payloadFile()), { sweep: io.animated === true, clock: io.clock });
     const choices = await runWizard(io, { preview, installed: installedSwitches(settings) });
     if (!choices) {
       say(s.info('Nothing changed.'));

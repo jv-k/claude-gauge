@@ -19,7 +19,9 @@
 // for the readline questions.
 //
 // On a terminal a question whose preview moves, the bar style's, redraws it
-// every FRAME_MS while it waits, so its bars move with the clock.
+// every FRAME_MS while it waits, so its bars move with the clock. Space
+// pauses the animation and plays it again: the io's clock stops while it is
+// paused, so a selection moved then shows at the paused time.
 
 import type { ReactElement } from 'react';
 import { Interrupted } from './wizard';
@@ -83,6 +85,17 @@ function inkIoWith({ ink, React, mount, ready, animate = false }: InkDeps, outpu
   let preview: string | (() => string) = '';
   const previewNow = () => (typeof preview === 'function' ? preview() : preview);
   let live: Mounted | undefined;
+  // The animation's clock: now, less the time spent paused, and still while
+  // paused.
+  const clock = { paused: false, pausedAt: 0, lost: 0 };
+  const timeNow = () => (clock.paused ? clock.pausedAt : Date.now() - clock.lost);
+  const togglePause = () => {
+    if (clock.paused) clock.lost = Date.now() - clock.pausedAt;
+    else clock.pausedAt = Date.now() - clock.lost;
+    clock.paused = !clock.paused;
+  };
+  // Whether `view` animates: a moving preview, with animate set.
+  const animates = (view: View) => animate && view.moving === true;
 
   // The answer as it shows after the question: the option, the ticked parts,
   // or with tabs, All's option and each tab whose option differs, as
@@ -118,7 +131,10 @@ function inkIoWith({ ink, React, mount, ready, animate = false }: InkDeps, outpu
     });
     if (from > 0) lines.unshift(s.dim('  ↑ more'));
     if (from + VISIBLE < view.labels.length) lines.push(s.dim('  ↓ more'));
-    const keys = many ? '↑↓ to move, Space to tick, Enter to accept' : view.tabs ? '←→ to pick a bar, ↑↓ to move, Enter to accept' : '↑↓ to move, Enter to accept';
+    const pause = animates(view) ? (clock.paused ? 'Space to play, ' : 'Space to pause, ') : '';
+    const keys = many
+      ? '↑↓ to move, Space to tick, Enter to accept'
+      : `${view.tabs ? '←→ to pick a bar, ' : ''}↑↓ to move, ${pause}Enter to accept`;
     return [
       view.preview(cursor, ticked, cursors),
       s.pill(view.kind, 'question'),
@@ -163,6 +179,8 @@ function inkIoWith({ ink, React, mount, ready, animate = false }: InkDeps, outpu
       } else if (tabs && (key.leftArrow || key.rightArrow)) {
         now.tab = (now.tab + (key.leftArrow ? -1 : 1) + tabs) % tabs;
         now.cursor = now.cursors[now.tab];
+      } else if (input === ' ' && animates(view)) {
+        togglePause();
       } else if (input === ' ' && view.ticked) {
         now.ticked = now.ticked.includes(now.cursor) ? now.ticked.filter((i) => i !== now.cursor) : [...now.ticked, now.cursor];
         now.warning = '';
@@ -181,9 +199,9 @@ function inkIoWith({ ink, React, mount, ready, animate = false }: InkDeps, outpu
       ready?.();
     }, []);
     React.useEffect(() => {
-      if (!animate || !view.moving) return undefined;
+      if (!animates(view)) return undefined;
       const timer = setInterval(() => {
-        if (!state.current.answered) redraw((r) => r + 1);
+        if (!state.current.answered && !clock.paused) redraw((r) => r + 1);
       }, FRAME_MS);
       return () => clearInterval(timer);
     }, []);
@@ -260,6 +278,7 @@ function inkIoWith({ ink, React, mount, ready, animate = false }: InkDeps, outpu
     color,
     choices,
     animated: animate,
+    clock: timeNow,
     // Not asked: the wizard asks through `choices`.
     ask: async () => undefined,
     write: (text) => {
