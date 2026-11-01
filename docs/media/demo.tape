@@ -83,9 +83,7 @@ Down
 Sleep 1.5s
 Enter
 
-# Keep the labels and the token line, with its default parts and window.
-Sleep 1s
-Enter
+# Keep the labels and the token line, with its default parts.
 Sleep 1s
 Enter
 Sleep 1s
