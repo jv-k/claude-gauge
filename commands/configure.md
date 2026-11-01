@@ -30,7 +30,8 @@ Then ask a second `AskUserQuestion` call with only the questions for the bar the
 For the token line:
 
 - **Parts?** Keep them (recommended), all of them (`time,req,out,cache,ctx`), or `req,out,ctx` (`--show req,out,ctx`). The user can also type their own list from those five.
-- **Context window?** Keep it (recommended), 1M (`--window 1m`), or 200k, the default, with no switch. Name your own context window in the question, as setup does.
+
+Do not ask for the context window. The token line takes it from the status line. Keep a `--window` that is set up now, as it is written.
 
 To take a bar out, ask which one. To add the missing bar, ask the same questions for it, with its defaults in place of "Keep", and pass its switches to `configure` as for a changed bar: `configure` adds a bar that is not there.
 

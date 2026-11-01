@@ -36,7 +36,7 @@ Ask with one `AskUserQuestion` call, the recommended option first in each questi
 - **Bar size?** 5 cells (the default) or 10 (`--segments 10`).
 - **Also in VS Code and the desktop app?** The VS Code extension and the desktop app show neither the status line nor hook messages. A SessionStart hook per bar, with `--instruct` (step 7), has you paste that bar at the end of each reply in those two hosts, and does nothing in the terminal CLI. Recommend it for every bar the user chose.
 
-Decide the context window yourself: if your own context window is 1M tokens, add `--window 1m` to the token line, so its percentage is right from the first turn.
+Do not ask for the context window. The token line takes it from the status line. Only if the user chose the token line without the status line, and your own context window is 1M tokens, add `--window 1m` to the token line, so its percentage is right from the first turn.
 
 Done when every question that applies has an answer.
 

@@ -182,7 +182,7 @@ A part shows no link when its address is not known, for example a `branch` on an
 
 **Fresh input.** Uncached input counts toward `ctx` but is not shown on its own, because it is usually tiny.
 
-**Context.** The `ctx` figure should match the status line's context percentage, when the token line uses the right window size (see [Token line options](#token-line-options)).
+**Context.** The `ctx` figure matches the status line's context percentage, because the token line takes the window size that the status line saved for the session (see [Token line options](#token-line-options)).
 
 ## Requirements
 
@@ -221,7 +221,7 @@ In a terminal, run setup with npx:
 npx @jv-k/claude-gauge setup
 ```
 
-Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, then whether to add the token line, and if so, which parts it shows and your context window, 200k or 1M, so that its percentage is right from the first turn. It redraws the status line from your last terminal session's figures or from a sample. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is yes, `[Y/n]`, so Enter stars it.
+Setup shows the status line with the defaults, and asks whether to keep them. If you do not, it asks for the rows and their parts, the bar size, the theme and the labels, then whether to add the token line, and if so, which parts it shows. It does not ask for your context window, because the token line gets it from the status line. `configure` keeps a `--window` that you set up, as you wrote it. It redraws the status line from your last terminal session's figures or from a sample. It then backs up `~/.claude/settings.json` and adds the bars to it. If your settings already run another status line, such as claude-hud, setup shows it and asks before it replaces it, and saves it so that `uninstall` can put it back. With the GitHub CLI (`gh`) installed, setup ends with an offer to star the repository. The default answer is yes, `[Y/n]`, so Enter stars it.
 
 When stdin and stdout are both a terminal, each question is a choice, and these keys answer it:
 
@@ -516,15 +516,19 @@ Claude Code reruns a status line when something happens in the session, such as 
 | --- | --- |
 | `--show <parts>` | The parts to show, in the order given, separated by commas. Parts: `time`, `req`, `out`, `cache`, `ctx`. Default: all of them, in that order. |
 | `--segments <5\|10>` | Cells in the context bar. Default: 5. Any other value gives 5. |
-| `--window <size>` | The context window size, for example `200k` or `1m`. |
+| `--window <size>` | The context window size, for example `200k` or `1m`. It replaces the size that the status line saved. |
 | `--latest` | Prints the line for the calling session, instead of reading a hook payload. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 | `--instruct` | As a SessionStart hook: in the VS Code extension and the desktop app, prints an instruction that has Claude end each reply with the `--latest` line. In the terminal CLI, prints nothing. The other switches pass through to the command it names. See [In VS Code and the desktop app](#in-vs-code-and-the-desktop-app). |
 
-The transcript does not record the context window size, so without `--window` the token line assumes Claude Code's default of 200k, and 1M once the context grows past 200k. If you use a 1M-context model, say so, and the percentage is right from the start:
+The hook input and the transcript do not hold the context window size. Claude Code sends the size only to the status line, so each terminal render of the status line saves it for its session in `~/.claude/claude-gauge/.state/windows/`, or under `$CLAUDE_CONFIG_DIR` when that is set. The token line reads the size saved for its session. Once a day, a render removes the files there that have not changed for 30 days.
+
+When no size is saved for the session, for example when the status line is not set up, or in the VS Code extension and the desktop app, where the status line does not run, the token line assumes Claude Code's default of 200k, and 1M once the context grows past 200k. On a 1M-context model, `--window 1m` makes the percentage right from the start there:
 
 ```json
 "command": "node ~/.claude/claude-gauge/dist/tokenline.js --window 1m"
 ```
+
+`--window` always wins over the saved size.
 
 Unknown switches and part names are ignored, so a typo never breaks your status line or your turn. If `--show` names no known part, the line shows every part.
 

@@ -13,6 +13,10 @@
 //   - with --latest: prints the line for the calling session, for Claude to
 //     paste into its reply where hook messages are not shown.
 //
+// Neither the hook input nor the transcript holds the context window size.
+// The status line gets it from Claude Code at each render and saves it per
+// session, and ctx reads it from there (docs/adr/0006).
+//
 // Switches:
 //   --show <parts>      parts to show, in order, comma-separated, from
 //                       time,req,out,cache,ctx (default: all of them)
