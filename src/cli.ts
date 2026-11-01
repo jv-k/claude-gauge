@@ -73,9 +73,10 @@ const usage = (stream: NodeJS.WriteStream) => {
   return wordmark(color) + (color ? styles(color).pill('Usage') : '\nUsage: ') + USAGE;
 };
 
-// A mistake in the command line: exit 2, with the usage. Its message echoes
-// the user's own words, not a value claude-gauge knows, so it stays plain.
-class UsageError extends Error {}
+// A mistake in the command line: exit 2, with the usage. A word that
+// claude-gauge does not know goes in plain, and a known command or switch as
+// a value.
+class UsageError extends GaugeError {}
 
 // A tool that update needs is not on PATH: exit 2, with no usage.
 class MissingTool extends GaugeError {}
@@ -124,25 +125,25 @@ function parseArgs(argv: string[]): Args {
   for (let i = 0; i < argv.length; i++) {
     const [name, inline] = argv[i].split(/=(.*)/s);
     if (!name.startsWith('-')) {
-      if (args.command) throw new UsageError(`Unexpected word: ${name}`);
+      if (args.command) throw new UsageError(message`Unexpected word: ${plain(name)}`);
       if (name === 'help') args.help = true;
       else if ((COMMANDS as readonly string[]).includes(name)) args.command = name as Command;
-      else throw new UsageError(`Unknown command: ${name}`);
+      else throw new UsageError(message`Unknown command: ${plain(name)}`);
       continue;
     }
     const known = SWITCHES.find((s) => s.names.includes(name));
-    if (!known) throw new UsageError(`Unknown switch: ${name}`);
+    if (!known) throw new UsageError(message`Unknown switch: ${plain(name)}`);
     // A value is the next word whatever it holds, since switches start with --.
     known.apply(args, () => {
       const v = inline ?? argv[++i];
-      if (v === undefined) throw new UsageError(`${name} needs a value: the switches for that bar, or "" for none.`);
+      if (v === undefined) throw new UsageError(message`${name} needs a value: the switches for that bar, or "" for none.`);
       return v;
     });
     seen.push(known);
   }
   const { command } = args;
   const stray = command && seen.find((s) => !s.commands.includes(command));
-  if (stray) throw new UsageError(`${args.command} takes no ${stray.names[0]}`);
+  if (command && stray) throw new UsageError(message`${command} takes no ${stray.names[0]}`);
   return args;
 }
 
@@ -540,7 +541,7 @@ async function main(argv: string[]): Promise<number> {
       process.stdout.write(usage(process.stdout));
       return 0;
     }
-    if (!args.command) throw new UsageError('Name a command.');
+    if (!args.command) throw new UsageError(message`Name a command.`);
     switch (args.command) {
       case 'setup': await setup(args); break;
       case 'configure': await configure(args); break;

@@ -1,14 +1,15 @@
-// The errors that claude-gauge throws on purpose. Each keeps its values (a
-// path, a command, a part name or a version) apart from its text, because a
-// throw site does not know the stream the message goes to: the CLI's
-// top-level handler renders it through the styles of stderr, so the values
-// are green on a colour terminal, as they are in the rest of the output.
-// `message` stays the plain text, for logs and tests.
+// The errors that the claude-gauge command and its settings file reader
+// throw on purpose. Each keeps its values (a path, a command or a switch)
+// apart from its text, because a throw site does not know the stream the
+// message goes to: the CLI's top-level handler renders it through the styles
+// of stderr, so the values are green on a colour terminal, as they are in the
+// rest of the output. `message` stays the plain text, for logs and tests.
 //
 //   throw new GaugeError(message`${file} is not valid JSON (${plain(err.message)}).`);
 //
 // Every value in the template is painted, save one wrapped in plain(): text
-// from Node itself, such as the message of a caught fs error.
+// from Node itself, such as the message of a caught fs error, or a word the
+// user typed that claude-gauge does not know.
 
 import type { Styles } from './styles';
 
@@ -53,5 +54,3 @@ class GaugeError extends Error {
 }
 
 export { GaugeError, message, plain };
-
-export type { Message };

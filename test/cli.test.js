@@ -756,7 +756,28 @@ test('an error in colour prints its values green: the folder update cannot find,
   // Node's own words stay plain: the only green is the path.
   assert.equal(broken.stderr.split(SGR.ok).length, 2, JSON.stringify(broken.stderr));
 
+  // A status line that is not claude-gauge's: the command under the path is
+  // green on its own ↳ line.
+  const other = configFolder({ statusLine: { type: 'command', command: '~/bin/my-status.sh' } });
+  const blocked = runCli(other, ['setup', '--yes'], { env });
+  assert.equal(blocked.status, 1);
+  assert.ok(
+    blocked.stderr.includes(`${ERROR}${green(path.join(other, 'settings.json'))} already runs another status line:\n  ${SGR.dim}↳ ${green('~/bin/my-status.sh')}${SGR.reset}\n`),
+    JSON.stringify(blocked.stderr),
+  );
+
+  // A known command and a known switch in a mistake are values too, but a
+  // word claude-gauge does not know stays plain.
+  const stray = runCli(empty, ['update', '--replace'], { env });
+  assert.equal(stray.status, 2);
+  assert.ok(stray.stderr.includes(`${ERROR}${green('update')} takes no ${green('--replace')}\n`), JSON.stringify(stray.stderr));
+  const bare = runCli(empty, ['setup', '--status-line'], { env });
+  assert.equal(bare.status, 2);
+  assert.ok(bare.stderr.includes(`${ERROR}${green('--status-line')} needs a value: `), JSON.stringify(bare.stderr));
+
   // With colour off the same errors are the plain text.
+  const offStray = runCli(empty, ['update', '--replace'], { env: { NO_COLOR: '1' } });
+  assert.ok(offStray.stderr.startsWith('\nERROR\n✖ update takes no --replace\n'), offStray.stderr);
   const off = runCli(dir, ['setup', '--yes'], { env: { NO_COLOR: '1' } });
   assert.ok(off.stderr.startsWith(`\nERROR\n✖ ${file} is not valid JSON (`), off.stderr);
   assert.ok(!/\x1b/.test(off.stderr), JSON.stringify(off.stderr));
