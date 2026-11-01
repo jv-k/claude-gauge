@@ -85,11 +85,11 @@ test('a session that runs past midnight puts its spend on the day it was spent',
 test('a session resumed after a crash counts only what it spends past its restored total', () => {
   const file = tempLedger();
   recordCost(session('a', 0.00848), { file, nowMs: NOW });
-  const before = readFile(file).days['2026-10-07'];
+  const countedAtExit = readFile(file).days['2026-10-07'];
   recordCost(session('a', 0.00523), { file, nowMs: NOW + 60_000 });
   recordCost(session('a', 0.006), { file, nowMs: NOW + 120_000 });
   const ledger = readFile(file);
-  assert.equal((ledger.days['2026-10-07'] - before).toFixed(5), '0.00077');
+  assert.equal((ledger.days['2026-10-07'] - countedAtExit).toFixed(5), '0.00077');
   assert.deepEqual(ledger.sessions.a, { usd: 0.006, at: NOW + 120_000 });
 });
 

@@ -2172,10 +2172,11 @@ function withLock(file: string, write: (held: () => boolean) => void): void {
 // Records what the session has spent since the ledger last recorded it,
 // against today, and returns the ledger as it now stands. It writes only when
 // the cost has changed and LEDGER_THROTTLE_MS has passed since the session
-// last wrote, or at once when the cost fell. Under the lock it reads the file again, so a write never loses
-// another session's, and it replaces the file in one rename, so a reader never
-// sees half a ledger. Best effort: a failed write never breaks the status
-// line.
+// last wrote, or at once when the cost fell, so that later spend counts from
+// the lower value. Under the lock it reads the file again, so a write never
+// loses another session's, and it replaces the file in one rename, so a
+// reader never sees half a ledger. Best effort: a failed write never breaks
+// the status line.
 function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() }: { file?: string; nowMs?: number } = {}): Ledger {
   let ledger = readLedger(file);
   const id = data.session_id;
@@ -2184,7 +2185,6 @@ function recordCost(data: StatusData, { file = ledgerFile(), nowMs = Date.now() 
   const last = ledger.sessions[id];
   const recorded = finite(last?.usd);
   if (recorded === usd) return ledger;
-  // A cost that fell is written at once, so later spend counts from it.
   const fell = recorded !== undefined && usd < recorded;
   const since = nowMs - (finite(last?.at) ?? -Infinity);
   if (!fell && since >= 0 && since < LEDGER_THROTTLE_MS) return ledger;
