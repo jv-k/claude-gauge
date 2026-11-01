@@ -1,15 +1,21 @@
 # Publishes a release from a version tag. VerBump bumps the version, writes
-# CHANGELOG.md, commits, tags vX.Y.Z and pushes; this workflow does the rest.
-# It tests the tagged commit, creates the GitHub release with the tag's
-# CHANGELOG section as its body, and publishes the package to npm with
-# provenance. npm accepts the publish through its trusted publisher for this
-# workflow, so no npm token is stored anywhere. RELEASING.md gives the whole
-# flow and the trusted publisher setup.
+# CHANGELOG.md, commits, tags vX.Y.Z or vX.Y.Z-<pre-release> and pushes; this
+# workflow does the rest. It tests the tagged commit, creates the GitHub
+# release with the tag's CHANGELOG section as its body, and publishes the
+# package to npm with provenance. A full tag publishes as latest. A
+# pre-release tag such as v1.0.0-rc.1 publishes under the dist-tag next, as a
+# GitHub pre-release, so latest moves only on a full release (docs/adr/0001).
+# npm accepts the publish through its trusted publisher for this workflow, so
+# no npm token is stored anywhere. RELEASING.md gives the whole flow and the
+# trusted publisher setup.
 name: release
 
 on:
   push:
-    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    # A full tag, and a pre-release tag. GitHub's `*` takes any run of
+    # characters but `/`, so scripts/release-tag.js checks the pre-release
+    # part in the job, before anything is public.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+-*']
 
 permissions:
   contents: read
@@ -65,6 +71,12 @@ jobs:
             echo "::error::The tag is ${GITHUB_REF_NAME}, but package.json has version ${version}."
             exit 1
           fi
+      # Writes prerelease=true or prerelease=false for the release and publish
+      # steps. Fails for a tag that only looks like a version, such as
+      # v1.0.0-rc.1+build.5.
+      - name: Read whether the tag is a pre-release
+        id: tag
+        run: node scripts/release-tag.js "${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
       # Clear dist/ first, so the package holds only what this build writes.
       # pnpm test builds dist/, then tests it.
       - run: rm -rf dist && pnpm test
@@ -72,19 +84,35 @@ jobs:
       # is public.
       - name: Take the release notes from CHANGELOG.md
         run: node scripts/release-notes.js "${GITHUB_REF_NAME}" CHANGELOG.md > "${RUNNER_TEMP}/notes.md"
-      # A rerun after a failed publish finds the release already there.
+      # A rerun after a failed publish finds the release already there. A
+      # pre-release tag makes a GitHub pre-release, which the releases page
+      # marks as such and never shows as the latest release.
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
         run: |
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             echo "The GitHub release ${GITHUB_REF_NAME} already exists."
+          elif [ "${PRERELEASE}" = true ]; then
+            gh release create "${GITHUB_REF_NAME}" --verify-tag --prerelease \
+              --title "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/notes.md"
           else
             gh release create "${GITHUB_REF_NAME}" --verify-tag \
               --title "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/notes.md"
           fi
       # A direct publish, not npm stage publish. Trusted publishing adds
       # provenance by itself. --provenance stays, so that the command says
-      # that it publishes with provenance.
+      # that it publishes with provenance. A pre-release goes under the
+      # dist-tag next, so that `npm install @jv-k/claude-gauge` still gets the
+      # latest full release. A full release takes npm's default dist-tag,
+      # latest.
       - name: Publish to npm with provenance
-        run: npm publish --provenance --access public
+        env:
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+        run: |
+          if [ "${PRERELEASE}" = true ]; then
+            npm publish --provenance --access public --tag next
+          else
+            npm publish --provenance --access public
+          fi
