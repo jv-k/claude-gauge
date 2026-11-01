@@ -33,7 +33,7 @@ Do not ask for the context window. The token line takes it from the status line.
 If the user chose their own, ask a second `AskUserQuestion` call with each question that applies to the lines they chose:
 
 - **Status line rows?** The default two rows (recommended): `ctx,5h,7d` above `time,duration,repo,branch,model,effort`. Offer one row of usage only (`--show 5h,7d`). The user can also type their own rows: each `--show` is one row, its parts separated by commas, from the parts tables in the claude-gauge README.
-- **Bar style?** `classic` with 5 cells (recommended, the default, `▓▓┃░░`), `classic` with 10 cells (`--segments 10`), `steps` (`--bar-style steps`, `▅▅▅▁▁▁`) or `hairline` (`--bar-style hairline`, `━━╋───`). The user can also type `rising`, `dots`, `spark` or `underline` for `--bar-style`. A `--bar-style` goes in the switches of both lines.
+- **Bar style?** `classic` with 5 cells (recommended, the default, `▓▓┃░░`), `classic` with 10 cells (`--segments 10`), `steps` (`--bar-style steps`, `▅▅▅▁▁▁`) or `hairline` (`--bar-style hairline`, `━━╋───`). The user can also type `rising`, `dots`, `spark` or `underline` for `--bar-style`, or a style for each bar, such as `steps,ctx=rising`: the style for every bar, then `<bar>=<style>` for each of `ctx`, `5h`, `7d` and `ram` that differs. Put the whole `--bar-style` in the status line's switches, and only the `ctx` bar's style in the token line's (`--bar-style rising` for that example).
 - **Theme?** `default` (recommended), `mono`, `high-contrast` or `pastel` (`--theme <name>`).
 - **Token line parts?** All of them (recommended): `time,req,out,cache,ctx`. Offer `req,out,ctx` (`--show req,out,ctx`), or the user's own list from those five.
 

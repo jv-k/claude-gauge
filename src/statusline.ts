@@ -182,7 +182,9 @@ const DEFAULT_ROWS: Part[][] = PARTS.reduce<Part[][]>((rows, part) => {
 
 interface Config {
   rows: Part[][];
-  segments: number;
+  // The --segments list, as given: cells per classic bar, each bar's own
+  // after it, such as 5,ctx=10.
+  segments: string;
   labels: boolean;
   bars: boolean;
   pace: boolean;
@@ -203,7 +205,9 @@ interface Config {
   theme: string;
   // The --color overrides: a colour code for each part named.
   colors: Partial<Record<Part, string>>;
-  // The --bar-style name, as given: render takes an unknown one as classic.
+  // The --bar-style list, as given: the style of every bar, each bar's own
+  // after it, such as steps,ctx=rising. render takes an unknown name as
+  // classic.
   barStyle: string;
   // The characters of a bar's filled and empty cells, from --bar-filled and
   // --bar-empty; '' for the bar style's own.
@@ -212,12 +216,12 @@ interface Config {
 }
 
 // What parseArgs returns and render takes: any subset of the config, with
-// segments still the text of the switch.
+// segments a number or the text of the switch.
 type Overrides = Partial<Omit<Config, 'segments'>> & { segments?: number | string };
 
 const DEFAULTS: Config = {
   rows: DEFAULT_ROWS,
-  segments: 5,
+  segments: '5',
   labels: true,
   bars: true,
   pace: true,
@@ -256,7 +260,12 @@ const SWITCHES: readonly Switch[] = [
       if (parts.length) (config.rows ??= []).push(parts);
     },
   },
-  { name: '--segments', value: '<5|10>', description: 'cells per bar (default 5)', apply: (config, value) => { config.segments = value; } },
+  {
+    name: '--segments',
+    value: '<5|10>',
+    description: 'cells per classic bar (default 5); add <bar>=<5|10> to set one bar of ctx, 5h, 7d and ram, comma-separated',
+    apply: (config, value) => { config.segments = value; },
+  },
   { name: '--no-labels', description: 'drop the labels in front of values', apply: (config) => { config.labels = false; } },
   { name: '--no-bars', description: 'drop the bars', apply: (config) => { config.bars = false; } },
   { name: '--no-pace', description: 'drop the pace markers', apply: (config) => { config.pace = false; } },
@@ -295,7 +304,7 @@ const SWITCHES: readonly Switch[] = [
   {
     name: '--bar-style',
     value: '<name>',
-    description: 'how every bar is drawn: classic, steps, rising, hairline, dots, spark or underline',
+    description: 'how the bars are drawn: classic, steps, rising, hairline, dots, spark or underline; add <bar>=<name> to set one bar of ctx, 5h, 7d and ram, comma-separated',
     apply: (config, value) => { config.barStyle = value.trim(); },
   },
   { name: '--bar-filled', value: '<char>', description: "the character of a filled bar cell (default: the bar style's)", apply: (config, value) => { if (isBarChar(value)) config.barFilled = value; } },
@@ -622,6 +631,42 @@ const capitalised = (word: string) => word[0].toUpperCase() + word.slice(1);
 // Bars come in 5 or 10 cells; anything else falls back to 5.
 const segmentsOf = (value: number | string | undefined) => (Number(value) === 10 ? 10 : 5);
 
+// The bars that --bar-style and --segments can set one by one
+// (docs/adr/0008). The models part's bars follow 7d.
+const BARS = ['ctx', '5h', '7d', 'ram'] as const;
+type Bar = (typeof BARS)[number];
+const isBar = (name: string): name is Bar => (BARS as readonly string[]).includes(name);
+
+// A per-bar list, such as steps,ctx=rising: `all`, the bare value, for
+// every bar, and `each`, the bars with a value of their own. The last of
+// each wins, and an entry for a bar it does not know is left out.
+interface PerBar {
+  all: string;
+  each: Partial<Record<Bar, string>>;
+}
+
+function perBarOf(list: string | number): PerBar {
+  const found: PerBar = { all: '', each: {} };
+  for (const item of String(list).split(',')) {
+    const [key, value] = item.split(/=(.*)/s).map((word) => word.trim().toLowerCase());
+    if (value === undefined) {
+      if (key) found.all = key;
+    } else if (isBar(key) && value) found.each[key] = value;
+  }
+  return found;
+}
+
+// The value for `bar` in a per-bar list: its own, else the bare one.
+const forBar = (list: string | number, bar: Bar) => {
+  const { all, each } = perBarOf(list);
+  return each[bar] ?? all;
+};
+
+// The list for a PerBar: the bare value, then each bar whose own value
+// differs from it, in the order of BARS.
+const perBarList = ({ all, each }: PerBar): string =>
+  [all, ...BARS.filter((bar) => each[bar] !== undefined && each[bar] !== all).map((bar) => `${bar}=${each[bar]}`)].join(',');
+
 // The bar styles, by name: how every bar is drawn (docs/adr/0007). classic
 // is the first, and what an unknown name gives. A style with `cells` has
 // that many whatever --segments says; classic takes --segments. `filled` and
@@ -650,10 +695,11 @@ type BarStyleName = keyof typeof BAR_STYLE_REGISTRY;
 
 const BAR_STYLES = Object.keys(BAR_STYLE_REGISTRY) as BarStyleName[];
 
-// The bar style to draw with. Plain text loses the underline with the other
-// codes, so there underline draws as classic.
-const barStyleOf = (config: Config, plain: boolean): BarStyleName => {
-  const name = ownValue<BarStyle>(BAR_STYLE_REGISTRY, config.barStyle) ? (config.barStyle as BarStyleName) : 'classic';
+// The bar style to draw `bar` with. Plain text loses the underline with the
+// other codes, so there underline draws as classic.
+const barStyleOf = (config: Config, plain: boolean, bar: Bar): BarStyleName => {
+  const given = forBar(config.barStyle, bar);
+  const name = ownValue<BarStyle>(BAR_STYLE_REGISTRY, given) ? (given as BarStyleName) : 'classic';
   return plain && name === 'underline' ? 'classic' : name;
 };
 
@@ -890,9 +936,9 @@ const NO_INVERSE = '\x1b[27m';
 // `color`, so the text after it keeps the part's colour. With a pace, the
 // pace marker shows where "now" falls in the window, coloured by the
 // projection.
-function drawBar(pct: number, color: string, pace: Pace | undefined, style: BarStyleName, { config, theme, plain }: PartContext): string {
+function drawBar(pct: number, color: string, pace: Pace | undefined, style: BarStyleName, bar: Bar, { config, theme, plain }: PartContext): string {
   const spec: BarStyle = BAR_STYLE_REGISTRY[style];
-  const n = spec.cells ?? config.segments;
+  const n = spec.cells ?? segmentsOf(forBar(config.segments, bar));
   const muted = (text: string) => `${RESET}${theme.muted}${text}${RESET}${color}`;
   // A dot after the bar in the pace colour, for the styles with no room for
   // a marker inside. Without colour it says nothing, so it is left out.
@@ -950,14 +996,14 @@ function underlined(text: string, pct: number, color: string, pace: Pace | undef
   return `${UNDERLINE}${drawn.slice(0, cut).join('')}${NO_UNDERLINE}${drawn.slice(cut).join('')}`;
 }
 
-// A part with a bar, in `color`: `head`, the label and percentage, then the
+// A part with `bar`, in `color`: `head`, the label and percentage, then the
 // bar, then `tail`, such as a count or a reset time. The underline style
 // draws its bar under head and tail instead.
-function barred(head: string, tail: string, pct: number, color: string, input: PartContext, pace?: Pace): string {
+function barred(bar: Bar, head: string, tail: string, pct: number, color: string, input: PartContext, pace?: Pace): string {
   if (!input.config.bars) return `${color}${head}${tail}${RESET}`;
-  const style = barStyleOf(input.config, input.plain);
+  const style = barStyleOf(input.config, input.plain, bar);
   if (style === 'underline') return `${color}${underlined(`${head}${tail}`, pct, color, pace)}${RESET}`;
-  return `${color}${head}${drawBar(pct, color, pace, style, input)}${tail}${RESET}`;
+  return `${color}${head}${drawBar(pct, color, pace, style, bar, input)}${tail}${RESET}`;
 }
 
 // The 5h or 7d part. rate_limits is present only for claude.ai Pro and Max
@@ -969,16 +1015,16 @@ function windowPart(name: '5h' | '7d', input: PartContext): string {
   const label = labelOf(config, name);
   const limit = data.rate_limits?.[window.key];
   if (limit?.used_percentage == null) return `${theme.accent}${label}~${RESET}`;
-  return usageSegment(label, { ...limit, used_percentage: limit.used_percentage }, window, input);
+  return usageSegment(name, label, { ...limit, used_percentage: limit.used_percentage }, window, input);
 }
 
 // A reported window's percentage, bar and reset, behind its label.
-function usageSegment(label: string, limit: ReportedLimit, window: UsageWindow, input: PartContext): string {
+function usageSegment(bar: '5h' | '7d', label: string, limit: ReportedLimit, window: UsageWindow, input: PartContext): string {
   const { config, theme, nowMs } = input;
   const pct = Math.round(limit.used_percentage);
   const color = levelColor(theme, pct);
   const reset = config.reset && limit.resets_at ? ` → ${window.resetText(limit.resets_at, config, nowMs)}` : '';
-  return barred(`${label}${pct}%`, reset, pct, color, input, paceOf(pct, window, limit.resets_at, config, theme, nowMs));
+  return barred(bar, `${label}${pct}%`, reset, pct, color, input, paceOf(pct, window, limit.resets_at, config, theme, nowMs));
 }
 
 // The per-model weekly windows Claude Code reports, as seven_day_<model>
@@ -1004,7 +1050,7 @@ function modelWindows(data: StatusData): { name: string; limit: ReportedLimit }[
 function modelsPart(input: PartContext): string {
   const { data, config, theme } = input;
   return modelWindows(data)
-    .map(({ name, limit }) => usageSegment(`${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], input))
+    .map(({ name, limit }) => usageSegment('7d', `${labelOf(config, '7d')}${name} `, limit, WINDOWS['7d'], input))
     .join(separatorOf(config, theme));
 }
 
@@ -1027,7 +1073,7 @@ function contextPart(input: PartContext): string {
   const color = theme.context[pct <= 50 ? 0 : pct <= 75 ? 1 : 2];
   const label = labelOf(config, 'ctx');
   const count = tokens != null ? ` ${fmt(tokens)}` : '';
-  return barred(`${label}${Math.round(pct)}%`, count, pct, color, input);
+  return barred('ctx', `${label}${Math.round(pct)}%`, count, pct, color, input);
 }
 
 // The current local time, on the same clock as the reset times.
@@ -1360,7 +1406,7 @@ function ramPart(input: PartContext): string {
   const memory = memoryOf();
   if (!memory) return '';
   const pct = (memory.used * 100) / memory.total;
-  return barred(`${labelOf(config, 'ram')}${Math.round(pct)}%`, ` ${gib(memory.used)}`, pct, levelColor(theme, Math.round(pct)), input);
+  return barred('ram', `${labelOf(config, 'ram')}${Math.round(pct)}%`, ` ${gib(memory.used)}`, pct, levelColor(theme, Math.round(pct)), input);
 }
 
 // The text and command parts: text from --text or from the command's
@@ -2124,7 +2170,7 @@ function render(
   }: RenderOptions = {},
 ): string {
   const merged = { ...DEFAULTS, ...overrides };
-  const config: Config = { ...merged, segments: segmentsOf(merged.segments) };
+  const config: Config = { ...merged, segments: String(merged.segments) };
   const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
   const theme = themeOf(config.theme);
 
@@ -3486,6 +3532,9 @@ export {
   THEMES,
   BAR_STYLES,
   BAR_STYLE_REGISTRY,
+  BARS,
+  perBarOf,
+  perBarList,
   DEFAULT_ROWS,
   SWITCHES,
   payloadFromTranscript,
@@ -3508,7 +3557,7 @@ export {
   AGENT_LINGER_MS,
 };
 
-export type { StatusData, Config, Overrides, Part, Theme, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, McpServer, Setup, Memory };
+export type { StatusData, Config, Overrides, Part, Bar, PerBar, Theme, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, McpServer, Setup, Memory };
 
 // Whether this file is the program, not a module another file loaded. Node
 // runs the compiled CommonJS, where require.main names the entry; Bun runs

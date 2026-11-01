@@ -19,7 +19,7 @@ const { PARTS } = require('../dist/statusline.js');
 const { PARTS: TOKEN_PARTS } = require('../dist/tokenline.js');
 const { plain, tempDir, configFolder, runCli, ok } = require('./helpers');
 
-const KEY = { up: '\x1b[A', down: '\x1b[B', enter: '\r', space: ' ', ctrlC: '\x03' };
+const KEY = { up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D', enter: '\r', space: ' ', ctrlC: '\x03' };
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -186,7 +186,7 @@ test('a bar style other than classic skips the cells question, and both lines ge
   await answer(KEY.down, KEY.enter); // customise
   for (let i = 0; i < 3; i++) await answer(KEY.enter); // rows, two rows
   const style = await next();
-  assert.match(plain(style.lastFrame()), /INPUT\nBar style\?\n❯ classic\n {2}steps/);
+  assert.match(plain(style.lastFrame()), /INPUT\nBar style\?\n\[All\] +ctx classic +5h classic +7d classic +ram classic *\n❯ classic\n {2}steps/);
   await press(style, KEY.down);
   assert.match(plain(style.lastFrame()), /<--bar-style steps>\n[\s\S]*❯ steps/, 'the preview shows the style the selection is on');
   await press(style, KEY.enter);
@@ -197,6 +197,30 @@ test('a bar style other than classic skips the cells question, and both lines ge
   const typed = await runWizard(scripted(['n', '', '', '', 'steps', '', '', '', '', 'y']), { preview });
   assert.deepEqual(await run, typed);
   assert.deepEqual(typed, { statusLine: ['--bar-style', 'steps'], tokenLine: ['--bar-style', 'steps'] });
+});
+
+test('left and right move between the bar style tabs: a choice at All sets every bar, and one at a bar sets that bar', async () => {
+  const { io, next, press, answer } = await driver();
+  const run = runWizard(io, { preview });
+  await answer(KEY.down, KEY.enter); // customise
+  for (let i = 0; i < 3; i++) await answer(KEY.enter); // rows, two rows
+  const style = await next();
+  await press(style, KEY.down); // All: steps
+  assert.match(plain(style.lastFrame()), /\[All\] +ctx steps +5h steps +7d steps +ram steps/);
+  await press(style, KEY.right, KEY.up); // ctx: classic
+  assert.match(plain(style.lastFrame()), / All +\[ctx classic\] +5h steps/);
+  assert.match(plain(style.lastFrame()), /<--bar-style steps,ctx=classic>/, 'the preview shows each bar');
+  assert.match(plain(style.lastFrame()), /←→ to pick a bar/);
+  await press(style, KEY.left, KEY.left, KEY.down); // ram: rising
+  await press(style, KEY.enter);
+  const cells = await next();
+  assert.match(plain(style.lastFrame()), /INPUT\nBar style\? steps,ctx=classic,ram=rising/, 'the answer as a list');
+  assert.match(plain(cells.lastFrame()), /Cells per classic bar\?\n❯ 5/, 'one classic bar: no tabs');
+  await press(cells, KEY.down, KEY.enter);
+  for (let i = 0; i < 5; i++) await answer(KEY.enter); // theme, labels, token line, token line parts, write
+  const typed = await runWizard(scripted(['n', '', '', '', 'steps,ctx=classic,ram=rising', '10', '', '', '', '', 'y']), { preview });
+  assert.deepEqual(await run, typed);
+  assert.deepEqual(typed, { statusLine: ['--bar-style', 'steps,ctx=classic,ram=rising', '--segments', '10'], tokenLine: [] });
 });
 
 test('with animate set, a question whose preview moves redraws it with the clock, with no key pressed, and another does not', async () => {

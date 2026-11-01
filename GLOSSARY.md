@@ -23,7 +23,7 @@ One character position in a bar, filled or empty.
 _Avoid_: Segment, block
 
 **Bar style**:
-The way every bar on both lines is drawn: its characters, its width in cells, and how it shows the pace marker. A bar style never changes the labels, percentages, reset times or separators around a bar.
+The way a bar is drawn: its characters, its width in cells, and how it shows the pace marker. One bar style can draw every bar on both lines, or each bar can have its own. A bar style never changes the labels, percentages, reset times or separators around a bar.
 _Avoid_: Theme (a theme sets colours only), look, skin
 
 **Pace marker**:

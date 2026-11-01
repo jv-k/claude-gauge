@@ -124,7 +124,7 @@ test('an answer the wizard cannot use is asked again, with the reason', async ()
   assert.match(io.output, /a number from 1 to 3/);
   assert.match(io.output, /Unknown part: bogus/);
   assert.match(io.output, /Name at least one part/);
-  assert.match(io.output, /Unknown bar style: wavy\. Answer one of classic, steps, rising, hairline, dots, spark, underline\./);
+  assert.match(io.output, /Unknown bar style: wavy\. Answer one of classic, steps, rising, hairline, dots, spark, underline, or a list such as steps,ctx=rising\./);
   assert.match(io.output, /5 or 10/);
   assert.match(io.output, /Unknown theme: neon/);
 });
@@ -225,11 +225,11 @@ function choosing(answers) {
     if (!left.length) throw new EndOfAnswers();
     return left.shift()(question);
   };
-  return { questions, ask: async () => undefined, write: () => {}, choices: { one: next, many: next, preview: () => {} } };
+  return { questions, ask: async () => undefined, write: () => {}, choices: { one: next, many: next, each: next, preview: () => {} } };
 }
 
 // Enter at a choice: the option it starts on, or the parts ticked first.
-const enter = (q) => (Array.isArray(q.initial) ? [...q.initial] : q.options[q.initial].value);
+const enter = (q) => (q.targets ? { all: q.initial.all, each: [...q.initial.each] } : Array.isArray(q.initial) ? [...q.initial] : q.options[q.initial].value);
 // The option with `label`.
 const pick = (label) => (q) => {
   const option = q.options.find((o) => o.label === label);
@@ -311,8 +311,47 @@ test('as a choice with lines set up, the start over option previews the defaults
     ['Bar style?'],
   );
   assert.equal(moving.length, 0, 'no moving preview before the bar style question shows one');
-  style.preview('steps');
-  assert.deepEqual(moving, ['--bar-style steps']);
+  style.preview('steps', ['steps', 'rising', 'steps', 'steps']);
+  assert.deepEqual(moving, ['--bar-style steps,5h=rising']);
+});
+
+test('typed, the bar style and the cells take a per-bar list, ask again for a wrong one, and the token line takes the ctx style', async () => {
+  const { preview } = fakePreview();
+  const mixed = scripted(['n', '', '', '', 'steps,ctx=rising', '', '', '', '', 'y']);
+  assert.deepEqual(await runWizard(mixed, { preview }), { statusLine: ['--bar-style', 'steps,ctx=rising'], tokenLine: ['--bar-style', 'rising'] });
+  assert.ok(!mixed.questions.some((q) => /Cells/.test(q)), 'no classic bar, so no cells question');
+
+  const cells = scripted(['n', '', '', '', 'ctx=wavy', 'cpu=steps', 'classic,ctx=steps', '10,5h=5', '', '', '', '', 'y']);
+  assert.deepEqual(await runWizard(cells, { preview }), {
+    statusLine: ['--bar-style', 'classic,ctx=steps', '--segments', '10,5h=5'],
+    tokenLine: ['--bar-style', 'steps'],
+  });
+  assert.match(cells.output, /Unknown bar style: ctx=wavy\./);
+  assert.match(cells.output, /Unknown bar style: cpu=steps\./);
+
+  // configure: a list with no bare value changes only the bars it names.
+  const installed = { statusLine: ['--bar-style', 'steps,ctx=rising,7d=bogus'] };
+  const change = scripted(['change', '', '', '', 'ctx=dots', '', '', '', '', 'y']);
+  assert.deepEqual(await runWizard(change, { preview, installed }), { statusLine: ['--bar-style', 'steps,ctx=dots,7d=classic'], tokenLine: null });
+  assert.ok(change.questions.some((q) => /Bar style: .*\[steps,ctx=rising,7d=classic\] $/.test(q)), 'the hint reads an unknown style as classic');
+  assert.ok(change.questions.some((q) => /Cells per classic bar/.test(q)), '7d reads as classic, so the cells question comes');
+});
+
+test('as a choice, the bar style has a tab for each bar, and the cells question a tab for each classic bar', async () => {
+  const { preview } = fakePreview();
+  const asked = [];
+  // ctx keeps classic, the others take steps; then 10 cells for ctx.
+  const style = (q) => (asked.push(q), { all: 'steps', each: ['classic', 'steps', 'steps', 'steps'] });
+  const cells = (q) => (asked.push(q), q.options.find((o) => o.value === '10').value);
+  const io = choosing([pick('No'), enter, enter, enter, style, cells, enter, enter, enter, enter, enter]);
+  assert.deepEqual(await runWizard(io, { preview }), {
+    statusLine: ['--bar-style', 'steps,ctx=classic', '--segments', '10'],
+    tokenLine: [],
+  });
+  assert.deepEqual(asked[0].targets, ['ctx', '5h', '7d', 'ram']);
+  assert.deepEqual(asked[0].initial, { all: 'classic', each: ['classic', 'classic', 'classic', 'classic'] });
+  assert.equal(asked[1].targets, undefined, 'one classic bar: a plain choice');
+  assert.equal(asked[1].message, 'Cells per classic bar?');
 });
 
 test('configure: each question defaults to the installed value, and the switches it does not ask about stay', async () => {

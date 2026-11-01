@@ -71,6 +71,14 @@ test('--bar-style draws the context bar as the status line does, with underline 
   assert.match(withArgs(records, ['--bar-style=wavy']), /ctx 53% ▓▓▓░░ 106k$/);
 });
 
+test('--bar-style and --segments lists give the ctx bar its own value, else the bare one', () => {
+  const records = [prompt('go'), assistant('m1', usage(100, 6000, 100000))];
+  assert.match(withArgs(records, ['--bar-style', 'steps,ctx=dots']), /ctx 53% •••··· 106k$/);
+  assert.match(withArgs(records, ['--bar-style', 'dots,5h=steps']), /ctx 53% •••··· 106k$/);
+  assert.match(withArgs(records, ['--bar-style', '7d=steps']), /ctx 53% ▓▓▓░░ 106k$/);
+  assert.match(withArgs(records, ['--segments', '5,ctx=10']), /ctx 53% ▓▓▓▓▓░░░░░ 106k$/);
+});
+
 test('--show picks the parts and their order, ignoring unknown ones', () => {
   const records = [prompt('go'), assistant('m1', usage(100, 6000, 100000))];
   assert.equal(withArgs(records, ['--show', 'req,ctx']), '1 req │ ctx 53% ▓▓▓░░ 106k');
