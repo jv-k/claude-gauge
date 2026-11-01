@@ -21,9 +21,23 @@
 
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
-import { render, parseArgs, readSwitches, stripOwnCodes, PARTS, THEMES, DEFAULT_ROWS } from './statusline';
+import {
+  render,
+  parseArgs,
+  readSwitches,
+  stripOwnCodes,
+  readTranscriptActivity,
+  readSetup,
+  readMemory,
+  gitStatus,
+  headBranch,
+  AGENT_LINGER_MS,
+  PARTS,
+  THEMES,
+  DEFAULT_ROWS,
+} from './statusline';
 import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, parseSize, contextWindow } from './tokenline';
-import type { StatusData, Part } from './statusline';
+import type { StatusData, Part, TranscriptActivity, Ledger, Setup } from './statusline';
 import type { Part as TokenPart } from './tokenline';
 import type { PerBar, InstalledSwitches } from './settings';
 import { colorEnabled } from './wordmark';
@@ -549,8 +563,33 @@ async function offerStar(io: WizardIo, { hasGh, star }: StarOptions): Promise<vo
   io.write(star() ? s.ok(`Starred ${s.value(REPO)}. Thank you.`) : s.warn(`gh could not star ${s.value(REPO)}. Nothing else changed.`));
 }
 
-// A status payload to preview with when the status line has saved none:
-// two-fifths of the context, and a 5-hour and a weekly window part used.
+// The preview's examples, for a part that has nothing to show from the
+// payload, the transcript or the folder, so that every part ticked shows. All
+// of them are one session about an hour in: Opus at 43% of its context, at
+// work on a fix for a login redirect on its own branch and worktree.
+// The sample's transcript path, which the preview never reads.
+const SAMPLE_TRANSCRIPT = 'claude-gauge-sample.jsonl';
+const SAMPLE_TEXT = 'on call';
+const SAMPLE_COMMAND_OUTPUT = 'build passing';
+const SAMPLE_PLAN = 'Claude Max 5x';
+// The sample's worktree, for the worktree part only: the branch part names
+// the worktree too, and a session in no worktree shows none there.
+const SAMPLE_WORKTREE = 'login-redirect';
+const SAMPLE_ENV = { claudeMd: 2, rules: 3, mcp: 2, hooks: 1 };
+const SAMPLE_MEMORY = { used: 11 * 1024 ** 3, total: 16 * 1024 ** 3 };
+// What git status --porcelain=v2 --branch would print: the branch two
+// commits ahead, with a file staged, one modified and one untracked.
+const SAMPLE_GIT_HEAD = ['# branch.head fix/login-redirect', '# branch.upstream origin/fix/login-redirect', '# branch.ab +2 -0'];
+const SAMPLE_GIT_CHANGES = [
+  '1 M. N... 100644 100644 100644 0000000 0000000 src/auth/session.ts',
+  '1 .M N... 100644 100644 100644 0000000 0000000 src/auth/redirect.ts',
+  '? test/redirect.test.ts',
+];
+// What earlier sessions spent, today first and then a day back each.
+const SAMPLE_DAYS = [3.06, 5.12, 2.47, 6.8, 4.15, 1.92, 3.38];
+
+// A status payload to preview with when the status line has saved none, and
+// the fields under a saved one.
 function samplePayload(nowMs: number): StatusData {
   const at = (ms: number) => Math.floor((nowMs + ms) / 1000);
   const hour = 3600 * 1000;
@@ -562,9 +601,115 @@ function samplePayload(nowMs: number): StatusData {
     rate_limits: {
       five_hour: { used_percentage: 9, resets_at: at(2 * hour) },
       seven_day: { used_percentage: 41, resets_at: at(3 * 24 * hour) },
+      seven_day_opus: { used_percentage: 58, resets_at: at(3 * 24 * hour) },
+      seven_day_sonnet: { used_percentage: 100, resets_at: at(3 * 24 * hour) },
+      spend_limit: { used_percentage: 31, used_usd: 62, limit_usd: 200 },
     },
-    cost: { total_duration_ms: 72 * 60 * 1000 },
+    cost: { total_duration_ms: 72 * 60 * 1000, total_cost_usd: 1.24, total_lines_added: 156, total_lines_removed: 23 },
+    session_name: 'Fix the login redirect',
+    transcript_path: SAMPLE_TRANSCRIPT,
+    version: '2.1.300',
+    thinking: { enabled: true },
+    fast_mode: true,
+    output_style: { name: 'Explanatory' },
+    pr: { number: 128, review_state: 'approved' },
+    agent: { name: 'reviewer' },
+    prompt_cache: { warm: true, hit_ratio: 0.92 },
   };
+}
+
+// What the sample session's transcript shows.
+function sampleActivity(nowMs: number): TranscriptActivity {
+  const minute = 60 * 1000;
+  return {
+    tools: { running: [{ name: 'Edit', target: 'src/auth/redirect.ts' }], completed: { Read: 12, Bash: 4, Grep: 3 } },
+    agents: [{ type: 'Explore', model: 'Haiku 4.5', description: 'Find the session store', startedAt: nowMs - 2 * minute }],
+    todos: [
+      { content: 'Find the redirect', status: 'completed' },
+      { content: 'Fix the check', status: 'completed' },
+      { content: 'Write the tests', activeForm: 'Writing the tests', status: 'in_progress' },
+      { content: 'Update the docs', status: 'pending' },
+      { content: 'Open the pull request', status: 'pending' },
+    ],
+    skills: ['tdd'],
+    mcp: [{ name: 'github' }],
+    compactions: 1,
+    lastReplyAt: nowMs - 2 * minute,
+    speed: 84,
+  };
+}
+
+// The sample cost ledger, keyed by local day as the status line keys it.
+function sampleLedger(nowMs: number): Ledger {
+  const now = new Date(nowMs);
+  const days: Record<string, number> = {};
+  SAMPLE_DAYS.forEach((usd, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    days[`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`] = usd;
+  });
+  return { days, sessions: {} };
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// The real value with the sample's under it, object by object: the sample
+// fills only what is missing or null.
+function underSample(real: unknown, sample: unknown): unknown {
+  if (real === undefined || real === null) return sample;
+  if (!isRecord(real) || !isRecord(sample)) return real;
+  const merged: Record<string, unknown> = { ...sample, ...real };
+  for (const key of Object.keys(sample)) merged[key] = underSample(real[key], sample[key]);
+  return merged;
+}
+
+// The payload with the sample's fields under it. thinking, fast and style
+// show nothing while they are off, so the preview shows the sample's. The
+// sample's worktree comes in only when `shown` holds the worktree part.
+function withSamplePayload(payload: StatusData, nowMs: number, shown: ReadonlySet<string>): StatusData {
+  const sample = samplePayload(nowMs);
+  const data = underSample(payload, sample) as StatusData;
+  if (shown.has('worktree') && !data.workspace?.git_worktree && !data.worktree?.name) data.workspace = { ...data.workspace, git_worktree: SAMPLE_WORKTREE };
+  if (!data.thinking?.enabled) data.thinking = sample.thinking;
+  if (!data.fast_mode) data.fast_mode = sample.fast_mode;
+  if (!data.output_style?.name || data.output_style.name === 'default') data.output_style = sample.output_style;
+  return data;
+}
+
+// What the transcript shows, with the sample's in each kind it shows none of.
+function withSampleActivity(real: TranscriptActivity, nowMs: number): TranscriptActivity {
+  const sample = sampleActivity(nowMs);
+  const { tools, agents = [], todos = [], skills = [], mcp = [], compactions, lastReplyAt, speed } = real;
+  const shownAgent = agents.some((a) => a.endedAt === undefined || nowMs - a.endedAt < AGENT_LINGER_MS);
+  return {
+    tools: tools.running.length || Object.keys(tools.completed).length ? tools : sample.tools,
+    agents: shownAgent ? agents : sample.agents,
+    todos: todos.length ? todos : sample.todos,
+    ...(skills.length || mcp.length ? { skills, mcp } : { skills: sample.skills, mcp: sample.mcp }),
+    compactions: compactions > 0 ? compactions : sample.compactions,
+    lastReplyAt: lastReplyAt ?? sample.lastReplyAt,
+    speed: speed ?? sample.speed,
+  };
+}
+
+// The git status, with the sample's branch where it names none, and, when
+// `withChanges`, the sample's changes where it has none. The changes are
+// for the git and files parts only: the branch part marks them with *, and
+// a clean folder shows no * there. Without a status in time, the branch
+// comes from HEAD.
+function withSampleStatus(status: string | undefined, branch: () => string, withChanges: boolean): string {
+  const lines = (status ?? '').split(/\r?\n/).filter(Boolean);
+  const head = lines.filter((line) => line.startsWith('#'));
+  const changes = lines.filter((line) => !line.startsWith('#'));
+  const named = status === undefined && branch() ? [`# branch.head ${branch()}`] : head;
+  const hasBranch = named.some((line) => /^# branch\.head (?!\(detached\))\S/.test(line));
+  return [...(hasBranch ? named : SAMPLE_GIT_HEAD), ...(changes.length || !withChanges ? changes : SAMPLE_GIT_CHANGES)].join('\n');
+}
+
+// What Claude Code loads, with the sample's counts where it loads nothing
+// and the sample's plan where neither plan nor user is known.
+function withSampleSetup(real: Setup): Setup {
+  const counts = real.claudeMd || real.rules || real.mcp || real.hooks ? {} : SAMPLE_ENV;
+  return { ...real, ...counts, ...(real.plan || real.user ? {} : { plan: SAMPLE_PLAN }) };
 }
 
 // The payload the status line saved, or the sample when there is none, or
@@ -579,10 +724,43 @@ function loadPayload(file: string, nowMs = Date.now()): StatusData {
   return samplePayload(nowMs);
 }
 
+type PreviewOptions = Omit<Parameters<typeof render>[1] & object, 'config'>;
+
 // The preview: the status line's rows for `payload`, with the given switches
-// as words, as the settings command passes them.
-function previewer(payload: StatusData, options: Omit<Parameters<typeof render>[1] & object, 'config'> = {}) {
-  return (switches: readonly string[]) => render(payload, { ...options, config: parseArgs([...switches]) });
+// as words, as the settings command passes them. A part with nothing to show
+// shows its sample, and only the preview does: the status line itself shows
+// nothing for it. The preview reads the transcript, git and the files Claude
+// Code loads, as the status line does, but never runs --command, and takes
+// the sample ledger in place of the real one.
+function previewer(payload: StatusData, options: PreviewOptions = {}) {
+  const { transcript = readTranscriptActivity, statusOf = gitStatus, branchOf = headBranch, memoryOf = readMemory } = options;
+  const setupOf = options.setupOf ?? ((cwd: string) => readSetup(cwd, { env: options.env ?? process.env }));
+  return (switches: readonly string[]) => {
+    const nowMs = options.nowMs ?? Date.now();
+    const config = parseArgs([...switches]);
+    const shown = new Set<string>((config.rows ?? DEFAULT_ROWS).flat());
+    return render(withSamplePayload(payload, nowMs, shown), {
+      ...options,
+      nowMs,
+      // Any command will do, as the preview runs none: the part shows the
+      // sample's output.
+      config: { ...config, text: config.text || SAMPLE_TEXT, command: config.command || 'sample' },
+      transcript: (file, read) => {
+        let real: TranscriptActivity = { tools: { running: [], completed: {} }, agents: [], todos: [], skills: [], mcp: [], compactions: 0 };
+        try {
+          if (file !== SAMPLE_TRANSCRIPT) real = transcript(file, read);
+        } catch {
+          /* a transcript that cannot be read shows the sample */
+        }
+        return withSampleActivity(real, nowMs);
+      },
+      statusOf: (cwd) => withSampleStatus(statusOf(cwd), () => branchOf(cwd), shown.has('git') || shown.has('files')),
+      setupOf: (cwd) => withSampleSetup(setupOf(cwd)),
+      memoryOf: () => memoryOf() ?? SAMPLE_MEMORY,
+      commandOutputOf: () => SAMPLE_COMMAND_OUTPUT,
+      ledger: options.ledger ?? sampleLedger(nowMs),
+    });
+  };
 }
 
 // What the questions read from: a terminal, or a pipe or file.

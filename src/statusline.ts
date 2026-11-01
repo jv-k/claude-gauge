@@ -3349,6 +3349,9 @@ export {
   readMemory,
   runCommand,
   COMMAND_TIMEOUT_MS,
+  gitStatus,
+  headBranch,
+  AGENT_LINGER_MS,
 };
 
 export type { StatusData, Config, Overrides, Part, Theme, TranscriptRecord, Ledger, TranscriptActivity, AgentRun, Todo, McpServer, Setup, Memory };
