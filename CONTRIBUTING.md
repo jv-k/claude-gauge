@@ -21,6 +21,20 @@ pnpm test
 
 `pnpm test` builds first, then runs the suites in `test/` against the build with Node's built-in test runner. `pnpm typecheck` checks the sources without a build. `pnpm lint` runs [Biome](https://biomejs.dev)'s linter over the sources, the suites and the scripts. `biome.jsonc` names the rules it turns off, and why.
 
+### Try your change
+
+`pnpm try` builds, then runs the build of claude-gauge with a config folder of its own, `.try/claude`, so it never changes your `~/.claude`. Git ignores `.try/`.
+
+```sh
+pnpm try setup                         # the setup questions
+pnpm try configure                     # the configure questions
+pnpm try:statusline --bar-style steps  # the status line for a sample session, with your switches
+pnpm try:tokenline                     # the token line for a sample turn
+pnpm try:reset                         # delete .try/
+```
+
+`pnpm try:statusline` saves its sample session in `.try/claude`, so the preview in `pnpm try setup` then shows it.
+
 [Bun](https://bun.sh) is optional. When Bun is installed, the parity suite also runs the TypeScript sources under Bun and checks that they print the same bytes as the build. Without Bun, those checks skip. With `REQUIRE_BUN=1` set, they fail instead, with a message that Bun is required but missing. The Bun jobs in the `test` workflow set it.
 
 ## Where things are
@@ -43,6 +57,7 @@ pnpm test
 | `scripts/release-notes.js` | Prints a version's section of `CHANGELOG.md`, which the `release` workflow uses as the GitHub release notes. It is not part of the package. |
 | `scripts/release-tag.js` | Says whether a release tag such as `v1.0.0-rc.1` is a pre-release, which the `release` workflow publishes to npm under `next` as a GitHub pre-release. It is not part of the package. |
 | `scripts/media.sh` | Makes the pictures in `docs/media/` from the build: the README's pictures of the pace marker and the themes, from the status line with freeze, and the demo GIF of the setup wizard, from `docs/media/demo.tape` with VHS. The wizard runs in a fresh folder in `/tmp`, so the recording never changes your `~/.claude`. Run `pnpm build && bash scripts/media.sh`, with `freeze` and `vhs` on the PATH. It is not part of the package. |
+| `scripts/try.js` | Runs the build with `CLAUDE_CONFIG_DIR` set to `.try/claude`, for `pnpm try`. It is not part of the package. |
 | `scripts/test.js` | Runs every suite in `test/` with Node's test runner, the same way on Node 18, 20, 22 and 24 and on every system. `pnpm test` runs it after the build. It is not part of the package. |
 | `README.md` | The user docs: every part and every switch, both install routes, and the claude-hud migration table. |
 | `docs/reference.md` | The full reference: every part, switch and theme, the other install routes, and the claude-hud option map. The README links to it. |

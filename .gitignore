@@ -6,3 +6,4 @@ dist/
 coverage/
 /runtime/
 /launcher/
+.try/
