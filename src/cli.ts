@@ -29,7 +29,7 @@ import { spawnSync } from 'node:child_process';
 import { plan, commandFor, installed, installedSwitches, ownerOf, isForeign } from './settings';
 import type { PerBar, Choices, StatusLineSetting } from './settings';
 import { readSettings, writeSettings, writeAtomic } from './settings-file';
-import { runWizard, offerStar, confirm, loadPayload, previewer, openIo, Interrupted } from './wizard';
+import { runWizard, offerStar, confirm, loadPayload, previewer, openIo, Interrupted, DEFAULT_SWITCHES } from './wizard';
 import { payloadFile } from './statusline';
 import { wordmark, colorEnabled } from './wordmark';
 import { styles, stylesFor } from './styles';
@@ -51,7 +51,7 @@ Switches for setup and configure:
   --token-line <switches>    add the token line, run with these switches ("" for none)
   --no-token-line            leave the token line out
   --replace                  replace a status line that is not claude-gauge's
-  --yes                      setup only: add each bar not chosen above, with no switches
+  --yes                      setup only: add each line not chosen above, with the defaults (--bar-style dots)
 
 Switches for update:
   --dry-run                  print the commands that update would run, and run nothing
@@ -364,7 +364,7 @@ async function interactive(command: 'setup' | 'configure', replace: boolean): Pr
 async function setup(args: Args): Promise<void> {
   const chosen = args.statusLine !== undefined || args.tokenLine !== undefined;
   if (!chosen && !args.yes) return interactive('setup', args.replace);
-  const orDefault = (v: Switches) => (v === undefined && args.yes ? [] : v);
+  const orDefault = (v: Switches) => (v === undefined && args.yes ? [...DEFAULT_SWITCHES] : v);
   apply({ statusLine: orDefault(args.statusLine), tokenLine: orDefault(args.tokenLine) }, args.replace, 'Setup');
 }
 

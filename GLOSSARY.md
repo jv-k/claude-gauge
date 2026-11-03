@@ -11,6 +11,14 @@ _Avoid_: Bar (for a whole line)
 **Status line**:
 The line that shows context, the 5-hour and weekly usage windows, and session details, in one or more rows.
 
+**Row**:
+One row of the status line: the parts it shows, in their order.
+_Avoid_: Line (for a row)
+
+**Part**:
+One item a row can show, such as ctx, 5h or branch.
+_Avoid_: Component, segment, item
+
 **Token line**:
 The line that shows the tokens, cache and context of the last reply.
 
@@ -29,3 +37,13 @@ _Avoid_: Theme (a theme sets colours only), look, skin
 **Pace marker**:
 The mark in a usage window's bar at the share of the window that has passed, coloured by the usage projected for the end of the window.
 _Avoid_: Now marker, cursor
+
+## Setup
+
+**Row editor**:
+The setup step that edits the rows in place: each row's parts side by side, in their order, with the add slot after them.
+_Avoid_: Tick list, order step
+
+**Add slot**:
+The place after the last part in a row editor, shown as "+", that becomes a new part when given one.
+_Avoid_: Placeholder, ghost item, empty slot

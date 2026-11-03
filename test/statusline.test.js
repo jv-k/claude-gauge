@@ -138,11 +138,11 @@ const colours = (raw) => (raw.match(/\x1b\[[0-9;]*m/g) ?? []).filter((c) => c !=
 
 test('--theme picks a preset: mono drops every colour, and an unknown theme gives the default', () => {
   const { THEMES } = require('../dist/statusline.js');
-  assert.deepEqual(THEMES, ['default', 'mono', 'high-contrast', 'pastel']);
+  assert.deepEqual(THEMES, ['default', 'mono', 'high-contrast', 'pastel', 'ocean', 'forest', 'sunset', 'neon', 'dracula', 'one-dark', 'solarized-dark', 'monokai', 'nord']);
   const raw = (args) => render(bothWindows(), { nowMs: NOW, statusOf: onMain, config: parseArgs(args) });
   assert.deepEqual(colours(raw(['--theme', 'mono'])), []);
   assert.equal(plain(raw(['--theme', 'mono'])), run(bothWindows()));
-  assert.equal(raw(['--theme', 'neon']), raw([]));
+  assert.equal(raw(['--theme', 'vapor']), raw([]));
   assert.equal(raw(['--theme', 'constructor']), raw([]));
   assert.equal(raw(['--theme=default']), raw([]));
   // Each preset colours the rows differently, and keeps their text.

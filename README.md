@@ -75,9 +75,9 @@ In a terminal, run:
 npx @jv-k/claude-gauge setup
 ```
 
-Setup shows the status line and asks which parts you want. In a terminal, each question is a choice. Use the arrow keys to move and Enter to accept. For the parts of a row, press Space to tick or untick a part. The status line redraws as the selection moves, before you accept it. Ctrl+C stops setup and changes nothing:
+Setup shows the status line and asks which parts you want. In a terminal, each question is a choice. Use the arrow keys to move and Enter to accept. One question shows every row, each with its parts side by side and `+` after them. Use ← and → to move along a row, Tab and Shift+Tab to change row, and ↑ and ↓ to change the part there to another one. On `+`, ↑ and ↓ add a part. Shift with ← or → moves a part along its row, and Shift with ↑ or ↓ moves it to the row above or below. Space, then the arrow keys, then Space does the same. d or Backspace removes a part. The token line's parts work the same way, in one row. With two or more rows, you put the rows in order: select a row with ↑ and ↓, and press Tab to push it down or Shift+Tab to push it up. The status line redraws as the selection moves, before you accept it. While you edit a row, the preview marks that row with `❯` and the part at the cursor with `[ ]`. Press Esc to go back: setup lists the steps you answered, and you pick one to change. The answers after it stay. When you type the answers, as through a pipe, answer `<` to see that list. Ctrl+C stops setup and changes nothing:
 
-![claude-gauge setup in a terminal: it shows the claude-gauge wordmark and the default rows, then draws the rows again as the arrow keys and Space change the second row, the bar size and the theme, and ends with the settings it wrote.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/demo.gif)
+![claude-gauge setup in a terminal: it shows the claude-gauge wordmark and the lines as set up, then changes them. In the first row it moves ram to the front and adds cost with the + place, and in the second it removes today with Backspace. It picks the pastel theme, then presses Esc at the last question, goes back to the theme, takes high-contrast again, and ends with the settings it wrote.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/demo.gif)
 
 ### VS Code and the desktop app
 
@@ -149,7 +149,7 @@ The status line shows these parts by default:
 
 The pace marker `┃` shows how much of the window has passed. If the marker is ahead of the filled cells, you use less than an even pace. Its colour shows the usage that the current pace gives at the end of the window:
 
-![The 5-hour bar six times, half-way through the window. The pace marker is green below 50% projected usage, teal to 75%, yellow to 90%, orange to 100%, red to 120% and purple above 120%.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/pace.png)
+![The 5-hour bar six times, in the hairline style, half-way through the window. The pace marker is green below 50% projected usage, teal to 75%, yellow to 90%, orange to 100%, red to 120% and purple above 120%.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/pace.png)
 
 Red means that you will reach the limit a short time before the window resets. Purple means that you will reach it much earlier. In the first minutes of a window, the marker takes the colour of its bar, because the projection is not yet reliable.
 
@@ -176,9 +176,9 @@ jv-k/claude-gauge │ ⎇ main │ #12 approved │ +156 −23
 Opus 5.5 │ effort high │ $1.23 │ cache 91% warm
 ```
 
-Each `--show` is one row. `--theme` picks one of four themes:
+Each `--show` is one row. `--theme` picks one of thirteen themes, among them the Dracula, One Dark, Solarized Dark, Monokai and Nord schemes:
 
-![The default status line rows in the default, pastel, high-contrast and mono themes.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/themes.png)
+![Two status line rows, with the context, 5-hour, 7-day and memory bars in their own styles and no labels, in each of the thirteen themes: default, pastel, high-contrast, mono, ocean, forest, sunset, neon, dracula, one-dark, solarized-dark, monokai and nord.](https://raw.githubusercontent.com/jv-k/claude-gauge/main/docs/media/themes.png)
 
 `--bar-style` draws every bar another way, on both lines. `--bar-style steps` gives `5h 9% ▅▁▁▁▁▁ → 14:10`, and `--bar-style hairline` gives `5h 9% ━────╋── → 14:10`. There are seven styles; setup shows each one moving before you choose. A bar can also have its own: `--bar-style steps,ctx=rising` draws `ctx` in `rising` and the other bars in `steps`.
 
