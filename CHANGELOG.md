@@ -1,3 +1,8 @@
+## 1.8.0 (2026-11-03)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.7.0 -> 1.8.0
+- docs(media): draw the README's pictures in dots and the neon theme
+- feat: draw the wordmark's D with a top and a bottom bar
+
 ## 1.7.0 (2026-11-03)
 - chore: updated package.json, updated CHANGELOG.md, bumped 1.6.0 -> 1.7.0
 - docs(qa): add screenshots of the help
