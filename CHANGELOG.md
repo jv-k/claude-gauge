@@ -1,3 +1,8 @@
+## 1.7.0 (2026-11-03)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.6.0 -> 1.7.0
+- docs(qa): add screenshots of the help
+- feat(cli): colour the help, fit it to the terminal, and show the version
+
 ## 1.6.0 (2026-11-03)
 - chore: updated package.json, updated CHANGELOG.md, bumped 1.5.0 -> 1.6.0
 - docs(media): add the new demo GIF and themes picture
