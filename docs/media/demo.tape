@@ -107,7 +107,7 @@ Enter
 Sleep 1.2s
 Enter
 
-# Pastel, after high-contrast.
+# Dracula, after neon.
 Sleep 1.2s
 Down
 Sleep 1.5s
@@ -122,7 +122,7 @@ Sleep 1s
 Enter
 
 # At the last question, Esc lists the steps so far. Go back to the theme,
-# and take high-contrast again.
+# and take neon again.
 Sleep 1.2s
 Escape
 Sleep 1.5s
