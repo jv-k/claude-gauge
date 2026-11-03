@@ -1,3 +1,17 @@
+## 1.7.0 (2026-11-03)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.6.0 -> 1.7.0
+- docs(qa): add screenshots of the help
+- feat(cli): colour the help, fit it to the terminal, and show the version
+
+## 1.6.0 (2026-11-03)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.5.0 -> 1.6.0
+- docs(media): add the new demo GIF and themes picture
+- docs(qa): add the checks and screenshots of the setup questions
+- docs(media): draw the README's pictures from the owner's setup
+- feat: let setup go back to any step, and edit the rows and their order in place
+- docs(qa): add previews of the gradient wordmark
+- feat: draw the wordmark in a diagonal coral, pink and violet gradient
+
 ## 1.5.0 (2026-11-01)
 - chore: updated package.json, updated CHANGELOG.md, bumped 1.4.1 -> 1.5.0
 - chore(dist): build dist from 7453404 [auto]

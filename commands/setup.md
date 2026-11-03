@@ -33,13 +33,13 @@ Do not ask for the context window. The token line takes it from the status line.
 If the user chose their own, ask a second `AskUserQuestion` call with each question that applies to the lines they chose:
 
 - **Status line rows?** The default two rows (recommended): `ctx,5h,7d` above `time,duration,repo,branch,model,effort`. Offer one row of usage only (`--show 5h,7d`). The user can also type their own rows: each `--show` is one row, its parts separated by commas, from the parts tables in the claude-gauge README.
-- **Bar style?** `classic` with 5 cells (recommended, the default, `▓▓┃░░`), `classic` with 10 cells (`--segments 10`), `steps` (`--bar-style steps`, `▅▅▅▁▁▁`) or `hairline` (`--bar-style hairline`, `━━╋───`). The user can also type `rising`, `dots`, `spark` or `underline` for `--bar-style`, or a style for each bar, such as `steps,ctx=rising`: the style for every bar, then `<bar>=<style>` for each of `ctx`, `5h`, `7d` and `ram` that differs. Put the whole `--bar-style` in the status line's switches, and only the `ctx` bar's style in the token line's (`--bar-style rising` for that example).
-- **Theme?** `default` (recommended), `mono`, `high-contrast` or `pastel` (`--theme <name>`).
+- **Bar style?** `dots` (recommended, the default, `--bar-style dots`, `•••|··`), `classic` with 5 cells (no switch, `▓▓┃░░`), `classic` with 10 cells (`--segments 10`) or `hairline` (`--bar-style hairline`, `━━╋───`). The user can also type `rising`, `dots`, `spark` or `underline` for `--bar-style`, or a style for each bar, such as `steps,ctx=rising`: the style for every bar, then `<bar>=<style>` for each of `ctx`, `5h`, `7d` and `ram` that differs. Put the whole `--bar-style` in the status line's switches, and only the `ctx` bar's style in the token line's (`--bar-style rising` for that example).
+- **Theme?** `default` (recommended), `mono`, `high-contrast` or `pastel` (`--theme <name>`). The user can also type `ocean`, `forest`, `sunset`, `neon`, `dracula`, `one-dark`, `solarized-dark`, `monokai` or `nord`.
 - **Token line parts?** All of them (recommended): `time,req,out,cache,ctx`. Offer `req,out,ctx` (`--show req,out,ctx`), or the user's own list from those five.
 
 ## 4. Run setup
 
-Build each line's switches from the answers. A default answer adds no switch, so the defaults give an empty string. Then run, with each line's switches as one single-quoted argument:
+Build each line's switches from the answers. A default answer adds no switch, except the bar style: the default, `dots`, adds `--bar-style dots` to each line. So the defaults give `--bar-style dots` for each line. Then run, with each line's switches as one single-quoted argument:
 
 ```sh
 node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" setup --status-line '<status line switches>' --token-line '<token line switches>'
@@ -48,7 +48,7 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" setup --status-line '<status line switc
 For a line the user did not choose, pass `--no-status-line` or `--no-token-line` in place of its pair. For example, both lines with every default:
 
 ```sh
-node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" setup --status-line '' --token-line ''
+node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" setup --status-line '--bar-style dots' --token-line '--bar-style dots'
 ```
 
 If the command exits 1 because the settings already run another status line, such as claude-hud, show the user the command it printed and ask with `AskUserQuestion` whether to replace it. Recommend replacing it: claude-gauge saves it, and `/claude-gauge:uninstall` puts it back. With consent, run the same command again with `--replace` added. Without it, run it again with `--no-status-line` in place of the status line pair if the user still wants the token line, or stop.

@@ -15,6 +15,9 @@ const YELLOW = '\x1b[1;33m';
 const RED = '\x1b[0;31m';
 const CYAN = '\x1b[0;36m';
 const DIM = '\x1b[2m';
+const BOLD = '\x1b[1m';
+// Red-pink, from the 256 colours, for what a question has selected.
+const SELECT = '\x1b[38;5;204m';
 
 // The pills: one combined code each, 7 for invert, 1 for bold and 3N for the
 // colour, because a colour code that starts with 0; would reset the invert.
@@ -35,6 +38,9 @@ interface Styles {
   // A blank line, then `text` as a pill in capitals on a line of its own.
   // Without colour the pill is the word alone, such as SETUP.
   pill(text: string, tone?: Tone): string;
+  // `text` as a pill inside a line, as it is written, such as the version.
+  // Without colour, the text alone.
+  tag(text: string, tone?: Tone): string;
   // Status lines, each ending in a newline: a green ✔ for success, a yellow !
   // for a warning, a red ✖ for an error and a cyan ℹ for information.
   ok(text: string): string;
@@ -45,8 +51,17 @@ interface Styles {
   trace(text: string): string;
   // A value: a path, a command, a part name or a version.
   value(text: string): string;
-  // A default in brackets, such as [Y/n].
+  // A default in brackets, such as [Y/n], a heading over a preview, or a hint.
   dim(text: string): string;
+  // What a question has selected: the ❯ cursor, the brackets round the
+  // item at the cursor, in the question and in the preview, and the option
+  // the cursor is on.
+  select(text: string): string;
+  // A key to press, such as Enter or ↑↓, in a hint.
+  key(text: string): string;
+  // Keys and what each does, as pairs such as ['↑↓', 'move'], with a dot
+  // between them: each key bold and what it does dim.
+  keys(items: readonly (readonly [string, string])[]): string;
 }
 
 function styles(color: boolean): Styles {
@@ -57,6 +72,7 @@ function styles(color: boolean): Styles {
       const label = text.toUpperCase();
       return `\n${color ? `${PILLS[tone]} ${label} ${RESET}` : label}\n`;
     },
+    tag: (text, tone = 'section') => (color ? `${PILLS[tone]} ${text} ${RESET}` : text),
     ok: status(GREEN, '✔'),
     warn: status(YELLOW, '!'),
     error: status(RED, '✖'),
@@ -64,6 +80,9 @@ function styles(color: boolean): Styles {
     trace: (text) => `  ${paint(DIM, `↳ ${text}`)}\n`,
     value: (text) => paint(GREEN, text),
     dim: (text) => paint(DIM, text),
+    select: (text) => paint(SELECT, text),
+    key: (text) => paint(BOLD, text),
+    keys: (items) => items.map(([key, action]) => `${paint(BOLD, key)} ${paint(DIM, action)}`).join(paint(DIM, ' · ')),
   };
 }
 

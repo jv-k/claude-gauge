@@ -14,12 +14,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { PassThrough } = require('node:stream');
 const { runWizard, openIo, confirm, EndOfAnswers, Interrupted } = require('../dist/wizard.js');
-const { inkIoWith } = require('../dist/ink-io.js');
+const { inkIoWith, synchronized } = require('../dist/ink-io.js');
 const { PARTS } = require('../dist/statusline.js');
 const { PARTS: TOKEN_PARTS } = require('../dist/tokenline.js');
 const { plain, tempDir, configFolder, runCli, ok } = require('./helpers');
 
-const KEY = { up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D', enter: '\r', space: ' ', ctrlC: '\x03' };
+const KEY = { up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D', enter: '\r', space: ' ', ctrlC: '\x03', esc: '\x1b' };
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -73,31 +73,40 @@ async function driver() {
   return { io, next, press, answer, out };
 }
 
-// The keys that tick and untick `names` in `list`, from the top, each with
-// Space, then Enter.
-function toggle(list, ...names) {
+const BACKSPACE = '\x7f';
+const SHIFT = { right: '\x1b[1;2C', left: '\x1b[1;2D', up: '\x1b[1;2A', down: '\x1b[1;2B', tab: '\x1b[Z' };
+const TAB = '\t';
+
+// The keys that add `parts` from `list`, one by one, to a row editor whose
+// cursor is on the add slot after `row`: down once to give the slot the
+// first part not in the row, down again to each next one, then right to the
+// new add slot.
+function adding(list, row, ...parts) {
   const keys = [];
-  let at = 0;
-  for (const name of names) {
-    const to = list.indexOf(name);
-    assert.ok(to >= 0, name);
-    while (at < to) keys.push(KEY.down), at++;
-    while (at > to) keys.push(KEY.up), at--;
-    keys.push(KEY.space);
+  const now = [...row];
+  for (const part of parts) {
+    const at = list.filter((p) => !now.includes(p)).indexOf(part);
+    assert.ok(at >= 0, part);
+    keys.push(...Array(at + 1).fill(KEY.down), KEY.right);
+    now.push(part);
   }
-  return [...keys, KEY.enter];
+  return keys;
 }
 
 test('setup: the customise path by key presses gives the answers that the same typed answers give', async () => {
-  const typed = await runWizard(scripted(['n', '3', 'ctx,7d', 'model', 'time, cost', '', '10', 'pastel', 'n', 'n', 'y']), { preview });
+  const typed = await runWizard(scripted(['n', '3', 'ctx,7d', 'model', 'cost, lines, git, todos, time', 'classic', '10', 'pastel', 'n', 'n', 'y']), { preview });
   const { io, answer } = await driver();
   const run = runWizard(io, { preview });
   await answer(KEY.down, KEY.enter); // the defaults: No
   await answer(KEY.down, KEY.enter); // rows: from 2 to 3
-  await answer(...toggle(PARTS, '5h')); // row 1: ctx,5h,7d without 5h
-  await answer(...toggle(PARTS, 'time', 'duration', 'repo', 'branch', 'effort')); // row 2: model alone
-  await answer(...toggle(PARTS, 'time', 'cost')); // row 3: time, then cost
-  await answer(KEY.enter); // bar style: classic
+  await answer(
+    ...[KEY.right, 'd'], // row 1: ctx,5h,7d without 5h
+    ...[TAB, KEY.left, 'd', 'd', 'd', 'd', KEY.right, BACKSPACE], // row 2: model alone
+    ...[TAB, KEY.right, KEY.right, KEY.right, ...adding(PARTS, ['cost', 'lines', 'git', 'todos'], 'time')], // row 3, from its own set: time added
+    KEY.enter,
+  );
+  await answer(KEY.enter); // the order of the rows as it is
+  await answer(KEY.up, KEY.up, KEY.up, KEY.up, KEY.enter); // bar style: from dots up to classic
   await answer(KEY.down, KEY.enter); // 10 cells
   await answer(KEY.down, KEY.down, KEY.down, KEY.enter); // pastel
   await answer(KEY.down, KEY.enter); // labels: No
@@ -111,7 +120,7 @@ test('setup: Enter at the first question takes the defaults, as a typed yes does
   const { io, answer } = await driver();
   const run = runWizard(io, { preview });
   const frame = await answer(KEY.enter);
-  assert.match(frame, /The status line with the defaults/);
+  assert.match(frame, /Status line, with the defaults/);
   assert.match(frame, /CONFIRM\nUse the defaults/);
   assert.match(frame, /❯ Yes/);
   assert.deepEqual(await run, await runWizard(scripted(['y']), { preview }));
@@ -122,7 +131,7 @@ test('each answered question ends its line, and a question after the wizard show
   const run = runWizard(io, { preview });
   await answer(KEY.enter);
   await run;
-  assert.equal(out.text, '\n', 'Ink leaves the cursor at the end of its last line');
+  assert.equal(out.text, '', 'Ink ends its last frame with a newline of its own, so the io writes none');
   const star = confirm(io, 'Star it?', true);
   const frame = await answer(KEY.down, KEY.enter);
   assert.equal(await star, false);
@@ -150,8 +159,8 @@ test('configure: a changed token line by key presses gives the answers that the 
   const { io, answer, out } = await driver();
   const run = runWizard(io, { preview, installed });
   await answer(KEY.down, KEY.enter); // the lines set up: change them
-  for (let i = 0; i < 8; i++) await answer(KEY.enter); // rows, two rows, bar style, cells, theme, labels, token line
-  await answer(...toggle(TOKEN_PARTS, 'out')); // req,ctx then out
+  for (let i = 0; i < 8; i++) await answer(KEY.enter); // rows, the parts, the rows' order, bar style, cells, theme, labels, token line
+  await answer(KEY.right, KEY.right, ...adding(TOKEN_PARTS, ['req', 'ctx'], 'out'), KEY.enter); // req,ctx then out
   const write = await answer(KEY.enter);
   assert.match(write, /Write these choices/, 'no context window question');
   assert.deepEqual(await run, typed);
@@ -163,32 +172,32 @@ test('the preview redraws as the selection moves, before the answer is accepted'
   const { io, next, press, answer } = await driver();
   const run = runWizard(io, { preview });
   await answer(KEY.down, KEY.enter); // customise
-  for (let i = 0; i < 5; i++) await answer(KEY.enter); // rows, two rows, bar style, cells
+  for (let i = 0; i < 4; i++) await answer(KEY.enter); // rows, the parts, the rows' order, bar style (dots: no cells question)
   const theme = await next();
-  assert.match(plain(theme.lastFrame()), /<>\n[\s\S]*❯ default/);
+  assert.match(plain(theme.lastFrame()), /<--bar-style dots>\n[\s\S]*❯ default/);
   await press(theme, KEY.down);
-  assert.match(plain(theme.lastFrame()), /<--theme mono>\n[\s\S]*❯ mono/, 'the preview shows the theme the selection is on');
+  assert.match(plain(theme.lastFrame()), /<--bar-style dots --theme mono>\n[\s\S]*❯ mono/, 'the preview shows the theme the selection is on');
   await press(theme, KEY.down, KEY.down, KEY.enter);
   const labels = await next();
-  assert.match(plain(labels.lastFrame()), /<--theme pastel>/, 'the answer stays in the preview');
+  assert.match(plain(labels.lastFrame()), /<--bar-style dots --theme pastel>/, 'the answer stays in the preview');
   await press(labels, KEY.down);
-  assert.match(plain(labels.lastFrame()), /<--theme pastel --no-labels>/);
+  assert.match(plain(labels.lastFrame()), /<--bar-style dots --theme pastel --no-labels>/);
   await press(labels, KEY.up, KEY.enter);
   await answer(KEY.enter); // token line
   await answer(KEY.enter); // token line parts
   await answer(KEY.enter); // write
-  assert.deepEqual(await run, { statusLine: ['--theme', 'pastel'], tokenLine: [] });
+  assert.deepEqual(await run, { statusLine: ['--bar-style', 'dots', '--theme', 'pastel'], tokenLine: ['--bar-style', 'dots'] });
 });
 
 test('a bar style other than classic skips the cells question, and both lines get it', async () => {
   const { io, next, press, answer } = await driver();
   const run = runWizard(io, { preview });
   await answer(KEY.down, KEY.enter); // customise
-  for (let i = 0; i < 3; i++) await answer(KEY.enter); // rows, two rows
+  for (let i = 0; i < 3; i++) await answer(KEY.enter); // rows, the parts, the rows' order
   const style = await next();
-  assert.match(plain(style.lastFrame()), /INPUT\nBar style\?\n\[All\] +ctx classic +5h classic +7d classic +ram classic *\n❯ classic\n {2}steps/);
-  await press(style, KEY.down);
-  assert.match(plain(style.lastFrame()), /<--bar-style steps>\n[\s\S]*❯ steps/, 'the preview shows the style the selection is on');
+  assert.match(plain(style.lastFrame()), /INPUT\nBar style\?\n {2}\[All dots\]\n {2}1 {3}ctx dots {3}5h dots {3}7d dots *\n {2}2 {3}time {3}duration[^\n]*\n {2}dots •••\|··: 6 dots\. All sets every bar\.\n/, 'a new setup starts from dots, with the rows as the row editor shows them');
+  await press(style, KEY.up, KEY.up, KEY.up);
+  assert.match(plain(style.lastFrame()), /<--bar-style steps>\n[\s\S]*\[All steps\]/, 'the preview shows the style the selection is on');
   await press(style, KEY.enter);
   const theme = await next();
   assert.match(plain(theme.lastFrame()), /Theme\?/, 'no cells question');
@@ -199,29 +208,37 @@ test('a bar style other than classic skips the cells question, and both lines ge
   assert.deepEqual(typed, { statusLine: ['--bar-style', 'steps'], tokenLine: ['--bar-style', 'steps'] });
 });
 
-test('left and right move between the bar style tabs: a choice at All sets every bar, and one at a bar sets that bar', async () => {
+test('left and right move between the bars, and up and down change the style: a choice at All sets every bar, and one at a bar sets that bar', async () => {
   const { io, next, press, answer } = await driver();
   const run = runWizard(io, { preview });
   await answer(KEY.down, KEY.enter); // customise
-  for (let i = 0; i < 3; i++) await answer(KEY.enter); // rows, two rows
+  for (let i = 0; i < 3; i++) await answer(KEY.enter); // rows, the parts, the rows' order
   const style = await next();
-  await press(style, KEY.down); // All: steps
-  assert.match(plain(style.lastFrame()), /\[All\] +ctx steps +5h steps +7d steps +ram steps/);
+  await press(style, KEY.up, KEY.up, KEY.up); // All: from dots up to steps
+  assert.match(plain(style.lastFrame()), /\[All steps\]\n {2}1 {3}ctx steps {3}5h steps {3}7d steps *\n/);
+  assert.doesNotMatch(plain(style.lastFrame()), /ram/, 'ram is in no row, so it is not a bar to pick');
   await press(style, KEY.right, KEY.up); // ctx: classic
-  assert.match(plain(style.lastFrame()), / All +\[ctx classic\] +5h steps/);
+  assert.match(plain(style.lastFrame()), / All steps\n {2}1 {2}\[ctx classic\] {2}5h steps/);
   assert.match(plain(style.lastFrame()), /<--bar-style steps,ctx=classic>/, 'the preview shows each bar');
-  assert.match(plain(style.lastFrame()), /←→ to pick a bar/);
-  await press(style, KEY.left, KEY.left, KEY.down); // ram: rising
+  assert.match(plain(style.lastFrame()), /←→ Tab ⇧Tab pick a bar/);
+  await press(style, KEY.left, KEY.left, KEY.down); // All, then round to 7d, the last bar a row shows: rising
+  assert.match(plain(style.lastFrame()), /\[7d rising\]/);
+  await press(style, TAB); // Tab: round to All
+  assert.match(plain(style.lastFrame()), /\[All steps\]/);
+  await press(style, SHIFT.tab); // Shift+Tab: back to 7d
+  assert.match(plain(style.lastFrame()), /\[7d rising\]/);
+  assert.match(plain(style.lastFrame()), /←→ Tab ⇧Tab pick a bar/);
   await press(style, KEY.enter);
   const cells = await next();
   // Any frame: with CI set, Ink draws no frame after the question unmounts.
-  assert.ok(style.frames.some((f) => /INPUT\nBar style\? steps,ctx=classic,ram=rising/.test(plain(f))), 'the answer as a list');
-  assert.match(plain(cells.lastFrame()), /Cells per classic bar\?\n❯ 5/, 'one classic bar: no tabs');
+  assert.ok(style.frames.some((f) => /INPUT\nBar style\? steps,ctx=classic,7d=rising/.test(plain(f))), 'the answer as a list');
+  assert.match(plain(cells.lastFrame()), /Cells per classic bar\?\n {2}1 {2}\[ctx 5\] {2}5h {3}7d *\n[^\n]*\n {2}5 cells in each classic bar\.\n/, 'one classic bar: that bar alone, where its part is, with no All');
+  assert.doesNotMatch(plain(cells.lastFrame()), /←→ Tab ⇧Tab pick a bar/);
   await press(cells, KEY.down, KEY.enter);
   for (let i = 0; i < 5; i++) await answer(KEY.enter); // theme, labels, token line, token line parts, write
-  const typed = await runWizard(scripted(['n', '', '', '', 'steps,ctx=classic,ram=rising', '10', '', '', '', '', 'y']), { preview });
+  const typed = await runWizard(scripted(['n', '', '', '', 'steps,ctx=classic,7d=rising', '10', '', '', '', '', 'y']), { preview });
   assert.deepEqual(await run, typed);
-  assert.deepEqual(typed, { statusLine: ['--bar-style', 'steps,ctx=classic,ram=rising', '--segments', '10'], tokenLine: [] });
+  assert.deepEqual(typed, { statusLine: ['--bar-style', 'steps,ctx=classic,7d=rising', '--segments', '10'], tokenLine: [] });
 });
 
 test('with animate set, a question whose preview moves redraws it with the clock, with no key pressed, and another does not', async () => {
@@ -267,10 +284,10 @@ test('Space pauses a moving preview and plays it again, and the io clock stops w
   io.choices.preview(() => `frame ${++frame}`);
   const asked = io.choices.one({ kind: 'INPUT', message: 'Style?', options: [{ label: 'a', value: 'a' }, { label: 'b', value: 'b' }], initial: 0, moving: true });
   while (!ready) await delay(1);
-  assert.match(plain(question.lastFrame()), /Space to pause, Enter to accept/);
+  assert.match(plain(question.lastFrame()), /Space pause · Enter accept · Esc back/);
   question.stdin.write(' ');
   await delay(50);
-  assert.match(plain(question.lastFrame()), /Space to play, Enter to accept/);
+  assert.match(plain(question.lastFrame()), /Space play · Enter accept · Esc back/);
   const paused = frame;
   const stopped = io.clock();
   await delay(300);
@@ -289,17 +306,17 @@ test('Space pauses a moving preview and plays it again, and the io clock stops w
   assert.equal(await asked, 'b');
 });
 
-test('a row with no part ticked is not accepted, and says why', async () => {
+test('a row with no parts is not accepted, and says why', async () => {
   const { io, next, press, answer } = await driver();
   const run = runWizard(io, { preview });
   await answer(KEY.down, KEY.enter);
   await answer(KEY.up, KEY.enter); // one row
   const row = await next();
-  await press(row, KEY.space, KEY.down, KEY.space, KEY.down, KEY.space, KEY.enter); // untick ctx, 5h, 7d
-  assert.match(plain(row.lastFrame()), /Tick at least one part/);
-  await press(row, KEY.space, KEY.enter); // tick 7d
-  for (let i = 0; i < 7; i++) await answer(KEY.enter);
-  assert.deepEqual(await run, { statusLine: ['--show', '7d'], tokenLine: [] });
+  await press(row, 'd', BACKSPACE, 'd', KEY.enter); // ctx, 5h and 7d removed
+  assert.match(plain(row.lastFrame()), /\[\+\] *\n[\s\S]*Add a part: ↑ or ↓ on \+\./);
+  await press(row, KEY.down, KEY.enter); // ctx, the first part
+  for (let i = 0; i < 6; i++) await answer(KEY.enter); // bar style, theme, labels, token line, token line parts, write
+  assert.deepEqual(await run, { statusLine: ['--show', 'ctx', '--bar-style', 'dots'], tokenLine: ['--bar-style', 'dots'] });
 });
 
 test('Ctrl+C stops the questions, as the end of the answers does, and writes nothing', async () => {
@@ -308,6 +325,117 @@ test('Ctrl+C stops the questions, as the end of the answers does, and writes not
   await answer(KEY.down, KEY.enter);
   await answer(KEY.ctrlC);
   await stopped;
+});
+
+test('the rows editor: Tab changes row, Shift moves a part along its row or to another row, d removes it, and Tab pushes a row down in the order of the rows', async () => {
+  const { io, next, press, answer } = await driver();
+  const run = runWizard(io, { preview });
+  await answer(KEY.down, KEY.enter); // customise
+  await answer(KEY.enter); // rows: 2
+  const rows = await next();
+  const frame = () => plain(rows.lastFrame());
+  assert.match(frame(), /The parts of each row\n {2}1 {2}\[ctx\] {2}5h {3}7d {3}\+ *\n {2}2 {3}time {3}duration/);
+  await press(rows, SHIFT.right);
+  assert.match(frame(), /<--show 5h,ctx,7d --show [^>]*>/, 'Shift+→ moves the part, and the preview shows it');
+  await press(rows, SHIFT.down);
+  assert.match(frame(), / {2}1 {3}5h {3}7d {3}\+ *\n {2}2 {3}time {2}\[ctx\] {2}duration/, 'Shift+↓ moves it to the row below, at the same place');
+  await press(rows, SHIFT.down); // no row below: nothing moves
+  await press(rows, TAB, KEY.down); // back to row 1, where 7d becomes time
+  assert.match(frame(), / {2}1 {3}5h {2}\[time\]/);
+  assert.match(frame(), /Also in row 2\./);
+  await press(rows, SHIFT.down);
+  assert.match(frame(), /Row 2 shows time already\./, 'a part moves only to a row that does not show it');
+  await press(rows, 'd', TAB, BACKSPACE); // time out of row 1, ctx out of row 2
+  assert.match(frame(), / {2}1 {3}5h {3}\+ *\n {2}2 {3}time {2}\[duration\]/);
+  await press(rows, SHIFT.tab, KEY.left, KEY.space, KEY.down, KEY.space); // 5h picked up, moved down, dropped
+  assert.match(frame(), / {2}1 {3}\+ *\n {2}2 {2}\[5h\] {2}time/);
+  await press(rows, KEY.enter);
+  assert.match(frame(), /Row 1 has no parts: ↑ or ↓ on \+ adds one\./, 'a row with no parts is not accepted');
+  await press(rows, KEY.down, KEY.enter); // ctx, the first part, into row 1
+  assert.ok(rows.frames.some((f) => /The parts of each row ctx \| 5h, time, duration/.test(plain(f))), 'the answer, row by row');
+  const order = await next();
+  assert.match(plain(order.lastFrame()), /Order of the rows\n❯ \[ctx\]\n {2}5h, time, /, 'the row selected in brackets');
+  assert.match(plain(order.lastFrame()), /❯ \[<--show ctx --show 5h,time,[^>]*>\]/, 'and in brackets in the preview');
+  await press(order, TAB);
+  assert.match(plain(order.lastFrame()), /Order of the rows\n {2}5h, time, [^\n]*\n❯ \[ctx\]\n/, 'Tab pushes it down');
+  await press(order, KEY.space); // Space does nothing here
+  assert.match(plain(order.lastFrame()), /Order of the rows\n {2}5h, time, [^\n]*\n❯ \[ctx\]\n/, 'Space leaves the order as it is');
+  await press(order, SHIFT.tab, TAB, KEY.enter); // up, then down again
+  for (let i = 0; i < 6; i++) await answer(KEY.enter); // bar style, theme, labels, token line, token line parts, write
+  const { statusLine } = await run;
+  assert.deepEqual(statusLine, ['--show', '5h,time,duration,repo,branch,model,effort', '--show', 'ctx', '--bar-style', 'dots']);
+});
+
+test('the row editor wraps a row wider than the terminal', async () => {
+  const ink = await import('ink');
+  const React = (await import('react')).default;
+  const { render } = await import('ink-testing-library');
+  let question;
+  let ready = false;
+  const deps = { ink, React, mount: (tree) => (question = render(tree)), ready: () => (ready = true) };
+  const io = inkIoWith(deps, { write: () => {}, columns: 30 }, false);
+  const asked = io.choices.edit({ message: 'Row?', options: PARTS, initial: ['time', 'duration', 'repo', 'branch', 'model', 'effort'] });
+  while (!ready) await delay(1);
+  const lines = plain(question.lastFrame())
+    .split('\n')
+    .map((line) => line.trimEnd());
+  const at = lines.indexOf('Row?') + 1;
+  assert.deepEqual(lines.slice(at, at + 3), ['  [time]  duration   repo', '   branch   model   effort', '   +']);
+  question.stdin.write(KEY.enter);
+  assert.deepEqual(await asked, ['time', 'duration', 'repo', 'branch', 'model', 'effort']);
+});
+
+test('Esc lists the steps so far, the one before first, and the step picked is asked again with the answers since kept', async () => {
+  const { io, next, press, answer } = await driver();
+  const run = runWizard(io, { preview });
+  await answer(KEY.down, KEY.enter); // customise
+  for (let i = 0; i < 4; i++) await answer(KEY.enter); // rows, the parts, the rows' order, bar style
+  await answer(KEY.down, KEY.enter); // theme: mono
+  await answer(KEY.down, KEY.enter); // labels: no
+  const list = await answer(KEY.esc); // at the token line
+  assert.match(list, /Enter accept · Esc back/);
+  const steps = await next();
+  const frame = plain(steps.lastFrame());
+  assert.match(frame, /Go back to which step\?\nThe answers after it stay as they are\.\n {2}Use the defaults +no\n {2}Rows +2\n {2}Parts +ctx, 5h, 7d \| time, /);
+  assert.match(frame, /Theme +mono\n❯ Labels +no\n {2}Token line +on {3}← you are here\n/, 'the step the user is at, last');
+  await press(steps, KEY.up, KEY.enter); // the theme
+  const theme = await next();
+  assert.match(plain(theme.lastFrame()), /❯ mono/, 'the theme answered before is selected');
+  await press(theme, KEY.down, KEY.down, KEY.enter); // pastel
+  const labels = await next();
+  assert.match(plain(labels.lastFrame()), /❯ No/, 'the labels answered before stay');
+  await press(labels, KEY.enter);
+  for (let i = 0; i < 3; i++) await answer(KEY.enter); // token line, token line parts, write
+  assert.deepEqual(await run, { statusLine: ['--bar-style', 'dots', '--theme', 'pastel', '--no-labels'], tokenLine: ['--bar-style', 'dots'] });
+});
+
+test('Esc at the list of steps, or the step marked as where the user is, asks the same step again', async () => {
+  const { io, next, press, answer } = await driver();
+  const run = runWizard(io, { preview });
+  await answer(KEY.down, KEY.enter); // customise
+  await answer(KEY.esc); // at the rows
+  await answer(KEY.esc); // at the list: stay
+  const rows = await next();
+  assert.match(plain(rows.lastFrame()), /How many status line rows\?/);
+  await press(rows, KEY.esc);
+  await answer(KEY.down, KEY.enter); // the rows, where the user is
+  const again = await next();
+  assert.match(plain(again.lastFrame()), /How many status line rows\?/);
+  await press(again, KEY.enter);
+  for (let i = 0; i < 8; i++) await answer(KEY.enter);
+  assert.deepEqual(await run, { statusLine: ['--bar-style', 'dots'], tokenLine: ['--bar-style', 'dots'] });
+});
+
+test('the stream Ink draws on writes each frame as one synchronized update, so the keys under a moving preview do not flash', () => {
+  const written = [];
+  const stream = { columns: 100, rows: 40, write: (chunk) => (written.push(chunk), true), on: () => 'listened' };
+  const frames = synchronized(stream);
+  frames.write('\x1b[2K\x1b[1Aframe');
+  frames.write('');
+  assert.deepEqual(written, ['\x1b[?2026h\x1b[2K\x1b[1Aframe\x1b[?2026l', ''], 'each frame whole, and an empty write as it is');
+  assert.equal(frames.columns, 100);
+  assert.equal(frames.rows, 40);
+  assert.equal(frames.on('resize', () => {}), 'listened', 'the rest passes through');
 });
 
 // The choice of front end.

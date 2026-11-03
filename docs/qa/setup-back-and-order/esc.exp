@@ -1,0 +1,32 @@
+# Runs setup in a real terminal session of 120 by 50, waits for each
+# question before it answers, presses Esc at the bar style, and checks that
+# the list of steps shows with no other key pressed.
+set timeout 10
+log_file -noappend docs/qa/setup-back-and-order/esc.log
+set stty_init "rows 50 cols 120"
+spawn node scripts/try.js cli setup
+expect "Esc to go back"
+send "\033\[B"
+expect "❯ No"
+send "\r"
+expect "How many status line rows?\r"
+expect "Esc to go back"
+send "\r"
+expect "Row 1: the parts\r"
+expect "Esc to go back"
+send "\r"
+expect "Row 2: the parts\r"
+expect "Esc to go back"
+send "\r"
+expect "Order of the rows\r"
+expect "Esc to go back"
+send "\r"
+expect "Bar style?\r"
+expect "Esc to go back"
+send "\033"
+expect {
+  "Go back to which step?" { send_user "\nRESULT: the list showed with no other key\n" }
+  timeout { send_user "\nRESULT: no list within 10 seconds\n" }
+}
+send "\003"
+expect eof

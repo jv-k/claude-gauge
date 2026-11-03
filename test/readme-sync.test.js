@@ -132,8 +132,8 @@ test('a switch added to the registry without a reference row fails the sync', ()
 });
 
 test('a theme added to the registry without a reference row fails the sync', () => {
-  const withNeon = { ...registry, themes: [...registry.themes, 'neon'] };
-  assert.deepEqual(drift(reference, withNeon), ['neon has no row under "#### Themes"']);
+  const withVapor = { ...registry, themes: [...registry.themes, 'vapor'] };
+  assert.deepEqual(drift(reference, withVapor), ['vapor has no row under "#### Themes"']);
 });
 
 test('a reference row for a part the registry lacks fails the sync', () => {

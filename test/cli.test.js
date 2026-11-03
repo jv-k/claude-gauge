@@ -20,6 +20,11 @@ const backupsIn = (dir) => fs.readdirSync(dir).filter((f) => /^settings\.json\.c
 const savedStatusLine = (dir) => path.join(dir, 'claude-gauge', '.state', 'previous-statusline.json');
 const CLAUDE_HUD = "bash -c 'exec node ~/.claude/plugins/cache/claude-hud/claude-hud/0.1.0/dist/index.js'";
 
+
+// The switches the defaults give each line: setup --yes, and a yes to the
+// defaults in the questions, write them.
+const DEFAULTS = ['--bar-style', 'dots'];
+
 test('setup --yes on a fresh config folder installs both bars from a copy of the runtime', () => {
   const dir = configFolder();
   const r = runCli(dir, ['setup', '--yes']);
@@ -33,8 +38,8 @@ test('setup --yes on a fresh config folder installs both bars from a copy of the
   // which for npx is a cache that npm may prune.
   const settings = settingsOf(dir);
   assert.deepEqual(settings, {
-    statusLine: cmd(commandFor(path.join(runtime, 'statusline.js'))),
-    hooks: { Stop: [entry(commandFor(path.join(runtime, 'tokenline.js')))] },
+    statusLine: cmd(commandFor(path.join(runtime, 'statusline.js'), DEFAULTS)),
+    hooks: { Stop: [entry(commandFor(path.join(runtime, 'tokenline.js'), DEFAULTS))] },
   });
   assert.ok(!settings.statusLine.command.includes(dist.replace(/\\/g, '/')));
   assert.deepEqual(JSON.parse(fs.readFileSync(savedStatusLine(dir), 'utf8')), { statusLine: null });
@@ -115,7 +120,7 @@ test('a status line that is not claude-gauge is replaced only with --replace, an
   assert.equal(hudRefused.status, 1);
   assert.match(hudRefused.stderr, /claude-hud/);
   ok(runCli(hud, ['setup', '--yes', '--replace']));
-  assert.match(settingsOf(hud).statusLine.command, /runtime\/statusline\.js$/);
+  assert.match(settingsOf(hud).statusLine.command, /runtime\/statusline\.js --bar-style dots$/);
   assert.deepEqual(JSON.parse(fs.readFileSync(savedStatusLine(hud), 'utf8')), { statusLine: cmd(CLAUDE_HUD) });
 
   // A command that is not a string still prints as it was written.
@@ -171,12 +176,12 @@ test('configure changes one bar in place and needs claude-gauge set up first', (
     entry('afplay done.aiff'),
     entry(commandFor(path.join(runtime, 'tokenline.js'), ['--window', '1m', '--show', 'req,ctx'])),
   ]);
-  assert.equal(settings.statusLine.command, commandFor(path.join(runtime, 'statusline.js')));
+  assert.equal(settings.statusLine.command, commandFor(path.join(runtime, 'statusline.js'), DEFAULTS));
 
   ok(runCli(dir, ['configure', '--no-token-line']));
   settings = settingsOf(dir);
   assert.deepEqual(settings.hooks.Stop, [entry('afplay done.aiff')]);
-  assert.equal(settings.statusLine.command, commandFor(path.join(runtime, 'statusline.js')));
+  assert.equal(settings.statusLine.command, commandFor(path.join(runtime, 'statusline.js'), DEFAULTS));
 });
 
 test('update refreshes the runtime copy', () => {
@@ -273,7 +278,7 @@ test('a git clone in the state folder runs from its own dist/, with no copy', ()
   const cli = path.join(clone, 'dist', 'cli.js');
 
   ok(runCli(dir, ['setup', '--yes'], { cli }));
-  assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(clone, 'dist', 'statusline.js')));
+  assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(clone, 'dist', 'statusline.js'), DEFAULTS));
   assert.ok(!fs.existsSync(runtimeOf(dir)));
   const update = runCli(dir, ['update'], { cli });
   ok(update);
@@ -302,7 +307,7 @@ test('writes go through a symlinked settings.json to its target', (t) => {
   assert.ok(fs.lstatSync(path.join(dir, 'settings.json')).isSymbolicLink(), 'the link is still a link');
   const written = JSON.parse(fs.readFileSync(target, 'utf8'));
   assert.equal(written.model, 'opus');
-  assert.match(written.statusLine.command, /runtime\/statusline\.js$/);
+  assert.match(written.statusLine.command, /runtime\/statusline\.js --bar-style dots$/);
   assert.equal(backupsIn(dir).length, 1, 'the backup sits beside the link');
   assert.deepEqual(fs.readdirSync(dotfiles).sort(), ['settings.json']);
 });
@@ -331,39 +336,59 @@ test('usage errors exit 2 and say what to run', () => {
 // The claude-gauge wordmark: figlet's "future" font, three rows of one 3-cell
 // chunk per character. The middle row ends in a space.
 const WORDMARK = [
-  '┏━╸╻  ┏━┓╻ ╻╺┳┓┏━╸   ┏━╸┏━┓╻ ╻┏━╸┏━╸',
-  '┃  ┃  ┣━┫┃ ┃ ┃┃┣╸ ╺━╸┃╺┓┣━┫┃ ┃┃╺┓┣╸ ',
-  '┗━╸┗━╸╹ ╹┗━┛╺┻┛┗━╸   ┗━┛╹ ╹┗━┛┗━┛┗━╸',
+  '┏━╸╻  ┏━┓╻ ╻┳━┓┏━╸   ┏━╸┏━┓╻ ╻┏━╸┏━╸',
+  '┃  ┃  ┣━┫┃ ┃┃ ┃┣╸ ╺━╸┃╺┓┣━┫┃ ┃┃╺┓┣╸ ',
+  '┗━╸┗━╸╹ ╹┗━┛┻━┛┗━╸   ┗━┛╹ ╹┗━┛┗━┛┗━╸',
 ];
 
-test('--help starts with the wordmark, then a blank line, then the usage', () => {
+// The line under the wordmark in the usage: the version, then the
+// project's page.
+const VERSION = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+const REPO_URL = 'https://github.com/jv-k/claude-gauge';
+const HEADER = `v${VERSION}  ${REPO_URL}`;
+
+test('--help starts with the wordmark, then the version and the project page, a blank line, and the usage', () => {
   const r = runCli(configFolder(), ['--help'], { env: { NO_COLOR: '1' } });
   ok(r);
-  assert.ok(r.stdout.startsWith(`${WORDMARK.join('\n')}\n\nUsage: claude-gauge <setup | configure`), r.stdout);
+  assert.ok(r.stdout.startsWith(`${WORDMARK.join('\n')}\n${HEADER}\n\nUsage: claude-gauge <setup | configure`), r.stdout);
 });
 
-// The wordmark in colour: one 256-colour code in front of each chunk, the 11
-// letters in rainbow order and the hyphen grey, and a reset at each row's end.
-const COLORS = [196, 202, 208, 214, 226, 118, 244, 82, 39, 27, 93, 163];
-const RAINBOW = WORDMARK.map((row) => row.match(/.{3}/g).map((chunk, i) => `\x1b[38;5;${COLORS[i]}m${chunk}`).join('') + '\x1b[0m');
+// The wordmark in colour: a 24-bit colour code in front of each cell, from a
+// coral, pink and violet gradient that each row starts 2 columns further
+// along, so it runs on a diagonal, and a reset at each row's end.
+const STOPS = [
+  [242, 119, 74],
+  [224, 69, 146],
+  [139, 92, 246],
+];
+const gradient = (t) => {
+  const at = t * (STOPS.length - 1);
+  const i = Math.min(Math.floor(at), STOPS.length - 2);
+  return STOPS[i].map((from, c) => Math.round(from + (STOPS[i + 1][c] - from) * (at - i)));
+};
+const SPAN = WORDMARK[0].length - 1 + 2 * (WORDMARK.length - 1);
+const GRADIENT = WORDMARK.map(
+  (row, y) =>
+    [...row].map((cell, x) => `\x1b[38;2;${gradient((x + 2 * y) / SPAN).join(';')}m${cell}`).join('') + '\x1b[0m',
+);
 
-test('FORCE_COLOR or CLICOLOR_FORCE draws the wordmark a colour a letter, the hyphen grey, with a reset at each row end', () => {
+test('FORCE_COLOR or CLICOLOR_FORCE draws the wordmark in a diagonal gradient, with a reset at each row end', () => {
   for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
     const r = runCli(configFolder(), ['--help'], { env: colour });
     ok(r);
-    assert.ok(r.stdout.startsWith(`${RAINBOW.join('\n')}\n`), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
+    assert.ok(r.stdout.startsWith(`${GRADIENT.join('\n')}\n`), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
   }
 });
 
 test('the wordmark is plain text off a terminal, with a FORCE_COLOR of 0, or with NO_COLOR, which beats FORCE_COLOR', () => {
-  const usage = `${WORDMARK.join('\n')}\n\nUsage: claude-gauge `;
+  const usage = `${WORDMARK.join('\n')}\n${HEADER}\n\nUsage: claude-gauge `;
   for (const colour of [{}, { FORCE_COLOR: '0' }, { CLICOLOR_FORCE: '0' }, { NO_COLOR: '1', FORCE_COLOR: '1' }]) {
     const r = runCli(configFolder(), ['--help'], { env: colour });
     ok(r);
     assert.ok(r.stdout.startsWith(usage), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
   }
   const empty = runCli(configFolder(), ['--help'], { env: { NO_COLOR: '', FORCE_COLOR: '1' } });
-  assert.ok(empty.stdout.startsWith(RAINBOW[0]), 'an empty NO_COLOR is no NO_COLOR');
+  assert.ok(empty.stdout.startsWith(GRADIENT[0]), 'an empty NO_COLOR is no NO_COLOR');
 });
 
 // A spawned CLI never writes to a terminal, so the gate's terminal cases are
@@ -406,7 +431,36 @@ const ERROR = icon(SGR.error, '✖');
 
 // In colour the usage sits under a USAGE pill, as a command's result sits
 // under its own, so its first line drops the Usage: that the pill now says.
-const USAGE_PILL = `${RAINBOW.join('\n')}\n\n${pill('USAGE')}\nclaude-gauge <setup | configure | uninstall | update> [switches]\n`;
+// Under the wordmark, the version in a pill and the page as a link; the
+// usage's names are green, and its placeholders dim.
+const dim = (text) => `${SGR.dim}${text}${SGR.reset}`;
+const HEADER_COLOUR = `${pill(`v${VERSION}`)}  \x1b]8;;${REPO_URL}\x07${green(REPO_URL)}\x1b]8;;\x07`;
+const FORM_COLOUR = `${green('claude-gauge ')}${dim('<setup | configure | uninstall | update>')}${green(' ')}${dim('[switches]')}`;
+const USAGE_PILL = `${GRADIENT.join('\n')}\n${HEADER_COLOUR}\n\n${pill('USAGE')}\n${FORM_COLOUR}\n`;
+
+test('--version or -v prints the version alone', () => {
+  const dir = configFolder();
+  for (const flag of ['--version', '-v']) {
+    const r = runCli(dir, [flag]);
+    ok(r);
+    assert.equal(r.stdout, `claude-gauge ${VERSION}\n`, flag);
+  }
+});
+
+test('--help puts each section under its heading, with its names in a column and what they do wrapped to the terminal in the next', () => {
+  const dir = configFolder();
+  const wide = runCli(dir, ['--help'], { env: { NO_COLOR: '1', COLUMNS: '120' } });
+  ok(wide);
+  assert.match(wide.stdout, /\nCommands:\n {2}setup {7}add the status line/);
+  assert.match(wide.stdout, /\nSwitches for update:\n {2}--dry-run {3}print the commands/, 'a column as wide as the section needs');
+  assert.match(wide.stdout, /\nOther switches:\n {2}-h, --help {6}print this help\n {2}-v, --version {3}print the version of claude-gauge\n$/);
+  assert.doesNotMatch(wide.stdout, /With none of the bar switches|under Options/);
+  const narrow = runCli(dir, ['--help'], { env: { NO_COLOR: '1', COLUMNS: '50' } });
+  ok(narrow);
+  const usage = narrow.stdout.slice(narrow.stdout.indexOf('Commands:'));
+  for (const line of usage.split('\n')) assert.ok(line.length <= 49, `${JSON.stringify(line)} fits in 50 columns`);
+  assert.match(usage, /\n {2}setup {7}add the status line and the token\n {14}line to Claude Code's settings;/, 'what a command does wraps in its own column');
+});
 
 test('--help in colour puts a USAGE pill between the wordmark and the usage', () => {
   for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
@@ -426,14 +480,14 @@ test('a bare claude-gauge in colour prints the USAGE pill over the usage, on std
 test('a bare claude-gauge prints the wordmark and the usage, on stderr, and exits 2', () => {
   const bare = runCli(configFolder(), [], { env: { NO_COLOR: '1' } });
   assert.equal(bare.status, 2);
-  assert.ok(bare.stderr.startsWith(`${WORDMARK.join('\n')}\n\nUsage: claude-gauge <setup | configure`), bare.stderr);
+  assert.ok(bare.stderr.startsWith(`${WORDMARK.join('\n')}\n${HEADER}\n\nUsage: claude-gauge <setup | configure`), bare.stderr);
   assert.equal(bare.stdout, '');
 });
 
 test('the usage after a mistake starts with the wordmark, coloured by the gate on stderr', () => {
   const noCommand = runCli(configFolder(), ['--replace'], { env: { NO_COLOR: '1' } });
   assert.equal(noCommand.status, 2);
-  assert.ok(noCommand.stderr.startsWith(`\nERROR\n✖ Name a command.\n\n${WORDMARK.join('\n')}\n\nUsage: claude-gauge `), noCommand.stderr);
+  assert.ok(noCommand.stderr.startsWith(`\nERROR\n✖ Name a command.\n\n${WORDMARK.join('\n')}\n${HEADER}\n\nUsage: claude-gauge `), noCommand.stderr);
   const unknown = runCli(configFolder(), ['launch'], { env: { FORCE_COLOR: '1' } });
   assert.equal(unknown.status, 2);
   assert.ok(unknown.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}Unknown command: launch\n\n${USAGE_PILL}`), JSON.stringify(unknown.stderr.slice(0, 400)));
@@ -510,8 +564,8 @@ test('setup with no switches asks, and one yes installs both bars as --yes does'
   ok(r);
   const runtime = runtimeOf(dir);
   assert.deepEqual(settingsOf(dir), {
-    statusLine: cmd(commandFor(path.join(runtime, 'statusline.js'))),
-    hooks: { Stop: [entry(commandFor(path.join(runtime, 'tokenline.js')))] },
+    statusLine: cmd(commandFor(path.join(runtime, 'statusline.js'), DEFAULTS)),
+    hooks: { Stop: [entry(commandFor(path.join(runtime, 'tokenline.js'), DEFAULTS))] },
   });
   const out = plain(r.stdout);
   assert.match(out, /ctx 43% /, 'a preview from the sample payload');
@@ -524,13 +578,13 @@ test('the setup and configure questions start with the wordmark and a blank line
   const dir = configFolder();
   const setup = ask(dir, ['setup'], ['y'], { env: { NO_COLOR: '1' } });
   ok(setup);
-  assert.ok(setup.stdout.startsWith(`${WORDMARK.join('\n')}\n\nSETUP\nThe status line with the defaults:\n`), setup.stdout);
+  assert.ok(setup.stdout.startsWith(`${WORDMARK.join('\n')}\n\nSETUP\n\nStatus line, with the defaults\n\n`), setup.stdout);
   const configure = ask(dir, ['configure'], ['keep'], { env: { NO_COLOR: '1' } });
   ok(configure);
-  assert.ok(configure.stdout.startsWith(`${WORDMARK.join('\n')}\n\nCONFIGURE\nThe status line as set up now:\n`), configure.stdout);
+  assert.ok(configure.stdout.startsWith(`${WORDMARK.join('\n')}\n\nCONFIGURE\n\nStatus line, as set up now\n\n`), configure.stdout);
   const coloured = ask(dir, ['configure'], ['keep'], { env: { NO_COLOR: '', FORCE_COLOR: '1' } });
   ok(coloured);
-  assert.ok(coloured.stdout.startsWith(`${RAINBOW.join('\n')}\n\n${pill('CONFIGURE')}\nThe status line as set up now:\n`), JSON.stringify(coloured.stdout.slice(0, 400)));
+  assert.ok(coloured.stdout.startsWith(`${GRADIENT.join('\n')}\n\n${pill('CONFIGURE')}\n\n\x1b[2mStatus line, as set up now\x1b[0m\n\n`), JSON.stringify(coloured.stdout.slice(0, 400)));
 });
 
 test('the commands run with switches print no wordmark, so scripts and the slash commands get short output', () => {
@@ -557,7 +611,7 @@ test('the wizard previews the payload the status line saved', () => {
 
 test('the customise path writes the switches chosen, and can leave the token line out', () => {
   const dir = configFolder();
-  ok(ask(dir, ['setup'], ['n', '2', 'ctx,5h', 'model', '', '10', 'pastel', 'n', 'n', 'y']));
+  ok(ask(dir, ['setup'], ['n', '2', 'ctx,5h', 'model', 'classic', '10', 'pastel', 'n', 'n', 'y']));
   assert.deepEqual(settingsOf(dir), {
     statusLine: cmd(commandFor(path.join(runtimeOf(dir), 'statusline.js'), ['--show', 'ctx,5h', '--show', 'model', '--segments', '10', '--theme', 'pastel', '--no-labels'])),
   });
@@ -567,11 +621,11 @@ test('the token line parts the wizard is given go into the Stop hook command, an
   const tokenLine = (dir) => settingsOf(dir).hooks.Stop[0].hooks[0].command;
   const script = (dir) => path.join(runtimeOf(dir), 'tokenline.js');
   const enter = configFolder();
-  ok(ask(enter, ['setup'], ['n', '', '', '', '', '', '', '', '', '', 'y']));
+  ok(ask(enter, ['setup'], ['n', '', '', '', 'classic', '', '', '', '', '', 'y']));
   assert.equal(tokenLine(enter), commandFor(script(enter)));
 
   const fewer = configFolder();
-  const r = ask(fewer, ['setup'], ['n', '', '', '', '', '', '', '', '', 'req,bogus', 'req,out,ctx', 'y']);
+  const r = ask(fewer, ['setup'], ['n', '', '', '', 'classic', '', '', '', '', 'req,bogus', 'req,out,ctx', 'y']);
   ok(r);
   assert.match(r.stdout, /Unknown part: bogus/);
   assert.equal(tokenLine(fewer), commandFor(script(fewer), ['--show', 'req,out,ctx']));
@@ -588,7 +642,7 @@ test('setup asks no context window question, and configure keeps the --window se
   const tokenLine = (dir) => settingsOf(dir).hooks.Stop[0].hooks[0].command;
   const script = (dir) => path.join(runtimeOf(dir), 'tokenline.js');
   const dir = configFolder();
-  const r = ask(dir, ['setup'], ['n', '', '', '', '', '', '', '', '', 'req,out,ctx', 'y']);
+  const r = ask(dir, ['setup'], ['n', '', '', '', 'classic', '', '', '', '', 'req,out,ctx', 'y']);
   ok(r);
   assert.doesNotMatch(r.stdout, /context window/i);
   assert.equal(tokenLine(dir), commandFor(script(dir), ['--show', 'req,out,ctx']));
@@ -605,7 +659,7 @@ test('setup asks no context window question, and configure keeps the --window se
 
 test('a no at the last question, or answers that end early, change nothing', () => {
   const dir = configFolder();
-  const declined = ask(dir, ['setup'], ['n', '', '', '', '', '', '', '', '', '', 'n']);
+  const declined = ask(dir, ['setup'], ['n', '', '', '', 'classic', '', '', '', '', '', 'n']);
   ok(declined);
   assert.match(declined.stdout, /Nothing changed/);
   const ended = ask(dir, ['setup'], []);
@@ -627,7 +681,7 @@ test('the wizard asks before it replaces a status line that is not claude-gauge'
   assert.equal(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'), original);
 
   ok(ask(dir, ['setup'], ['y', 'y']));
-  assert.match(settingsOf(dir).statusLine.command, /statusline\.js$/);
+  assert.match(settingsOf(dir).statusLine.command, /statusline\.js --bar-style dots$/);
   assert.deepEqual(JSON.parse(fs.readFileSync(savedStatusLine(dir), 'utf8')), { statusLine: mine });
 });
 
@@ -636,9 +690,10 @@ test('configure with no switches runs the wizard on a set-up config, and offers 
   assert.equal(ask(dir, ['configure'], ['keep']).status, 1, 'not set up yet');
   ok(runCli(dir, ['setup', '--yes']));
   const gh = fakeGh();
-  const r = ask(dir, ['configure'], ['change', '1', 'ctx', '', '', '', '', '', '', 'y'], { bin: gh.bin });
+  // From the defaults, in dots: no cells question.
+  const r = ask(dir, ['configure'], ['change', '1', 'ctx', '', '', '', '', '', 'y'], { bin: gh.bin });
   ok(r);
-  assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(runtimeOf(dir), 'statusline.js'), ['--show', 'ctx']));
+  assert.equal(settingsOf(dir).statusLine.command, commandFor(path.join(runtimeOf(dir), 'statusline.js'), ['--show', 'ctx', ...DEFAULTS]));
   assert.doesNotMatch(r.stdout, /Star /);
   assert.deepEqual(gh.calls(), []);
 });
@@ -713,8 +768,8 @@ test('with colour on, each command prints a pill header, icons and green values'
   const setup = runCli(dir, ['setup', '--yes'], { env });
   ok(setup);
   assert.ok(setup.stdout.startsWith(`\n${pill('SETUP')}\n`), JSON.stringify(setup.stdout));
-  assert.ok(setup.stdout.includes(`${OK}Status line: ${green(commandFor(script('statusline.js')))}\n`), JSON.stringify(setup.stdout));
-  assert.ok(setup.stdout.includes(`${OK}Token line: ${green(commandFor(script('tokenline.js')))}\n`), JSON.stringify(setup.stdout));
+  assert.ok(setup.stdout.includes(`${OK}Status line: ${green(commandFor(script('statusline.js'), DEFAULTS))}\n`), JSON.stringify(setup.stdout));
+  assert.ok(setup.stdout.includes(`${OK}Token line: ${green(commandFor(script('tokenline.js'), DEFAULTS))}\n`), JSON.stringify(setup.stdout));
   assert.ok(setup.stdout.includes(`${INFO}Start a new Claude Code session`), JSON.stringify(setup.stdout));
 
   const configure = runCli(dir, ['configure', '--no-token-line'], { env });
@@ -799,8 +854,8 @@ test('with NO_COLOR, or piped with no force variable, the output has no escape c
       [
         '',
         'SETUP',
-        `✔ Status line: ${commandFor(script('statusline.js'))}`,
-        `✔ Token line: ${commandFor(script('tokenline.js'))}`,
+        `✔ Status line: ${commandFor(script('statusline.js'), DEFAULTS)}`,
+        `✔ Token line: ${commandFor(script('tokenline.js'), DEFAULTS)}`,
         'ℹ Start a new Claude Code session to pick up the changes.',
         '',
       ].join('\n'),

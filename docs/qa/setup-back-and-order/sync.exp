@@ -1,0 +1,24 @@
+# Runs setup in a real terminal session, waits at the bar style question
+# while its preview moves, and logs the raw output, to check that each frame
+# Ink draws is one synchronized update.
+set timeout 10
+log_file -noappend docs/qa/setup-back-and-order/sync.log
+set stty_init "rows 50 cols 120"
+spawn node scripts/try.js cli setup
+expect "Esc back"
+send "\033\[B"
+expect "❯ No"
+send "\r"
+expect "How many status line rows?\r"
+expect "Esc back"
+send "\r"
+expect "The parts of each row\r"
+expect "Esc back"
+send "\r"
+expect "Order of the rows\r"
+expect "Esc back"
+send "\r"
+expect "Bar style?\r"
+sleep 2
+send "\003"
+expect eof

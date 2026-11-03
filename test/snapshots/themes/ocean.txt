@@ -1,0 +1,2 @@
+\e[38;5;80mctx 43% ▓▓░░░ 86.0k\e[0m\e[38;5;66m │ \e[0m\e[38;5;37m5h 9% ░░░\e[38;5;36m┃\e[0m\e[38;5;37m░ → 14:00\e[0m\e[38;5;66m │ \e[0m\e[38;5;116m7d 41% ▓▓░\e[38;5;73m┃\e[0m\e[38;5;116m░ → 3d\e[0m
+\e[38;5;66m12:00\e[0m\e[38;5;66m │ \e[0m\e[38;5;66m1h12m\e[0m\e[38;5;66m │ \e[0m\e]8;;file://host/home/me/project\a\e[38;5;66mjv-k/claude-gauge\e[0m\e]8;;\a\e[38;5;66m │ \e[0m\e[38;5;79m⎇ main\e[0m\e[38;5;66m │ \e[0m\e[38;5;116mOpus 5.5\e[0m\e[38;5;66m │ \e[0m\e[38;5;116meffort high\e[0m
