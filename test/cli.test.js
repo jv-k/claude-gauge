@@ -342,16 +342,30 @@ test('--help starts with the wordmark, then a blank line, then the usage', () =>
   assert.ok(r.stdout.startsWith(`${WORDMARK.join('\n')}\n\nUsage: claude-gauge <setup | configure`), r.stdout);
 });
 
-// The wordmark in colour: one 256-colour code in front of each chunk, the 11
-// letters in rainbow order and the hyphen grey, and a reset at each row's end.
-const COLORS = [196, 202, 208, 214, 226, 118, 244, 82, 39, 27, 93, 163];
-const RAINBOW = WORDMARK.map((row) => row.match(/.{3}/g).map((chunk, i) => `\x1b[38;5;${COLORS[i]}m${chunk}`).join('') + '\x1b[0m');
+// The wordmark in colour: a 24-bit colour code in front of each cell, from a
+// coral, pink and violet gradient that each row starts 2 columns further
+// along, so it runs on a diagonal, and a reset at each row's end.
+const STOPS = [
+  [242, 119, 74],
+  [224, 69, 146],
+  [139, 92, 246],
+];
+const gradient = (t) => {
+  const at = t * (STOPS.length - 1);
+  const i = Math.min(Math.floor(at), STOPS.length - 2);
+  return STOPS[i].map((from, c) => Math.round(from + (STOPS[i + 1][c] - from) * (at - i)));
+};
+const SPAN = WORDMARK[0].length - 1 + 2 * (WORDMARK.length - 1);
+const GRADIENT = WORDMARK.map(
+  (row, y) =>
+    [...row].map((cell, x) => `\x1b[38;2;${gradient((x + 2 * y) / SPAN).join(';')}m${cell}`).join('') + '\x1b[0m',
+);
 
-test('FORCE_COLOR or CLICOLOR_FORCE draws the wordmark a colour a letter, the hyphen grey, with a reset at each row end', () => {
+test('FORCE_COLOR or CLICOLOR_FORCE draws the wordmark in a diagonal gradient, with a reset at each row end', () => {
   for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
     const r = runCli(configFolder(), ['--help'], { env: colour });
     ok(r);
-    assert.ok(r.stdout.startsWith(`${RAINBOW.join('\n')}\n`), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
+    assert.ok(r.stdout.startsWith(`${GRADIENT.join('\n')}\n`), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
   }
 });
 
@@ -363,7 +377,7 @@ test('the wordmark is plain text off a terminal, with a FORCE_COLOR of 0, or wit
     assert.ok(r.stdout.startsWith(usage), JSON.stringify(colour) + JSON.stringify(r.stdout.slice(0, 400)));
   }
   const empty = runCli(configFolder(), ['--help'], { env: { NO_COLOR: '', FORCE_COLOR: '1' } });
-  assert.ok(empty.stdout.startsWith(RAINBOW[0]), 'an empty NO_COLOR is no NO_COLOR');
+  assert.ok(empty.stdout.startsWith(GRADIENT[0]), 'an empty NO_COLOR is no NO_COLOR');
 });
 
 // A spawned CLI never writes to a terminal, so the gate's terminal cases are
@@ -406,7 +420,7 @@ const ERROR = icon(SGR.error, '✖');
 
 // In colour the usage sits under a USAGE pill, as a command's result sits
 // under its own, so its first line drops the Usage: that the pill now says.
-const USAGE_PILL = `${RAINBOW.join('\n')}\n\n${pill('USAGE')}\nclaude-gauge <setup | configure | uninstall | update> [switches]\n`;
+const USAGE_PILL = `${GRADIENT.join('\n')}\n\n${pill('USAGE')}\nclaude-gauge <setup | configure | uninstall | update> [switches]\n`;
 
 test('--help in colour puts a USAGE pill between the wordmark and the usage', () => {
   for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
@@ -530,7 +544,7 @@ test('the setup and configure questions start with the wordmark and a blank line
   assert.ok(configure.stdout.startsWith(`${WORDMARK.join('\n')}\n\nCONFIGURE\nThe status line as set up now:\n`), configure.stdout);
   const coloured = ask(dir, ['configure'], ['keep'], { env: { NO_COLOR: '', FORCE_COLOR: '1' } });
   ok(coloured);
-  assert.ok(coloured.stdout.startsWith(`${RAINBOW.join('\n')}\n\n${pill('CONFIGURE')}\nThe status line as set up now:\n`), JSON.stringify(coloured.stdout.slice(0, 400)));
+  assert.ok(coloured.stdout.startsWith(`${GRADIENT.join('\n')}\n\n${pill('CONFIGURE')}\nThe status line as set up now:\n`), JSON.stringify(coloured.stdout.slice(0, 400)));
 });
 
 test('the commands run with switches print no wordmark, so scripts and the slash commands get short output', () => {

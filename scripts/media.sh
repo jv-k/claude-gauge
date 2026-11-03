@@ -3,7 +3,8 @@
 # pictures from the status line with freeze
 # (https://github.com/charmbracelet/freeze), and the demo GIF of the setup
 # wizard from docs/media/demo.tape with VHS
-# (https://github.com/charmbracelet/vhs). Run it after `pnpm build` when the
+# (https://github.com/charmbracelet/vhs), and the wordmark with rsvg-convert
+# (librsvg). Run it after `pnpm build` when the
 # bars, the themes or the wizard change.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -44,6 +45,12 @@ shot() {
     printf '%s   \e[0;90mprojected %s\e[0m\n' "$(status '--show 5h --no-reset --segments 10' "$pct")" "$label"
   done
 } | shot pace
+
+# The README's wordmark, from the CLI's rows, in the CLI's gradient: one
+# picture for a dark page and one for a light page.
+for variant in dark light; do
+  node scripts/wordmark.js "$variant" | rsvg-convert -o "$out/wordmark-$variant.png"
+done
 
 # The default rows in each theme.
 {
