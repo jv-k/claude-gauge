@@ -17,6 +17,9 @@ const YELLOW = '\x1b[1;33m';
 const RED = '\x1b[0;31m';
 const CYAN = '\x1b[0;36m';
 const DIM = '\x1b[2m';
+const BOLD = '\x1b[1m';
+// Red-pink, from the 256 colours, for what a question has selected.
+const SELECT = '\x1b[38;5;204m';
 // The pills: one combined code each, 7 for invert, 1 for bold and 3N for the
 // colour, because a colour code that starts with 0; would reset the invert.
 //   section:  cyan, a part of the command's run, such as SETUP or DONE
@@ -37,6 +40,7 @@ function styles(color) {
             const label = text.toUpperCase();
             return `\n${color ? `${PILLS[tone]} ${label} ${RESET}` : label}\n`;
         },
+        tag: (text, tone = 'section') => (color ? `${PILLS[tone]} ${text} ${RESET}` : text),
         ok: status(GREEN, '✔'),
         warn: status(YELLOW, '!'),
         error: status(RED, '✖'),
@@ -44,6 +48,9 @@ function styles(color) {
         trace: (text) => `  ${paint(DIM, `↳ ${text}`)}\n`,
         value: (text) => paint(GREEN, text),
         dim: (text) => paint(DIM, text),
+        select: (text) => paint(SELECT, text),
+        key: (text) => paint(BOLD, text),
+        keys: (items) => items.map(([key, action]) => `${paint(BOLD, key)} ${paint(DIM, action)}`).join(paint(DIM, ' · ')),
     };
 }
 // The styles for what goes to `stream`, in colour when the colour gate allows.

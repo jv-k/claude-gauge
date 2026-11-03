@@ -26,7 +26,7 @@
 // registry disagree. test/snapshots/themes/ holds the default rows in every
 // theme.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AGENT_LINGER_MS = exports.COMMAND_TIMEOUT_MS = exports.payloadFile = exports.INSTRUCT_HOSTS = exports.SWITCHES = exports.DEFAULT_ROWS = exports.perBarList = exports.BARS = exports.BAR_STYLE_REGISTRY = exports.BAR_STYLES = exports.THEMES = exports.PARTS = exports.stripOwnCodes = void 0;
+exports.AGENT_LINGER_MS = exports.COMMAND_TIMEOUT_MS = exports.payloadFile = exports.INSTRUCT_HOSTS = exports.SWITCHES = exports.DEFAULT_ROWS = exports.perBarList = exports.BARS = exports.BAR_STYLE_REGISTRY = exports.BAR_STYLES = exports.THEMES = exports.PARTS = exports.stripOwnCodes = exports.MARK_END = exports.MARK_START = exports.describePart = void 0;
 exports.render = render;
 exports.parseArgs = parseArgs;
 exports.readSwitches = readSwitches;
@@ -180,7 +180,7 @@ const SWITCHES = [
         description: 'the shell command the command part runs, with a short timeout',
         apply: (config, value) => { config.command = value; },
     },
-    { name: '--theme', value: '<name>', description: 'the colour preset: default, mono, high-contrast or pastel', apply: (config, value) => { config.theme = value.trim(); } },
+    { name: '--theme', value: '<name>', description: 'the colour preset: default, mono, high-contrast, pastel, ocean, forest, sunset, neon, dracula, one-dark, solarized-dark, monokai or nord', apply: (config, value) => { config.theme = value.trim(); } },
     {
         name: '--color',
         value: '<part>=<colour>',
@@ -246,6 +246,26 @@ const ansi256 = (n) => `\x1b[38;5;${n}m`;
 // The 16-colour palette's bright half, and its bold form.
 const bright = (n) => `\x1b[0;${n}m`;
 const bold = (n) => `\x1b[1;${n}m`;
+// A 24-bit colour from a hex code such as #ff79c6, for the themes that take
+// an editor scheme's own colours.
+const rgb = (hex) => `\x1b[38;2;${[1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)).join(';')}m`;
+// A theme from an editor scheme's colours: usage from green through yellow
+// and orange to red, the pace marker and context on the same scale, and the
+// scheme's comment colour for the details.
+function schemeTheme(description, c) {
+    const [green, cyan, yellow, orange, red, purple, comment, info] = [c.green, c.cyan, c.yellow, c.orange, c.red, c.purple, c.comment, c.info].map(rgb);
+    return {
+        description,
+        levels: [green, green, green, yellow, yellow, yellow, orange, orange, red, red],
+        pace: [green, cyan, yellow, orange, red, purple],
+        context: [cyan, yellow, red],
+        muted: comment,
+        accent: yellow,
+        good: green,
+        bad: red,
+        info,
+    };
+}
 // The --theme presets, by name. default is the first, and what an unknown
 // name gives.
 const THEME_REGISTRY = {
@@ -293,6 +313,100 @@ const THEME_REGISTRY = {
         bad: ansi256(210),
         info: ansi256(153),
     },
+    ocean: {
+        description: 'teal-to-coral usage, sea-blue context, slate details',
+        levels: [37, 43, 44, 80, 116, 110, 174, 173, 167, 161].map(ansi256),
+        pace: [36, 73, 179, 209, 167, 176].map(ansi256),
+        context: [80, 179, 167].map(ansi256),
+        muted: ansi256(66),
+        accent: ansi256(116),
+        good: ansi256(79),
+        bad: ansi256(167),
+        info: ansi256(75),
+    },
+    forest: {
+        description: 'moss-to-rust usage, sage context, bark-brown details',
+        levels: [71, 72, 107, 108, 143, 179, 172, 166, 130, 124].map(ansi256),
+        pace: [71, 108, 179, 172, 130, 139].map(ansi256),
+        context: [108, 179, 130].map(ansi256),
+        muted: ansi256(101),
+        accent: ansi256(143),
+        good: ansi256(71),
+        bad: ansi256(130),
+        info: ansi256(109),
+    },
+    sunset: {
+        description: 'gold-to-magenta usage, amber context, dusk-rose details',
+        levels: [229, 222, 221, 215, 209, 203, 204, 198, 162, 125].map(ansi256),
+        pace: [222, 215, 209, 203, 198, 141].map(ansi256),
+        context: [215, 209, 198].map(ansi256),
+        muted: ansi256(138),
+        accent: ansi256(222),
+        good: ansi256(186),
+        bad: ansi256(198),
+        info: ansi256(177),
+    },
+    neon: {
+        description: 'vivid cyan-to-pink usage, for dark terminals',
+        levels: [51, 50, 49, 48, 118, 190, 226, 214, 201, 199].map(ansi256),
+        pace: [49, 51, 226, 214, 201, 93].map(ansi256),
+        context: [51, 226, 201].map(ansi256),
+        muted: ansi256(244),
+        accent: ansi256(226),
+        good: ansi256(49),
+        bad: ansi256(199),
+        info: ansi256(39),
+    },
+    dracula: schemeTheme("Dracula's colours: green, yellow, orange and red usage, cyan context, blue-grey details", {
+        green: '#50fa7b',
+        cyan: '#8be9fd',
+        yellow: '#f1fa8c',
+        orange: '#ffb86c',
+        red: '#ff5555',
+        purple: '#bd93f9',
+        comment: '#6272a4',
+        info: '#ff79c6',
+    }),
+    'one-dark': schemeTheme("One Dark's colours: green, yellow, orange and red usage, cyan context, grey details", {
+        green: '#98c379',
+        cyan: '#56b6c2',
+        yellow: '#e5c07b',
+        orange: '#d19a66',
+        red: '#e06c75',
+        purple: '#c678dd',
+        comment: '#7f848e',
+        info: '#61afef',
+    }),
+    'solarized-dark': schemeTheme("Solarized's accent colours on a dark terminal: green to red usage, cyan context, base01 details", {
+        green: '#859900',
+        cyan: '#2aa198',
+        yellow: '#b58900',
+        orange: '#cb4b16',
+        red: '#dc322f',
+        purple: '#6c71c4',
+        comment: '#586e75',
+        info: '#268bd2',
+    }),
+    monokai: schemeTheme("Monokai's colours: green, yellow, orange and pink usage, blue context, brown-grey details", {
+        green: '#a6e22e',
+        cyan: '#66d9ef',
+        yellow: '#e6db74',
+        orange: '#fd971f',
+        red: '#f92672',
+        purple: '#ae81ff',
+        comment: '#75715e',
+        info: '#66d9ef',
+    }),
+    nord: schemeTheme("Nord's colours: aurora green to red usage, frost-blue context, polar grey details", {
+        green: '#a3be8c',
+        cyan: '#88c0d0',
+        yellow: '#ebcb8b',
+        orange: '#d08770',
+        red: '#bf616a',
+        purple: '#b48ead',
+        comment: '#616e88',
+        info: '#81a1c1',
+    }),
 };
 const THEMES = Object.keys(THEME_REGISTRY);
 exports.THEMES = THEMES;
@@ -1716,7 +1830,15 @@ function joinRow(shown, separator, right, widthOf) {
         return join(shown);
     return `${left}${' '.repeat(gap)}${end}`;
 }
-function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = gitStatus, branchOf = headBranch, mtimeOf = fileMtime, env = process.env, setupOf, memoryOf = readMemory, commandOutputOf = runCommand, transcript = readTranscriptActivity, columns, ledger, hostname = os.hostname(), plain = false, } = {}) {
+// A part marked for the setup preview, between MARK_START and MARK_END, two
+// control characters that no part shows, so the preview can find it and
+// draw a line under it.
+const MARK_START = '\x01';
+exports.MARK_START = MARK_START;
+const MARK_END = '\x02';
+exports.MARK_END = MARK_END;
+const markedPart = (text) => `${MARK_START}${text}${MARK_END}`;
+function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = gitStatus, branchOf = headBranch, mtimeOf = fileMtime, env = process.env, setupOf, memoryOf = readMemory, commandOutputOf = runCommand, transcript = readTranscriptActivity, columns, ledger, hostname = os.hostname(), plain = false, mark, } = {}) {
     const merged = { ...DEFAULTS, ...overrides };
     const config = { ...merged, segments: String(merged.segments) };
     const cwd = data.workspace?.current_dir || data.cwd || process.cwd();
@@ -1774,17 +1896,18 @@ function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = g
     // One output line per row. A part with nothing to show drops out of its
     // row, and a row left with no parts drops out of the status line.
     return config.rows
-        .map((row) => joinRow(row
+        .map((row, r) => joinRow(row
         // Rows handed in from JavaScript may name parts the registry lacks;
         // those render as nothing, like every other part with nothing to show.
-        .map((part) => {
+        .map((part, i) => {
+        const shown = (text) => (mark?.row === r && mark.part === i ? markedPart(text || part) : text);
         if (!isPart(part))
-            return { part, text: '' };
+            return { part, text: shown('') };
         const color = ownValue(config.colors, part);
         const spec = PART_REGISTRY[part];
         const text = spec.build(color ? { ...input, theme: solid(theme, color) } : input);
         const url = text && config.links ? spec.link?.(input) : undefined;
-        return { part, text: url && LINKABLE.test(url) ? hyperlink(url, text) : text };
+        return { part, text: shown(url && LINKABLE.test(url) ? hyperlink(url, text) : text) };
     })
         .filter((p) => p.text), separator, config.right, widthOf))
         .filter(Boolean)
@@ -2879,6 +3002,9 @@ function instruction(argv, { host, script }) {
 }
 // This script's path as a hook command can name it: ~ for the home folder.
 const ownPath = () => process.argv[1].replace(new RegExp(`^${os.homedir()}(?=/)`), '~');
+// What a part shows, in the words the README's table uses.
+const describePart = (part) => PART_REGISTRY[part].description;
+exports.describePart = describePart;
 const isMain = (typeof require !== 'undefined' && require.main === module) || (typeof Bun !== 'undefined' && Bun.main === __filename);
 if (isMain) {
     const argv = process.argv.slice(2);

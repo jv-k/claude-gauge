@@ -8,6 +8,13 @@
 // It returns the switches for each line, as words, for the CLI to write; it
 // reads and writes no settings itself.
 //
+// The questions are a list of steps, which the answers so far make: a step
+// for each row, and where the front end asks for an order, a step for the
+// order of the rows. At any step
+// the user can go back, with Esc or a typed <: the wizard lists the steps
+// before it, and asks again from the one picked. Each step offers the value
+// chosen last, so the answers after it stay.
+//
 // The questions go through a WizardIo, so a test can script the answers. The
 // preview renders the payload the status line saved last, else a sample. On
 // a terminal each preview replaces the one before it, in place; with piped
@@ -16,11 +23,11 @@
 // Two front ends ask the same questions, with the same defaults, and give the
 // same answers. The readline one reads a typed line for each question. The
 // Ink one (ink-io.ts) offers each as a choice: the arrow keys and Enter for
-// one option, Space to tick the parts of a row, and the preview redrawn as
+// one option, the row editor for the parts of a row, and the preview redrawn as
 // the selection moves. openIo picks Ink when stdin and stdout are both a
 // terminal and Ink loads, and the readline one otherwise.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SAMPLE_RUN = exports.Interrupted = exports.EndOfAnswers = exports.confirm = void 0;
+exports.SAMPLE_RUN = exports.DEFAULT_SWITCHES = exports.GoBack = exports.Interrupted = exports.EndOfAnswers = exports.confirm = void 0;
 exports.runWizard = runWizard;
 exports.offerStar = offerStar;
 exports.streamIo = streamIo;
@@ -51,9 +58,29 @@ class Interrupted extends EndOfAnswers {
     }
 }
 exports.Interrupted = Interrupted;
+// The user asked to go back: the wizard offers the steps answered so far, to
+// go back to one of them. Not an EndOfAnswers, as nothing has stopped.
+class GoBack extends Error {
+    constructor(message = 'Go back to an earlier step.') {
+        super(message);
+    }
+}
+exports.GoBack = GoBack;
+// The typed answer that goes back.
+const BACK = '<';
 const MAX_ROWS = 3;
+// The parts a row with no default of its own starts with: the first
+// EXTRA_ROW_SIZE of these that no row before it shows, so a third row
+// shows something new.
+const EXTRA_ROW_PARTS = ['cost', 'lines', 'git', 'todos', 'tools', 'agents', 'reply', 'version'];
+const EXTRA_ROW_SIZE = 4;
+const extraRow = (shown) => {
+    const parts = EXTRA_ROW_PARTS.filter((part) => !shown.includes(part)).slice(0, EXTRA_ROW_SIZE);
+    return parts.length ? parts : undefined;
+};
 const SEGMENTS = ['5', '10'];
-const DEFAULT_CHOICES = {
+// The status line's choices with no switches, as it reads them.
+const NO_SWITCHES = {
     rows: statusline_1.DEFAULT_ROWS,
     barStyle: { all: 'classic', each: {} },
     segments: { all: '5', each: {} },
@@ -61,6 +88,14 @@ const DEFAULT_CHOICES = {
     labels: true,
     others: [],
 };
+// The defaults a new setup offers and writes: the same, but in the dots bar
+// style. The status line's own default stays classic, so a line set up
+// before, with no --bar-style, keeps its bars after an update.
+const DEFAULT_BAR_STYLE = 'dots';
+const DEFAULT_CHOICES = { ...NO_SWITCHES, barStyle: { all: DEFAULT_BAR_STYLE, each: {} } };
+// The switches the defaults give each line, as setup --yes writes them.
+const DEFAULT_SWITCHES = ['--bar-style', DEFAULT_BAR_STYLE];
+exports.DEFAULT_SWITCHES = DEFAULT_SWITCHES;
 // A per-bar list read with only the values in `values`: any other reads as
 // `fallback`, as the status line reads an unknown name or size.
 function barValuesOf(list, values, fallback) {
@@ -117,7 +152,7 @@ function switchesFor({ rows, barStyle, segments, theme, labels, others }) {
 // status line does not know reads as the status line shows it: left out, or
 // the default theme.
 function statusChoicesOf(switches) {
-    const status = { ...DEFAULT_CHOICES, rows: [], others: [] };
+    const status = { ...NO_SWITCHES, rows: [], others: [] };
     for (const { name, value, words } of (0, statusline_1.readSwitches)(switches)) {
         if (name === '--show') {
             const row = value.split(',').map((p) => p.trim()).filter((p) => statusline_1.PARTS.includes(p));
@@ -167,6 +202,8 @@ async function askFor(io, question, read, kind = 'INPUT', pick) {
         const answer = await io.ask(question);
         if (answer === undefined)
             throw new EndOfAnswers();
+        if (answer.trim() === BACK)
+            throw new GoBack();
         const value = read(answer.trim());
         if (typeof value === 'object' && value !== null && 'retry' in value) {
             io.write(s.warn(value.retry));
@@ -305,6 +342,11 @@ const START_OPTIONS = [
     { label: 'Change them', value: 'change', words: ['change', 'c'] },
     { label: 'Start over from the defaults', value: 'over', words: ['over', 'o', 'start over', 's'] },
 ];
+// The ids of the status line's own steps, from the number of rows to the
+// labels.
+const STATUS_STEPS = /^(rows|parts|row \d+|rows order|bar style|cells|theme|labels)$/;
+// The preview's heading for the factory defaults.
+const WITH_DEFAULTS = 'Status line, with the defaults';
 // The questions, then the switches for each bar. A front end with choices
 // shows no preview once they end, so a question after them, such as the star
 // offer, comes without one.
@@ -316,149 +358,493 @@ async function runWizard(userIo, options) {
         userIo.choices?.preview('');
     }
 }
+// The longest answer the list of steps shows: a longer one ends in an
+// ellipsis.
+const STEP_VALUE = 56;
+// The steps as the list of steps shows them: each name padded to the
+// longest, then its answer.
+const stepLabels = (steps) => {
+    const width = Math.max(...steps.map((step) => step.name.length));
+    const cut = (value) => (value.length > STEP_VALUE ? `${value.slice(0, STEP_VALUE - 1)}…` : value);
+    return steps.map((step) => (step.value ? `${step.name.padEnd(width)}   ${cut(step.value)}` : step.name));
+};
+// Asks which of `earlier` steps to go back to, the one before `current`
+// first, or none to stay at `current`: the index of the step, or -1. The
+// list ends with `current`, marked as where the user is, which stays, as
+// Enter does when typed and Esc does here.
+async function pickStep(io, earlier, current) {
+    const s = stylesOf(io);
+    if (!earlier.length) {
+        io.write(s.info('There is no earlier step.'));
+        return -1;
+    }
+    const stay = -1;
+    const all = stepLabels([...earlier, current]);
+    const labels = all.slice(0, -1);
+    // A step with no answer yet, such as the last, has the marker in the
+    // answers' column.
+    const nameWidth = Math.max(...[...earlier, current].map((step) => step.name.length));
+    const here = `${current.value ? all[all.length - 1] : current.name.padEnd(nameWidth)}   ${s.dim('← you are here')}`;
+    try {
+        if (!io.choices) {
+            const width = String(labels.length).length;
+            const numbered = labels.map((label, i) => `  ${String(i + 1).padStart(width)}. ${label}`);
+            io.write(`${s.pill('Go back')}${[...numbered, `  ${' '.repeat(width + 2)}${here}`].join('\n')}\n`);
+        }
+        return await askFor(io, `Go back to which step, 1 to ${earlier.length}? ${s.key('Enter')} stays at ${current.name}. `, (answer) => {
+            if (!answer)
+                return stay;
+            const n = Number(answer);
+            return Number.isInteger(n) && n >= 1 && n <= earlier.length ? n - 1 : { retry: `Answer a number from 1 to ${earlier.length}, or Enter to stay.` };
+        }, 'INPUT', (c) => c.one({
+            kind: 'INPUT',
+            message: 'Go back to which step?',
+            hint: 'The answers after it stay as they are.',
+            options: [...labels.map((label, i) => ({ label, value: i, answer: earlier[i].name })), { label: here, value: stay, answer: `${current.name}, where you are` }],
+            initial: earlier.length - 1,
+        }));
+    }
+    catch (err) {
+        if (err instanceof GoBack)
+            return stay;
+        throw err;
+    }
+}
+// What each token line part shows, for the row editor's note.
+const TOKEN_NOTES = {
+    time: 'the local time the turn ended',
+    req: 'API requests made since your last prompt, subagents included',
+    out: 'output tokens, and how many of them were thinking',
+    cache: 'prompt-cache writes and reads',
+    ctx: 'the context the last request carried, as a share of the window and as a bar',
+};
 async function askAll(userIo, { preview, tokenPreview = tokenPreviewer(), installed }) {
     const io = screenOf(userIo);
     const s = stylesOf(io);
+    const setUp = isSetUp(installed);
     let start = startFrom(installed);
     let status = { ...start.status };
     let tokenLine = start.tokenLine;
     let tokenSwitches = start.tokenSwitches;
-    // The preview of `choices` in the status line's own colours, or as plain
-    // text when the questions take no colour, under `heading` when one is given.
-    // With the token line on, its line with `withTokenSwitches` comes under it.
-    // The bars move with the clock when `moving` is set.
-    const previewOf = (choices, withTokenLine = tokenLine, heading = '', withTokenSwitches = tokenSwitches, moving = false) => {
-        const rendered = preview(switchesFor(choices), !io.color, moving);
-        const rows = io.color ? rendered : (0, statusline_1.stripOwnCodes)(rendered);
-        const token = withTokenLine ? `on, when each turn ends\n  ${tokenPreview(withBarStyle(withTokenSwitches, choices.barStyle))}` : 'off';
-        return `${heading}\n${rows.split('\n').map((row) => `  ${row}`).join('\n')}\nToken line: ${token}\n`;
+    // The answer to the first question when lines are set up, once given.
+    let startAnswer;
+    // Whether the defaults question is asked: on a first setup, and on a start
+    // over.
+    const fresh = () => !setUp || startAnswer === 'over';
+    // Each row's parts as last chosen, kept when the number of rows goes down,
+    // so a row added back in the same run comes back with them.
+    let lastRows = [];
+    // The rows that have the set of parts a row with no default of its own
+    // starts with, and that are not answered yet. Each is made again from the
+    // rows before it when it is asked, as those may have changed since.
+    const autoRows = new Set();
+    // Whether the step being asked is one of the status line's own, whose
+    // preview leaves the token line out.
+    let statusOnly = false;
+    // Whether the customise path's heading, and the token line's, are written
+    // yet.
+    let headed = false;
+    let tokenHeaded = false;
+    const order = io.choices?.order?.bind(io.choices);
+    const rowsEditor = io.choices?.rows?.bind(io.choices);
+    const gutter = (marked) => (marked ? `${s.select('❯')} ` : '  ');
+    // A preview line, after `gutter`, with its marked part, if it has one, in
+    // red-pink brackets.
+    const bracketed = (line, lead) => `${lead}${line.replace(statusline_1.MARK_START, s.select('[')).replace(statusline_1.MARK_END, s.select(']'))}`;
+    const previewOf = (choices, { tokenLine: on = tokenLine, heading = 'Status line', tokenSwitches: token = tokenSwitches, moving = false, mark, tokenMark } = {}) => {
+        // The status line leaves out a row with no parts, so a row's line is
+        // the one after the rows before it that have parts.
+        const lineOf = (row) => choices.rows.slice(0, row).filter((parts) => parts.length).length;
+        const part = mark?.part === undefined ? undefined : { row: lineOf(mark.row), part: mark.part };
+        const rendered = preview(switchesFor(choices), !io.color, moving, part);
+        const lines = (io.color ? rendered : (0, statusline_1.stripOwnCodes)(rendered)).split('\n');
+        // Each row, and a faint line in place of a row with no parts yet.
+        const rows = choices.rows.map((parts, i) => bracketed(mark?.row === i && mark.whole ? `${statusline_1.MARK_START}${lines[lineOf(i)] ?? ''}${statusline_1.MARK_END}` : parts.length ? (lines[lineOf(i)] ?? '') : s.dim(`row ${i + 1}: no parts yet`), gutter(mark?.row === i)));
+        const statusBlock = `\n${s.dim(heading)}\n\n${rows.join('\n')}\n`;
+        // The status line's own steps show the status line alone: the token
+        // line comes after it.
+        if (statusOnly)
+            return statusBlock;
+        let tokenBlock = s.dim('Token line: off');
+        if (on) {
+            const line = tokenPreview(withBarStyle(token, choices.barStyle), tokenMark?.part);
+            tokenBlock = `${s.dim('Token line, when each turn ends')}\n\n${bracketed(io.color ? line : (0, statusline_1.stripOwnCodes)(line), gutter(tokenMark !== undefined))}`;
+        }
+        return `${statusBlock}\n${tokenBlock}\n`;
     };
     // A function, so a front end that animates the preview can redraw it.
-    const show = (heading = '') => {
+    const show = (heading, parts = {}) => {
         const now = status;
         const line = tokenLine;
-        io.preview(() => previewOf(now, line, heading));
+        io.preview(() => previewOf(now, { tokenLine: line, heading, ...parts }));
     };
     // The preview with `change` made to the choices so far, for a choice whose
     // selection moves.
-    const previewWith = (change) => previewOf({ ...status, ...change });
+    const previewWith = (change, parts = {}) => previewOf({ ...status, ...change }, parts);
     // A value for every bar, and each bar's own, from `values`. Typed, a list
     // such as steps,ctx=rising, Enter for `fallback`. As a choice, a tab for
     // All and one for each of `bars`, or one plain choice for a single bar.
-    const askPerBar = (typed, message, values, fallback, bars, previewFor, { what, example, moving = false }) => {
+    const askPerBar = (typed, message, values, fallback, bars, previewFor, { what, example, moving = false, note }) => {
         const options = values.map((value) => ({ label: value, value }));
         return askFor(io, `${typed} ${hint(s, (0, statusline_1.perBarList)(fallback))} `, (answer) => readBarValues(answer, fallback, values, what, example), 'INPUT', async (c) => {
             if (bars.length === 1) {
-                const at = Math.max(0, values.indexOf(valueAt(fallback, bars[0])));
-                const value = await c.one({ kind: 'INPUT', message, options, initial: at, preview: (v) => previewFor({ all: v, each: {} }), moving });
-                return { all: value, each: {} };
+                // One bar: its choice alone, by its own name.
+                const one = { all: valueAt(fallback, bars[0]), each: [] };
+                const { all } = await c.each({
+                    message,
+                    targets: [],
+                    allLabel: bars[0],
+                    options,
+                    initial: one,
+                    note,
+                    rows: status.rows,
+                    preview: (v, _, at) => previewFor({ all: v, each: {} }, at),
+                    moving,
+                });
+                return { all, each: {} };
             }
             const initial = { all: fallback.all, each: bars.map((bar) => valueAt(fallback, bar)) };
-            const chosen = await c.each({ message, targets: bars, options, initial, preview: (all, each) => previewFor(barValuesFrom(all, bars, each)), moving });
+            const chosen = await c.each({
+                message,
+                targets: bars,
+                options,
+                initial,
+                note,
+                rows: status.rows,
+                preview: (all, each, at) => previewFor(barValuesFrom(all, bars, each), at),
+                moving,
+            });
             return barValuesFrom(chosen.all, bars, chosen.each);
         });
     };
-    // With lines set up: keep them, change them from where they are, or start
-    // over from the defaults, as a first setup does.
-    let fresh = !isSetUp(installed);
-    if (isSetUp(installed)) {
-        const heading = installed.statusLine ? 'The status line as set up now:\n' : 'The status line is not set up. With the defaults it shows:\n';
-        show(heading);
-        const defaults = startFrom(undefined);
-        const answer = await askFor(io, `Keep the current lines, change them, or start over from the defaults? keep, change or over ${hint(s, 'keep')} `, (typed) => START_OPTIONS.find((o) => o.words.includes(typed.trim().toLowerCase() || 'keep'))?.value ?? { retry: 'Answer keep, change or over.' }, 'INPUT', (c) => c.one({
-            kind: 'INPUT',
-            message: 'Keep the current lines, change them, or start over?',
-            options: START_OPTIONS,
-            initial: 0,
-            preview: (value) => value === 'over'
-                ? previewOf(defaults.status, defaults.tokenLine, 'The status line with the defaults:\n', defaults.tokenSwitches)
-                : previewOf(status, tokenLine, heading),
-        }));
-        if (answer === 'keep')
-            return {};
-        if (answer === 'over') {
-            start = defaults;
-            status = { ...defaults.status };
-            tokenLine = defaults.tokenLine;
-            tokenSwitches = defaults.tokenSwitches;
-            fresh = true;
-        }
-    }
-    if (fresh) {
-        show('The status line with the defaults:\n');
-        if (await confirm(io, 'Use the defaults: both lines, with the parts above?', true))
-            return { statusLine: [], tokenLine: [] };
-    }
-    // A row set up, else the default row there.
-    const rowAt = (i) => start.status.rows[i] ?? statusline_1.DEFAULT_ROWS[i];
+    // A row as chosen so far, else as set up, else the default row there.
+    // A row with none of those, such as a third row, gets a set of its own,
+    // from the parts no row before it shows.
+    const knownRow = (i) => [status.rows[i], lastRows[i], start.status.rows[i], statusline_1.DEFAULT_ROWS[i]].find((row) => row?.length);
+    const rowAt = (i) => knownRow(i) ?? extraRow(status.rows.slice(0, i).flat());
     const rowsFor = (n) => Array.from({ length: n }, (_, i) => rowAt(i) ?? []);
     // More rows than the wizard offers stay possible when that many are set up.
-    const rowsNow = start.status.rows.length;
-    const maxRows = Math.max(MAX_ROWS, rowsNow);
-    // The customise path starts below the questions, where the first preview
-    // and the question under it were: the next preview takes their place.
-    io.clear();
-    io.keep(`${s.pill('Status line')}The parts: ${statusline_1.PARTS.map(s.value).join(', ')}.\nREADME.md says what each shows. Press Enter to keep the value in brackets.\n`);
-    const counts = Array.from({ length: maxRows }, (_, i) => i + 1);
-    const count = await askFor(io, `How many status line rows, 1 to ${maxRows}? ${hint(s, rowsNow)} `, (answer) => {
-        const n = answer ? Number(answer) : rowsNow;
-        return Number.isInteger(n) && n >= 1 && n <= maxRows ? n : { retry: `Answer a number from 1 to ${maxRows}.` };
-    }, 'INPUT', oneOf('How many status line rows?', counts, rowsNow, (n) => previewWith({ rows: rowsFor(n) })));
-    status = { ...status, rows: rowsFor(count) };
-    show();
-    for (let i = 0; i < count; i++) {
-        const fallback = rowAt(i);
-        const brackets = fallback ? ` ${hint(s, fallback.join(','))}` : '';
-        const withRow = (parts) => status.rows.map((row, j) => (j === i ? parts : row));
-        const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${brackets} `, readParts(fallback, statusline_1.PARTS), 'INPUT', (c) => c.many({ message: `Row ${i + 1}: the parts`, options: statusline_1.PARTS, initial: fallback ?? [], preview: (ticked) => previewWith({ rows: withRow(ticked) }) }));
-        status = { ...status, rows: withRow(parts) };
-        show();
-    }
+    const maxRows = () => Math.max(MAX_ROWS, start.status.rows.length);
+    // The bars in classic style that a row shows: only those draw their cells.
+    const classicBars = () => statusline_1.BARS.filter((bar) => valueAt(status.barStyle, bar) === 'classic' && status.rows.some((row) => row.includes(bar)));
+    const yesNoWord = (yes) => (yes ? 'yes' : 'no');
+    // With lines set up: keep them, change them from where they are, or start
+    // over from the defaults, as a first setup does. A new answer starts from
+    // the lines it names; the same answer again keeps the choices made since.
+    const startStep = () => ({
+        id: 'start',
+        name: 'Keep, change or start over',
+        value: startAnswer === 'over' ? 'start over' : 'change',
+        run: async () => {
+            if (!isSetUp(installed))
+                return undefined;
+            const heading = installed.statusLine ? 'Status line, as set up now' : 'Status line: not set up. With the defaults, it shows';
+            const setUpStart = startFrom(installed);
+            const defaults = startFrom(undefined);
+            const asSetUp = () => previewOf(setUpStart.status, { tokenLine: setUpStart.tokenLine, heading, tokenSwitches: setUpStart.tokenSwitches });
+            io.preview(asSetUp);
+            const answer = await askFor(io, `Keep the current lines, change them, or start over from the defaults? keep, change or over ${hint(s, 'keep')} `, (typed) => START_OPTIONS.find((o) => o.words.includes(typed.trim().toLowerCase() || 'keep'))?.value ?? { retry: 'Answer keep, change or over.' }, 'INPUT', (c) => c.one({
+                kind: 'INPUT',
+                message: 'Keep the current lines, change them, or start over?',
+                options: START_OPTIONS,
+                initial: 0,
+                preview: (value) => value === 'over' ? previewOf(defaults.status, { tokenLine: defaults.tokenLine, heading: WITH_DEFAULTS, tokenSwitches: defaults.tokenSwitches }) : asSetUp(),
+            }));
+            if (answer === 'keep') {
+                const linesOf = (choices, on, token) => JSON.stringify([switchesFor(choices), on && withBarStyle(token, choices.barStyle)]);
+                const changed = startAnswer !== undefined && linesOf(status, tokenLine, tokenSwitches) !== linesOf(setUpStart.status, setUpStart.tokenLine, setUpStart.tokenSwitches);
+                if (changed)
+                    io.write(s.info('Kept the lines as set up. The changes made in this run are not written.'));
+                return { end: {} };
+            }
+            if (answer !== startAnswer) {
+                lastRows = [];
+                autoRows.clear();
+                start = answer === 'over' ? defaults : setUpStart;
+                status = { ...start.status };
+                tokenLine = start.tokenLine;
+                tokenSwitches = start.tokenSwitches;
+            }
+            startAnswer = answer;
+            return undefined;
+        },
+    });
+    const defaultsStep = () => ({
+        id: 'defaults',
+        name: 'Use the defaults',
+        value: 'no',
+        run: async () => {
+            const defaults = startFrom(undefined);
+            io.preview(() => previewOf(defaults.status, { tokenLine: defaults.tokenLine, heading: WITH_DEFAULTS, tokenSwitches: defaults.tokenSwitches }));
+            if (await confirm(io, 'Use the defaults: both lines, with the parts above?', true)) {
+                return { end: { statusLine: switchesFor(defaults.status), tokenLine: withBarStyle(defaults.tokenSwitches, defaults.status.barStyle) } };
+            }
+            return undefined;
+        },
+    });
+    // The number of rows. The customise path starts below the questions before
+    // it, where the first preview and the question under it were: the next
+    // preview takes their place.
+    const rowsStep = () => ({
+        id: 'rows',
+        name: 'Rows',
+        value: String(status.rows.length),
+        run: async () => {
+            if (headed)
+                show();
+            else {
+                io.clear();
+                // Info lines are faint, with each key bold.
+                const keys = io.choices
+                    ? `${s.dim('Press')} ${s.key('Enter')} ${s.dim('to keep an answer as it is, and')} ${s.key('Esc')} ${s.dim('to go back to an earlier step.')}`
+                    : `${s.dim('Press')} ${s.key('Enter')} ${s.dim('to keep the value in brackets, and answer')} ${s.key(BACK)} ${s.dim('to go back to an earlier step.')}`;
+                io.keep(`${s.pill('Status line')}${s.dim('The parts:')} ${statusline_1.PARTS.map(s.value).join(s.dim(', '))}${s.dim('.')}\n\n${s.dim('What each part shows:')} ${partsLink(io.color === true, s)}\n\n${keys}\n`);
+                headed = true;
+            }
+            const now = status.rows.length;
+            const most = maxRows();
+            const counts = Array.from({ length: most }, (_, i) => i + 1);
+            const count = await askFor(io, `How many status line rows, 1 to ${most}? ${hint(s, now)} `, (answer) => {
+                const n = answer ? Number(answer) : now;
+                return Number.isInteger(n) && n >= 1 && n <= most ? n : { retry: `Answer a number from 1 to ${most}.` };
+            }, 'INPUT', oneOf('How many status line rows?', counts, now, (n) => previewWith({ rows: rowsFor(n) })));
+            for (let i = status.rows.length; i < count; i++)
+                if (!knownRow(i))
+                    autoRows.add(i);
+            lastRows = rowsFor(Math.max(count, status.rows.length, lastRows.length));
+            status = { ...status, rows: rowsFor(count) };
+            return undefined;
+        },
+    });
+    const withRow = (i, parts) => status.rows.map((row, j) => (j === i ? parts : row));
+    // The parts of row `i`: in the row editor, where the front end has one,
+    // else as a list to tick, those of the row kept in their order, then each
+    // part ticked since.
+    const rowStep = (i) => ({
+        id: `row ${i}`,
+        name: `Row ${i + 1}`,
+        value: status.rows[i]?.join(', ') || 'no parts yet',
+        run: async () => {
+            show(undefined, { mark: { row: i } });
+            if (autoRows.has(i))
+                status = { ...status, rows: withRow(i, extraRow(status.rows.slice(0, i).flat()) ?? []) };
+            const fallback = status.rows[i]?.length ? status.rows[i] : undefined;
+            const brackets = fallback ? ` ${hint(s, fallback.join(','))}` : '';
+            // What `part` shows, and the other rows that show it, for the row
+            // editor's note.
+            const note = (part) => {
+                const others = status.rows.flatMap((row, j) => (j !== i && row.includes(part) ? [j + 1] : []));
+                return `${s.value(part)} ${s.dim(`${(0, statusline_1.describePart)(part)}.${others.length ? ` Also in row ${others.join(' and ')}.` : ''}`)}`;
+            };
+            const question = {
+                message: `Row ${i + 1}: the parts`,
+                options: statusline_1.PARTS,
+                initial: fallback ?? [],
+                note,
+                preview: (now, cursor) => previewWith({ rows: withRow(i, now) }, { mark: { row: i, part: cursor !== undefined && cursor < now.length ? cursor : undefined } }),
+            };
+            const parts = await askFor(io, `Row ${i + 1}: the parts, comma-separated${brackets} `, readParts(fallback, statusline_1.PARTS), 'INPUT', (c) => c.edit ? c.edit(question) : c.many(question));
+            status = { ...status, rows: withRow(i, parts) };
+            autoRows.delete(i);
+            return undefined;
+        },
+    });
+    // All the rows' parts in one question, for a front end that edits them
+    // together.
+    const partsStep = (ask) => ({
+        id: 'parts',
+        name: 'Parts',
+        value: status.rows.map((row) => row.join(', ')).join(' | '),
+        run: async () => {
+            show();
+            // A row with the set a row with no default starts with is made again
+            // from the rows before it, in turn.
+            for (let i = 0; i < status.rows.length; i++) {
+                if (autoRows.has(i))
+                    status = { ...status, rows: withRow(i, extraRow(status.rows.slice(0, i).flat()) ?? []) };
+            }
+            const rows = await ask({
+                message: 'The parts of each row',
+                options: statusline_1.PARTS,
+                initial: status.rows,
+                note: (part) => `${s.value(part)} ${s.dim(`${(0, statusline_1.describePart)(part)}.`)}`,
+                preview: (now, at) => previewWith({ rows: now }, at ? { mark: { row: at.row, part: at.part < now[at.row].length ? at.part : undefined } } : {}),
+            });
+            status = { ...status, rows };
+            autoRows.clear();
+            return undefined;
+        },
+    });
+    // The order of the rows, for a front end that asks for an order.
+    const rowsOrderStep = (ask) => ({
+        id: 'rows order',
+        name: 'Order of the rows',
+        value: '',
+        run: async () => {
+            show();
+            const rows = await ask({
+                message: 'Order of the rows',
+                options: status.rows.map((row) => ({ label: row.join(', '), value: row })),
+                describe: (now) => (now.every((at, i) => at === i) ? 'as they were' : `rows ${now.map((at) => at + 1).join(', ')}`),
+                preview: (now, cursor) => previewWith({ rows: now }, cursor === undefined ? {} : { mark: { row: cursor, whole: true } }),
+            });
+            status = { ...status, rows };
+            return undefined;
+        },
+    });
     // The bar style: for every bar, and for each bar on its own. The one
     // question whose preview moves: its bars sweep, to show how each style
     // fills and how it marks the pace.
-    const barStyle = await askPerBar(`Bar style: ${statusline_1.BAR_STYLES.join(', ')}, or a list such as steps,ctx=rising?`, 'Bar style?', statusline_1.BAR_STYLES, start.status.barStyle, statusline_1.BARS, (values) => previewOf({ ...status, barStyle: values }, tokenLine, '', tokenSwitches, true), { what: 'bar style', example: 'steps,ctx=rising', moving: true });
-    status = { ...status, barStyle };
-    show();
+    const barStyleStep = () => ({
+        id: 'bar style',
+        name: 'Bar style',
+        value: (0, statusline_1.perBarList)(status.barStyle),
+        run: async () => {
+            show();
+            const barStyle = await askPerBar(`Bar style: ${statusline_1.BAR_STYLES.join(', ')}, or a list such as steps,ctx=rising?`, 'Bar style?', statusline_1.BAR_STYLES, status.barStyle, statusline_1.BARS, (values, at) => previewWith({ barStyle: values }, { moving: true, ...(at ? { mark: at } : {}) }), {
+                what: 'bar style',
+                example: 'steps,ctx=rising',
+                moving: true,
+                note: (style) => `${s.value(style)} ${s.dim(`${statusline_1.BAR_STYLE_REGISTRY[style].description}.`)}`,
+            });
+            status = { ...status, barStyle };
+            return undefined;
+        },
+    });
     // Only classic takes a number of cells: each other style has its own. So
     // the question is for the classic bars only, and none asks none.
-    const classic = statusline_1.BARS.filter((bar) => valueAt(barStyle, bar) === 'classic');
-    if (classic.length) {
-        const segments = await askPerBar(`Cells per classic bar, ${SEGMENTS.join(' or ')}, or a list such as 5,ctx=10?`, 'Cells per classic bar?', SEGMENTS, start.status.segments, classic, (values) => previewWith({ segments: values }), { what: 'number of cells', example: '5,ctx=10' });
-        status = { ...status, segments };
-        show();
-    }
-    const theme = await askFor(io, `Theme: ${statusline_1.THEMES.join(', ')}? ${hint(s, start.status.theme)} `, (answer) => {
-        const name = answer.toLowerCase() || start.status.theme;
-        return statusline_1.THEMES.includes(name) ? name : { retry: `Unknown theme: ${answer}. Answer one of ${statusline_1.THEMES.join(', ')}.` };
-    }, 'INPUT', oneOf('Theme?', statusline_1.THEMES, start.status.theme, (name) => previewWith({ theme: name })));
-    status = { ...status, theme };
-    show();
-    status = {
-        ...status,
-        labels: await confirm(io, 'Labels in front of the values, such as ctx and 5h?', start.status.labels, (yes) => previewWith({ labels: yes })),
+    const cellsStep = () => ({
+        id: 'cells',
+        name: 'Cells per classic bar',
+        value: (0, statusline_1.perBarList)(status.segments),
+        run: async () => {
+            show();
+            const segments = await askPerBar(`Cells per classic bar, ${SEGMENTS.join(' or ')}, or a list such as 5,ctx=10?`, 'Cells per classic bar?', SEGMENTS, status.segments, classicBars(), (values, at) => previewWith({ segments: values }, at ? { mark: at } : {}), { what: 'number of cells', example: '5,ctx=10', note: (cells) => `${s.value(cells)} ${s.dim('cells in each classic bar.')}` });
+            status = { ...status, segments };
+            return undefined;
+        },
+    });
+    const themeStep = () => ({
+        id: 'theme',
+        name: 'Theme',
+        value: status.theme,
+        run: async () => {
+            show();
+            const fallback = status.theme;
+            const theme = await askFor(io, `Theme: ${statusline_1.THEMES.join(', ')}? ${hint(s, fallback)} `, (answer) => {
+                const name = answer.toLowerCase() || fallback;
+                return statusline_1.THEMES.includes(name) ? name : { retry: `Unknown theme: ${answer}. Answer one of ${statusline_1.THEMES.join(', ')}.` };
+            }, 'INPUT', oneOf('Theme?', statusline_1.THEMES, fallback, (name) => previewWith({ theme: name })));
+            status = { ...status, theme };
+            return undefined;
+        },
+    });
+    const labelsStep = () => ({
+        id: 'labels',
+        name: 'Labels',
+        value: yesNoWord(status.labels),
+        run: async () => {
+            show();
+            status = {
+                ...status,
+                labels: await confirm(io, 'Labels in front of the values, such as ctx and 5h?', status.labels, (yes) => previewWith({ labels: yes })),
+            };
+            return undefined;
+        },
+    });
+    const tokenLineStep = () => ({
+        id: 'token line',
+        name: 'Token line',
+        value: tokenLine ? 'on' : 'off',
+        run: async () => {
+            show();
+            tokenLine = await confirm(io, 'Add the token line, shown when each turn ends?', tokenLine, (yes) => previewOf(status, { tokenLine: yes }));
+            return undefined;
+        },
+    });
+    // The token line reads the context window the status line saves, so there
+    // is no question for it. A --window set up stays as it is.
+    const tokenPartsStep = () => ({
+        id: 'token parts',
+        name: 'Token line parts',
+        value: tokenPartsOf(tokenSwitches).join(', '),
+        run: async () => {
+            if (!tokenHeaded) {
+                io.clear();
+                io.keep(s.pill('Token line'));
+                tokenHeaded = true;
+            }
+            show(undefined, { tokenMark: {} });
+            const fallback = tokenPartsOf(tokenSwitches);
+            const question = `Token line parts: all, req,out,ctx, or your own list from ${tokenline_1.PARTS.map(s.value).join(', ')}? ${hint(s, fallback.join(','))} `;
+            const edit = {
+                message: 'Token line parts',
+                options: tokenline_1.PARTS,
+                initial: fallback,
+                note: (part) => `${s.value(part)} ${s.dim(`${TOKEN_NOTES[part]}.`)}`,
+                preview: (now, cursor) => previewOf(status, {
+                    tokenLine: true,
+                    tokenSwitches: tokenSwitchesFor(now, start.tokenSwitches),
+                    tokenMark: { part: cursor !== undefined && cursor < now.length ? cursor : undefined },
+                }),
+            };
+            const parts = await askFor(io, question, readTokenParts(fallback), 'INPUT', (c) => (c.edit ? c.edit(edit) : c.many(edit)));
+            tokenSwitches = tokenSwitchesFor(parts, start.tokenSwitches);
+            return undefined;
+        },
+    });
+    const writeStep = () => ({
+        id: 'write',
+        name: 'Write these choices',
+        value: '',
+        run: async () => {
+            show();
+            if (!(await confirm(io, 'Write these choices?', true)))
+                return { end: null };
+            return { end: { statusLine: switchesFor(status), tokenLine: tokenLine ? withBarStyle(tokenSwitches, status.barStyle) : null } };
+        },
+    });
+    // The steps as the answers so far make them: a row step for each row, the
+    // rows' order step where there are two or more rows and the front end asks
+    // for an order, and the cells step only while a bar is classic.
+    const steps = () => {
+        const rows = status.rows.length;
+        return [
+            ...(setUp ? [startStep()] : []),
+            ...(fresh() ? [defaultsStep()] : []),
+            rowsStep(),
+            ...(rowsEditor ? [partsStep(rowsEditor)] : Array.from({ length: rows }, (_, i) => rowStep(i))),
+            ...(order && rows > 1 ? [rowsOrderStep(order)] : []),
+            barStyleStep(),
+            ...(classicBars().length ? [cellsStep()] : []),
+            themeStep(),
+            labelsStep(),
+            tokenLineStep(),
+            ...(tokenLine ? [tokenPartsStep()] : []),
+            writeStep(),
+        ];
     };
-    show();
-    tokenLine = await confirm(io, 'Add the token line, shown when each turn ends?', start.tokenLine, (yes) => previewOf(status, yes));
-    show();
-    if (tokenLine) {
-        io.keep(s.pill('Token line'));
-        const fallback = tokenPartsOf(start.tokenSwitches);
-        const question = `Token line parts: all, req,out,ctx, or your own list from ${tokenline_1.PARTS.map(s.value).join(', ')}? ${hint(s, fallback.join(','))} `;
-        const parts = await askFor(io, question, readTokenParts(fallback), 'INPUT', (c) => c.many({
-            message: 'Token line parts',
-            options: tokenline_1.PARTS,
-            initial: fallback,
-            preview: (ticked) => previewOf(status, true, '', tokenSwitchesFor(ticked, start.tokenSwitches)),
-        }));
-        // The token line reads the context window the status line saves, so
-        // there is no question for it. A --window set up stays as it is.
-        tokenSwitches = tokenSwitchesFor(parts, start.tokenSwitches);
-        show();
+    // Each step in turn. At a step, the user can go back to any step before
+    // it: the steps after it stay answered, and are asked again in turn.
+    let at = 0;
+    for (;;) {
+        const list = steps();
+        const step = list[at];
+        statusOnly = STATUS_STEPS.test(step.id);
+        try {
+            const done = await step.run();
+            if (done)
+                return done.end;
+            at = steps().findIndex((s) => s.id === step.id) + 1;
+        }
+        catch (err) {
+            if (!(err instanceof GoBack))
+                throw err;
+            const to = await pickStep(io, list.slice(0, at), step);
+            if (to >= 0)
+                at = to;
+        }
     }
-    if (!(await confirm(io, 'Write these choices?', true)))
-        return null;
-    return { statusLine: switchesFor(status), tokenLine: tokenLine ? withBarStyle(tokenSwitches, status.barStyle) : null };
 }
 // The token line's sample run since the last prompt: four requests, the last
 // at 43% of a 200k context, as in the status line's sample.
@@ -488,12 +874,17 @@ const SAMPLE_WINDOW = 200000;
 // The token line's preview: the sample run's line with the given switches,
 // as the token line reads them.
 function tokenPreviewer(nowMs) {
-    return (switches) => {
+    return (switches, mark) => {
         const { show, segments, barStyle, window } = (0, tokenline_1.parseArgs)([...switches]);
-        return (0, tokenline_1.summarize)(SAMPLE_RUN, { now: nowMs === undefined ? new Date() : new Date(nowMs), show, segments, barStyle, window, savedWindow: SAMPLE_WINDOW }) ?? '';
+        return (0, tokenline_1.summarize)(SAMPLE_RUN, { now: nowMs === undefined ? new Date() : new Date(nowMs), show, segments, barStyle, window, savedWindow: SAMPLE_WINDOW, mark }) ?? '';
     };
 }
 const REPO = 'jv-k/claude-gauge';
+// The README's table of parts, on the repo's page.
+const PARTS_URL = `https://github.com/${REPO}#what-the-lines-show`;
+// The link to the table of parts: the address in full, so any terminal shows
+// where it goes, and in colour a link a terminal can open (OSC 8) as well.
+const partsLink = (color, s) => (color ? `\x1b]8;;${PARTS_URL}\x07${s.value(PARTS_URL)}\x1b]8;;\x07` : PARTS_URL);
 // The end of setup: with gh at hand, offers to star the repo, and stars it
 // on a yes or Enter. Without gh it says nothing. The end of the input is a no,
 // and Ctrl+C stops setup, as at any other question.
@@ -507,7 +898,7 @@ async function offerStar(io, { hasGh, star }) {
     catch (err) {
         if (err instanceof Interrupted)
             throw new Interrupted('Stopped at Ctrl+C. The settings are written, and the repo is not starred.');
-        if (err instanceof EndOfAnswers)
+        if (err instanceof EndOfAnswers || err instanceof GoBack)
             return;
         throw err;
     }
@@ -688,7 +1079,7 @@ const levelAt = (nowMs, period, phase) => {
 };
 // The memory with the ram bar moved to where it is at `nowMs` in the
 // preview's animation, as swept moves the others.
-const sweptMemory = ({ total }, nowMs) => ({ used: (total * levelAt(nowMs, 7000, 0.8)) / 100, total });
+const sweptMemory = ({ total }, nowMs) => ({ used: (total * levelAt(nowMs, 28000, 0.8)) / 100, total });
 // The payload with the context, 5h and 7d bars moved to where they are at
 // `nowMs` in the preview's animation. Each climbs and falls on its own
 // period, and "now" moves through each window, so the pace marker walks
@@ -698,7 +1089,7 @@ function swept(payload, nowMs) {
     const pct = (period, phase) => levelAt(nowMs, period, phase);
     const resetsAt = (seconds, period, phase) => Math.floor(nowMs / 1000 + seconds * (0.92 - 0.84 * wave(period, phase)));
     // Without the token counts, ctx counts its tokens from the percentage.
-    const context = { context_window_size: 200000, ...payload.context_window, used_percentage: pct(8000, 0.5) };
+    const context = { context_window_size: 200000, ...payload.context_window, used_percentage: pct(32000, 0.5) };
     delete context.current_usage;
     delete context.total_input_tokens;
     return {
@@ -706,8 +1097,8 @@ function swept(payload, nowMs) {
         context_window: context,
         rate_limits: {
             ...payload.rate_limits,
-            five_hour: { used_percentage: pct(6000, 0), resets_at: resetsAt(5 * 3600, 7000, 0.15) },
-            seven_day: { used_percentage: pct(9000, 0.3), resets_at: resetsAt(7 * 86400, 11000, 0.6) },
+            five_hour: { used_percentage: pct(24000, 0), resets_at: resetsAt(5 * 3600, 28000, 0.15) },
+            seven_day: { used_percentage: pct(36000, 0.3), resets_at: resetsAt(7 * 86400, 44000, 0.6) },
         },
     };
 }
@@ -736,7 +1127,7 @@ function previewer(payload, options = {}) {
     const branchOf = keep(options.branchOf ?? statusline_1.headBranch);
     const memoryOf = keep(options.memoryOf ?? statusline_1.readMemory);
     const setupOf = keep(options.setupOf ?? ((cwd) => (0, statusline_1.readSetup)(cwd, { env: options.env ?? process.env })));
-    return (switches, plain = false, moving = false) => {
+    return (switches, plain = false, moving = false, mark) => {
         const nowMs = options.nowMs ?? Date.now();
         const config = (0, statusline_1.parseArgs)([...switches]);
         const shown = new Set((config.rows ?? statusline_1.DEFAULT_ROWS).flat());
@@ -748,6 +1139,7 @@ function previewer(payload, options = {}) {
             ...renderOptions,
             nowMs,
             plain,
+            mark,
             // Any command will do, as the preview runs none: the part shows the
             // sample's output.
             config: { ...config, text: config.text || SAMPLE_TEXT, command: config.command || 'sample' },

@@ -204,7 +204,7 @@ function tally(records) {
 }
 // Builds the line from parsed transcript records; null when the run made no
 // API request yet, or when none of the chosen parts has anything to show.
-function summarize(records, { now = new Date(), window, savedWindow, segments, barStyle, show = PARTS } = {}) {
+function summarize(records, { now = new Date(), window, savedWindow, segments, barStyle, show = PARTS, mark } = {}) {
     let start = 0;
     for (let i = records.length - 1; i >= 0; i--) {
         if (isHumanPrompt(records[i])) {
@@ -232,7 +232,10 @@ function summarize(records, { now = new Date(), window, savedWindow, segments, b
     // those render as nothing, like a part with nothing to show.
     const anyPart = build;
     // The same separator as the status line.
-    const line = show.map((part) => anyPart[part]?.() ?? '').filter(Boolean).join(' │ ');
+    // The part at `mark`, for the setup preview, between the two control
+    // characters the status line marks a part with (see its markedPart).
+    const marked = (text, i) => (i === mark ? `\x01${text || show[i]}\x02` : text);
+    const line = show.map((part, i) => marked(anyPart[part]?.() ?? '', i)).filter(Boolean).join(' │ ');
     return line || null;
 }
 function readRecords(transcriptPath) {

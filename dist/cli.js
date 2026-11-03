@@ -33,12 +33,17 @@ const statusline_1 = require("./statusline");
 const wordmark_1 = require("./wordmark");
 const styles_1 = require("./styles");
 const errors_1 = require("./errors");
-// The usage, after its heading. Without colour the heading is `Usage: ` on
-// the first line; in colour it is a USAGE pill on a line of its own.
+// The project's page.
+const REPO_URL = 'https://github.com/jv-k/claude-gauge';
+// The usage: the command's form, then each section, a heading ending in a
+// colon and a row for each command or switch, its name and what it does
+// two or more spaces apart. usage() draws it to fit the terminal; the
+// readme-sync test reads the switches from this text.
 const USAGE = `claude-gauge <setup | configure | uninstall | update> [switches]
 
-  setup        add the status line and the token line to Claude Code's settings
-  configure    change the switches of a bar that setup added, or take it out
+Commands:
+  setup        add the status line and the token line to Claude Code's settings; with no line switches, it asks which lines and parts you want, and shows the status line after each answer
+  configure    change the switches of a line that setup added, add the missing one, or take one out
   uninstall    take claude-gauge out, and put back the status line it replaced
   update       update claude-gauge with the tool that installed it
 
@@ -48,25 +53,83 @@ Switches for setup and configure:
   --token-line <switches>    add the token line, run with these switches ("" for none)
   --no-token-line            leave the token line out
   --replace                  replace a status line that is not claude-gauge's
-  --yes                      setup only: add each bar not chosen above, with no switches
+  --yes                      setup only: add each line not chosen above, with the defaults (--bar-style dots)
 
 Switches for update:
   --dry-run                  print the commands that update would run, and run nothing
 
-With none of the bar switches above, setup and configure ask which bars and
-parts you want, and show the status line after each answer.
-
-The bars' switches are in README.md, under Options. The settings file is
-$CLAUDE_CONFIG_DIR/settings.json, else ~/.claude/settings.json.
+Other switches:
+  -h, --help                 print this help
+  -v, --version              print the version of claude-gauge
 `;
-// The usage, under the wordmark and a blank line, for `stream`. In colour a
-// USAGE pill heads it, as a pill heads each command's result. Without colour
-// the pill would be the bare word USAGE, so the plain usage keeps its
-// `Usage: ` line. Scripts and the plugin's slash commands run the commands
-// with switches, and those print no wordmark.
+// The usage's form and its sections, read from USAGE.
+function usageParts() {
+    const [form, ...rest] = USAGE.trimEnd().split('\n');
+    const sections = rest
+        .join('\n')
+        .split(/\n\s*\n/)
+        .filter((block) => block.trim())
+        .map((block) => {
+        const [heading, ...rows] = block.trim().split('\n');
+        return {
+            heading: heading.replace(/:$/, ''),
+            rows: rows.map((row) => {
+                const [, name, about] = /^\s*(\S.*?)\s{2,}(.*)$/.exec(row) ?? ['', row.trim(), ''];
+                return { name, about };
+            }),
+        };
+    });
+    return { form, sections };
+}
+// `text` in lines of at most `width` characters, broken at spaces.
+function wrapWords(text, width) {
+    const lines = [];
+    let line = '';
+    for (const word of text.split(' ')) {
+        if (line && line.length + 1 + word.length > width) {
+            lines.push(line);
+            line = word;
+        }
+        else
+            line = line ? `${line} ${word}` : word;
+    }
+    return [...lines, line];
+}
+// The usage for `stream`: the wordmark, the version in a pill and the
+// project's page under it, then the form and each section. Names are green,
+// with a placeholder such as <switches> faint. The names take a column as
+// wide as the longest, and what each does wraps in the column after it, to
+// the terminal's width; on a terminal too narrow for two columns, what it
+// does goes under its name. Without colour, each heading is a line ending in
+// a colon, and the form follows `Usage: `. Scripts and the plugin's slash
+// commands run the commands with switches, and those print no wordmark.
 const usage = (stream) => {
     const color = (0, wordmark_1.colorEnabled)(stream);
-    return (0, wordmark_1.wordmark)(color) + (color ? (0, styles_1.styles)(color).pill('Usage') : '\nUsage: ') + USAGE;
+    const s = (0, styles_1.styles)(color);
+    const { form, sections } = usageParts();
+    const width = Math.max(40, (stream.columns || Number(process.env.COLUMNS) || 80) - 1);
+    // A name in green, with each placeholder, <switches> or [switches], faint.
+    const named = (name) => name
+        .split(/(<[^>]+>|\[[^\]]+\])/)
+        .filter(Boolean)
+        .map((piece) => (/^[<[]/.test(piece) ? s.dim(piece) : s.value(piece)))
+        .join('');
+    // A section's rows, its names in a column as wide as its longest.
+    const rowsOf = (rows) => {
+        const column = 2 + Math.max(...rows.map((row) => row.name.length)) + 3;
+        const twoColumns = width - column >= 24;
+        return rows.flatMap(({ name, about }) => {
+            if (!twoColumns)
+                return [`  ${named(name)}`, ...wrapWords(about, width - 6).map((line) => `      ${line}`)];
+            const [first, ...more] = wrapWords(about, width - column);
+            return [`  ${named(name)}${' '.repeat(column - 2 - name.length)}${first}`, ...more.map((line) => `${' '.repeat(column)}${line}`)];
+        });
+    };
+    const page = color ? `\x1b]8;;${REPO_URL}\x07${s.value(REPO_URL)}\x1b]8;;\x07` : REPO_URL;
+    const header = `${s.tag(`v${version()}`)}  ${page}\n`;
+    const heading = (text) => (color ? s.pill(text) : `\n${text}:\n`);
+    const body = sections.map((section) => `${heading(section.heading)}${rowsOf(section.rows).join('\n')}\n`).join('');
+    return `${(0, wordmark_1.wordmark)(color)}${header}${color ? s.pill('Usage') : '\nUsage: '}${named(form)}\n${body}`;
 };
 // A mistake in the command line: exit 2, with the usage. A word that
 // claude-gauge does not know goes in plain, and a known command or switch as
@@ -91,12 +154,13 @@ const SWITCHES = [
     { names: ['--yes', '-y'], commands: ['setup'], apply: (args) => { args.yes = true; } },
     { names: ['--dry-run'], commands: ['update'], apply: (args) => { args.dryRun = true; } },
     { names: ['--help', '-h'], commands: [...COMMANDS], apply: (args) => { args.help = true; } },
+    { names: ['--version', '-v'], commands: [...COMMANDS], apply: (args) => { args.version = true; } },
 ];
 // Unlike the two bars, which ignore what they do not know so that a typo
 // never blanks the status line, the command refuses an unknown word: it
 // writes the user's settings, and a typo there should stop it.
 function parseArgs(argv) {
-    const args = { help: false, replace: false, yes: false, dryRun: false };
+    const args = { help: false, version: false, replace: false, yes: false, dryRun: false };
     const seen = [];
     for (let i = 0; i < argv.length; i++) {
         const [name, inline] = argv[i].split(/=(.*)/s);
@@ -327,7 +391,7 @@ async function setup(args) {
     const chosen = args.statusLine !== undefined || args.tokenLine !== undefined;
     if (!chosen && !args.yes)
         return interactive('setup', args.replace);
-    const orDefault = (v) => (v === undefined && args.yes ? [] : v);
+    const orDefault = (v) => (v === undefined && args.yes ? [...wizard_1.DEFAULT_SWITCHES] : v);
     apply({ statusLine: orDefault(args.statusLine), tokenLine: orDefault(args.tokenLine) }, args.replace, 'Setup');
 }
 async function configure(args) {
@@ -488,6 +552,10 @@ async function main(argv) {
         const args = parseArgs(argv);
         if (args.help) {
             process.stdout.write(usage(process.stdout));
+            return 0;
+        }
+        if (args.version) {
+            process.stdout.write(`claude-gauge ${version()}\n`);
             return 0;
         }
         if (!args.command)
