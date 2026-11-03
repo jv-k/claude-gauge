@@ -267,6 +267,8 @@ The `claude-gauge` command has four commands:
 | `--no-token-line` | Leaves the token line out, or takes it out. |
 | `--replace` | Replaces a status line that is not claude-gauge's. Without it, a command with line switches stops rather than replace it. |
 | `--yes` | With `setup` only: adds each line that the switches above do not name, with the defaults: `--bar-style dots`. |
+| `--version` | Prints the version of claude-gauge, as `claude-gauge <version>`. `-v` is the short name. |
+| `--help` | Prints the commands and switches, under the wordmark, the version and the project's page. `-h` is the short name, and `claude-gauge help` does the same. |
 | `--dry-run` | With `update` only: prints the commands that `update` would run, and runs nothing. |
 
 For example, both lines with the defaults, and then 10-cell bars on the status line:

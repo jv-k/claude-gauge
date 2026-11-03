@@ -341,10 +341,16 @@ const WORDMARK = [
   '┗━╸┗━╸╹ ╹┗━┛╺┻┛┗━╸   ┗━┛╹ ╹┗━┛┗━┛┗━╸',
 ];
 
-test('--help starts with the wordmark, then a blank line, then the usage', () => {
+// The line under the wordmark in the usage: the version, then the
+// project's page.
+const VERSION = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+const REPO_URL = 'https://github.com/jv-k/claude-gauge';
+const HEADER = `v${VERSION}  ${REPO_URL}`;
+
+test('--help starts with the wordmark, then the version and the project page, a blank line, and the usage', () => {
   const r = runCli(configFolder(), ['--help'], { env: { NO_COLOR: '1' } });
   ok(r);
-  assert.ok(r.stdout.startsWith(`${WORDMARK.join('\n')}\n\nUsage: claude-gauge <setup | configure`), r.stdout);
+  assert.ok(r.stdout.startsWith(`${WORDMARK.join('\n')}\n${HEADER}\n\nUsage: claude-gauge <setup | configure`), r.stdout);
 });
 
 // The wordmark in colour: a 24-bit colour code in front of each cell, from a
@@ -375,7 +381,7 @@ test('FORCE_COLOR or CLICOLOR_FORCE draws the wordmark in a diagonal gradient, w
 });
 
 test('the wordmark is plain text off a terminal, with a FORCE_COLOR of 0, or with NO_COLOR, which beats FORCE_COLOR', () => {
-  const usage = `${WORDMARK.join('\n')}\n\nUsage: claude-gauge `;
+  const usage = `${WORDMARK.join('\n')}\n${HEADER}\n\nUsage: claude-gauge `;
   for (const colour of [{}, { FORCE_COLOR: '0' }, { CLICOLOR_FORCE: '0' }, { NO_COLOR: '1', FORCE_COLOR: '1' }]) {
     const r = runCli(configFolder(), ['--help'], { env: colour });
     ok(r);
@@ -425,7 +431,36 @@ const ERROR = icon(SGR.error, '✖');
 
 // In colour the usage sits under a USAGE pill, as a command's result sits
 // under its own, so its first line drops the Usage: that the pill now says.
-const USAGE_PILL = `${GRADIENT.join('\n')}\n\n${pill('USAGE')}\nclaude-gauge <setup | configure | uninstall | update> [switches]\n`;
+// Under the wordmark, the version in a pill and the page as a link; the
+// usage's names are green, and its placeholders dim.
+const dim = (text) => `${SGR.dim}${text}${SGR.reset}`;
+const HEADER_COLOUR = `${pill(`v${VERSION}`)}  \x1b]8;;${REPO_URL}\x07${green(REPO_URL)}\x1b]8;;\x07`;
+const FORM_COLOUR = `${green('claude-gauge ')}${dim('<setup | configure | uninstall | update>')}${green(' ')}${dim('[switches]')}`;
+const USAGE_PILL = `${GRADIENT.join('\n')}\n${HEADER_COLOUR}\n\n${pill('USAGE')}\n${FORM_COLOUR}\n`;
+
+test('--version or -v prints the version alone', () => {
+  const dir = configFolder();
+  for (const flag of ['--version', '-v']) {
+    const r = runCli(dir, [flag]);
+    ok(r);
+    assert.equal(r.stdout, `claude-gauge ${VERSION}\n`, flag);
+  }
+});
+
+test('--help puts each section under its heading, with its names in a column and what they do wrapped to the terminal in the next', () => {
+  const dir = configFolder();
+  const wide = runCli(dir, ['--help'], { env: { NO_COLOR: '1', COLUMNS: '120' } });
+  ok(wide);
+  assert.match(wide.stdout, /\nCommands:\n {2}setup {7}add the status line/);
+  assert.match(wide.stdout, /\nSwitches for update:\n {2}--dry-run {3}print the commands/, 'a column as wide as the section needs');
+  assert.match(wide.stdout, /\nOther switches:\n {2}-h, --help {6}print this help\n {2}-v, --version {3}print the version of claude-gauge\n$/);
+  assert.doesNotMatch(wide.stdout, /With none of the bar switches|under Options/);
+  const narrow = runCli(dir, ['--help'], { env: { NO_COLOR: '1', COLUMNS: '50' } });
+  ok(narrow);
+  const usage = narrow.stdout.slice(narrow.stdout.indexOf('Commands:'));
+  for (const line of usage.split('\n')) assert.ok(line.length <= 49, `${JSON.stringify(line)} fits in 50 columns`);
+  assert.match(usage, /\n {2}setup {7}add the status line and the token\n {14}line to Claude Code's settings;/, 'what a command does wraps in its own column');
+});
 
 test('--help in colour puts a USAGE pill between the wordmark and the usage', () => {
   for (const colour of [{ FORCE_COLOR: '1' }, { CLICOLOR_FORCE: '1' }]) {
@@ -445,14 +480,14 @@ test('a bare claude-gauge in colour prints the USAGE pill over the usage, on std
 test('a bare claude-gauge prints the wordmark and the usage, on stderr, and exits 2', () => {
   const bare = runCli(configFolder(), [], { env: { NO_COLOR: '1' } });
   assert.equal(bare.status, 2);
-  assert.ok(bare.stderr.startsWith(`${WORDMARK.join('\n')}\n\nUsage: claude-gauge <setup | configure`), bare.stderr);
+  assert.ok(bare.stderr.startsWith(`${WORDMARK.join('\n')}\n${HEADER}\n\nUsage: claude-gauge <setup | configure`), bare.stderr);
   assert.equal(bare.stdout, '');
 });
 
 test('the usage after a mistake starts with the wordmark, coloured by the gate on stderr', () => {
   const noCommand = runCli(configFolder(), ['--replace'], { env: { NO_COLOR: '1' } });
   assert.equal(noCommand.status, 2);
-  assert.ok(noCommand.stderr.startsWith(`\nERROR\n✖ Name a command.\n\n${WORDMARK.join('\n')}\n\nUsage: claude-gauge `), noCommand.stderr);
+  assert.ok(noCommand.stderr.startsWith(`\nERROR\n✖ Name a command.\n\n${WORDMARK.join('\n')}\n${HEADER}\n\nUsage: claude-gauge `), noCommand.stderr);
   const unknown = runCli(configFolder(), ['launch'], { env: { FORCE_COLOR: '1' } });
   assert.equal(unknown.status, 2);
   assert.ok(unknown.stderr.startsWith(`\n${pill('ERROR', SGR.errorPill)}\n${ERROR}Unknown command: launch\n\n${USAGE_PILL}`), JSON.stringify(unknown.stderr.slice(0, 400)));

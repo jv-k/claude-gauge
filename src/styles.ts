@@ -38,6 +38,9 @@ interface Styles {
   // A blank line, then `text` as a pill in capitals on a line of its own.
   // Without colour the pill is the word alone, such as SETUP.
   pill(text: string, tone?: Tone): string;
+  // `text` as a pill inside a line, as it is written, such as the version.
+  // Without colour, the text alone.
+  tag(text: string, tone?: Tone): string;
   // Status lines, each ending in a newline: a green ✔ for success, a yellow !
   // for a warning, a red ✖ for an error and a cyan ℹ for information.
   ok(text: string): string;
@@ -69,6 +72,7 @@ function styles(color: boolean): Styles {
       const label = text.toUpperCase();
       return `\n${color ? `${PILLS[tone]} ${label} ${RESET}` : label}\n`;
     },
+    tag: (text, tone = 'section') => (color ? `${PILLS[tone]} ${text} ${RESET}` : text),
     ok: status(GREEN, '✔'),
     warn: status(YELLOW, '!'),
     error: status(RED, '✖'),
