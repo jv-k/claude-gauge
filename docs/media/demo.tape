@@ -28,62 +28,117 @@ Sleep 500ms
 Type "claude-gauge setup"
 Enter
 
-# The first frame shows the command, the wordmark and the defaults.
+# The first frame shows the command, the wordmark and the owner's setup,
+# which scripts/media.sh writes in place before the recording.
 # VHS reads text only from the top of the scrollback. So this wait, before
 # the wizard scrolls, is the only wait that looks for text. The steps after
 # it wait with sleeps. The wizard keeps a key typed before its question is
 # ready.
-Wait+Screen@10s /Use the defaults/
+Wait+Screen@10s /Keep the current lines/
 Show
 Sleep 3s
 
-# Take the customise path.
+# Change them.
 Down
 Sleep 900ms
 Enter
 
-# Rows: move to 3, then back to 2, and accept 2.
-Sleep 1.2s
-Down
-Sleep 900ms
-Up
-Sleep 900ms
-Enter
-
-# Row 1 as it is.
+# Rows: keep 2.
 Sleep 1.2s
 Enter
 
-# Row 2: untick time, and watch the preview redraw. The list starts at ctx,
-# and time is the fourth part in it. A new part before time moves it.
-Sleep 1.2s
-Down
-Sleep 400ms
-Down
-Sleep 400ms
-Down
-Sleep 600ms
+# The row editor shows both rows. In row 1, move ram to the front with
+# Space, the left arrow and Space. VHS cannot type Shift with an arrow key,
+# which does the same in one key.
+Sleep 1.5s
+Right 3
+Sleep 900ms
 Space
+Sleep 700ms
+Left
+Sleep 500ms
+Left
+Sleep 500ms
+Left
+Sleep 900ms
+Space
+Sleep 1s
+
+# Go to the add slot, +, and give it a part with the down arrow: time, then
+# the next parts not in the row, up to cost.
+Right 4
+Sleep 900ms
+Down
+Sleep 1.2s
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+Down
+Sleep 1.5s
+
+# Move cost down into row 2: Space picks it up, the down arrow moves it,
+# Space drops it.
+Space
+Sleep 700ms
+Down
+Sleep 1.2s
+Space
+Sleep 1s
+
+# In row 2, remove today, the last part, with Backspace.
+Right 6
+Sleep 900ms
+Backspace
 Sleep 1.5s
 Enter
 
-# A larger bar.
+# The order of the rows, and the bar styles, as they are.
+Sleep 1.2s
+Enter
+Sleep 1.2s
+Enter
+
+# Pastel, after high-contrast.
 Sleep 1.2s
 Down
 Sleep 1.5s
 Enter
 
-# Look through the themes, and take pastel, the fourth theme.
-Sleep 1.2s
-Down
-Sleep 1.2s
-Down
-Sleep 1.2s
-Down
-Sleep 1.5s
+# Keep the labels off, the token line on, and its parts.
+Sleep 1s
+Enter
+Sleep 1s
+Enter
+Sleep 1s
 Enter
 
-# Keep the labels and the token line, with its default parts.
+# At the last question, Esc lists the steps so far. Go back to the theme,
+# and take high-contrast again.
+Sleep 1.2s
+Escape
+Sleep 1.5s
+Up
+Sleep 500ms
+Up
+Sleep 500ms
+Up
+Sleep 1.2s
+Enter
+Sleep 1.2s
+Up
+Sleep 1.2s
+Enter
+
+# The answers after it stay: Enter at each.
 Sleep 1s
 Enter
 Sleep 1s
