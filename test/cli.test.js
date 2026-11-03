@@ -336,9 +336,9 @@ test('usage errors exit 2 and say what to run', () => {
 // The claude-gauge wordmark: figlet's "future" font, three rows of one 3-cell
 // chunk per character. The middle row ends in a space.
 const WORDMARK = [
-  '┏━╸╻  ┏━┓╻ ╻╺┳┓┏━╸   ┏━╸┏━┓╻ ╻┏━╸┏━╸',
-  '┃  ┃  ┣━┫┃ ┃ ┃┃┣╸ ╺━╸┃╺┓┣━┫┃ ┃┃╺┓┣╸ ',
-  '┗━╸┗━╸╹ ╹┗━┛╺┻┛┗━╸   ┗━┛╹ ╹┗━┛┗━┛┗━╸',
+  '┏━╸╻  ┏━┓╻ ╻┳━┓┏━╸   ┏━╸┏━┓╻ ╻┏━╸┏━╸',
+  '┃  ┃  ┣━┫┃ ┃┃ ┃┣╸ ╺━╸┃╺┓┣━┫┃ ┃┃╺┓┣╸ ',
+  '┗━╸┗━╸╹ ╹┗━┛┻━┛┗━╸   ┗━┛╹ ╹┗━┛┗━┛┗━╸',
 ];
 
 // The line under the wordmark in the usage: the version, then the
