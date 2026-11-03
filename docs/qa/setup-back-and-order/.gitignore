@@ -1,0 +1,2 @@
+# Raw terminal output from the expect scripts, which holds control codes.
+*.log

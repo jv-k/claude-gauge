@@ -1,0 +1,382 @@
+
+══════════════════════════════ 1. use the defaults ══════════════════════════════
+
+Status line, with the defaults
+
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+
+Token line, when each turn ends
+
+  06:23 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r324k │ ctx 43% •••··· 86.0k
+
+⟦ CONFIRM ⟧
+Use the defaults: both lines, with the parts above?
+  Yes
+❯ No
+
+↑↓ move · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 2. rows ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+Status line
+
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+
+⟦ INPUT ⟧
+How many status line rows?
+  1
+❯ 2
+  3
+
+↑↓ move · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 3. parts, cursor on 5h ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+Status line
+
+❯ ctx 43% •••··· 86.0k │ [5h 9% •···|· → 14:00] │ 7d 41% ••·|·· → 3d
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+
+⟦ INPUT ⟧
+The parts of each row
+  1   ctx  [5h]  7d   +
+  2   time   duration   repo   branch   model   effort   +
+     5h 5-hour usage, with pace marker and reset time.
+
+←→ move · ↑↓ change · Tab row · ⇧←→↑↓ move it · Space pick up · d remove · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 4. rows order, row 1 pushed down ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+❯ [ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d]
+
+⟦ INPUT ⟧
+Order of the rows
+  time, duration, repo, branch, model, effort
+❯ [ctx, 5h, 7d]
+
+↑↓ select · Tab push down · ⇧Tab push up · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 5. bar style, cursor on ctx ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+❯ [ctx 43% •••··· 86.0k] │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+
+⟦ INPUT ⟧
+Bar style?
+   All dots
+  1   time   duration   repo   branch   model   effort
+  2  [ctx dots]  5h dots   7d dots
+  dots •••|··: 6 dots.
+
+←→ Tab ⇧Tab pick a bar · ↑↓ change · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 6. theme ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+
+⟦ INPUT ⟧
+Theme?
+❯ default
+  mono
+  high-contrast
+  pastel
+  ocean
+  forest
+  sunset
+  neon
+  dracula
+  one-dark
+  solarized-dark
+  monokai
+  nord
+
+↑↓ move · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 7. labels ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+
+⟦ CONFIRM ⟧
+Labels in front of the values, such as ctx and 5h?
+❯ Yes
+  No
+
+↑↓ move · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 8. token line ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+
+Token line, when each turn ends
+
+  06:23 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r324k │ ctx 43% •••··· 86.0k
+
+⟦ CONFIRM ⟧
+Add the token line, shown when each turn ends?
+❯ Yes
+  No
+
+↑↓ move · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 9. token parts, cursor on out ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+⟦ TOKEN LINE ⟧
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+
+Token line, when each turn ends
+
+❯ 06:23 │ 4 req │ [out 3.4k (1.2k think)] │ cache w6.5k r324k │ ctx 43% •••··· 86.0k
+
+⟦ INPUT ⟧
+Token line parts
+   time   req  [out]  cache   ctx   +
+  out output tokens, and how many of them were thinking.
+
+←→ move · ↑↓ change · ⇧←→ move it · Space pick up · d remove · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 10. write ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+⟦ TOKEN LINE ⟧
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+
+Token line, when each turn ends
+
+  06:23 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r324k │ ctx 43% •••··· 86.0k
+
+⟦ CONFIRM ⟧
+Write these choices?
+❯ Yes
+  No
+
+↑↓ move · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 11. steps list from write ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+⟦ TOKEN LINE ⟧
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+
+Token line, when each turn ends
+
+  06:23 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r324k │ ctx 43% •••··· 86.0k
+
+⟦ INPUT ⟧
+Go back to which step?
+The answers after it stay as they are.
+  Use the defaults      no
+  Rows                  2
+  Parts                 time, duration, repo, branch, model, effort | ctx, 5h, …
+  Order of the rows
+  Bar style             dots
+  Theme                 default
+  Labels                yes
+❯ Token line            on
+  Token line parts      time, req, out, cache, ctx
+  Write these choices   ← you are here
+
+↑↓ move · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 12. token line again ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+⟦ TOKEN LINE ⟧
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+
+Token line, when each turn ends
+
+  06:23 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r324k │ ctx 43% •••··· 86.0k
+
+⟦ CONFIRM ⟧
+Add the token line, shown when each turn ends?
+❯ Yes
+  No
+
+↑↓ move · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 13. token parts again ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+⟦ TOKEN LINE ⟧
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+
+Token line, when each turn ends
+
+❯ [06:23] │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r324k │ ctx 43% •••··· 86.0k
+
+⟦ INPUT ⟧
+Token line parts
+  [time]  req   out   cache   ctx   +
+  time the local time the turn ended.
+
+←→ move · ↑↓ change · ⇧←→ move it · Space pick up · d remove · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 14. write again ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+⟦ TOKEN LINE ⟧
+
+Status line
+
+  12:00 │ 1h12m │ claude-gauge │ ⎇ feat/setup-back-and-order* ↑4 │ Opus │ effort high
+  ctx 43% •••··· 86.0k │ 5h 9% •···|· → 14:00 │ 7d 41% ••·|·· → 3d
+
+Token line, when each turn ends
+
+  06:23 │ 4 req │ out 3.4k (1.2k think) │ cache w6.5k r324k │ ctx 43% •••··· 86.0k
+
+⟦ CONFIRM ⟧
+Write these choices?
+❯ Yes
+  No
+
+↑↓ move · Enter accept · Esc back
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+══════════════════════════════ 15. after ══════════════════════════════
+
+⟦ STATUS LINE ⟧
+The parts: ctx, 5h, 7d, time, duration, repo, branch, model, effort, dir, cost, lines, name, thinking, fast, style, git, files, worktree, pr, agent, cache, spend, version, today, week, tools, agents, todos, skills, compactions, reply, speed, env, plan, models, limit, ram, text, command.
+
+What each part shows: https://github.com/jv-k/claude-gauge#what-the-lines-show
+
+Press Enter to keep an answer as it is, and Esc to go back to an earlier step.
+
+⟦ TOKEN LINE ⟧
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
