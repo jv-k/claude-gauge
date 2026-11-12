@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { render, parseArgs, recordCost, withLock } = require('../dist/statusline.js');
 
-const { plain, tempDir } = require('./helpers');
+const { plain, tempDir, configFolder } = require('./helpers');
 
 // A fixed local noon on Wednesday 7 October 2026, so the week began on
 // Monday the 5th.
@@ -253,7 +253,7 @@ test('two sessions rendering at once keep the ledger whole, and lose none of its
 test('the status line program records each session in the state folder, and --latest shows the totals', () => {
   const { execFileSync } = require('node:child_process');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const config = tempDir('claude-gauge-');
+  const config = configFolder();
   const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
   delete env.CLAUDE_CODE_SESSION_ID;
   const statusLine = (data, args = ['--show', 'today,week']) =>

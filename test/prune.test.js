@@ -12,7 +12,7 @@ const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { pruneTranscriptStates, readTranscriptActivity } = require('../dist/statusline.js');
 
-const { tempDir } = require('./helpers');
+const { tempDir, configFolder } = require('./helpers');
 
 const NOW = Date.parse('2026-10-11T12:00:00Z');
 const HOUR = 3600 * 1000;
@@ -138,7 +138,7 @@ test('a render that uses a state file updates its last change time, even when it
 
 test('a render prunes the state folder under the Claude config folder, after it prints, in the terminal and with --latest', () => {
   for (const args of [['--show', 'model'], ['--latest', '--show', 'model']]) {
-    const config = tempDir();
+    const config = configFolder();
     const dir = path.join(config, 'claude-gauge', '.state', 'transcripts');
     const old = fileAt(dir, stateName('/old.jsonl'), Date.now() - 31 * DAY);
     const recent = fileAt(dir, stateName('/recent.jsonl'), Date.now() - 29 * DAY);
@@ -158,7 +158,7 @@ test('a render prunes the state folder under the Claude config folder, after it 
 
 test('a render prunes the saved window sizes by the same rule, with a stamp of their own', () => {
   for (const args of [['--show', 'model'], ['--latest', '--show', 'model']]) {
-    const config = tempDir();
+    const config = configFolder();
     const dir = path.join(config, 'claude-gauge', '.state', 'windows');
     const old = fileAt(dir, stateName('old-session'), Date.now() - 31 * DAY);
     const recent = fileAt(dir, stateName('recent-session'), Date.now() - 29 * DAY);
