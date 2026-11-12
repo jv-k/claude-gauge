@@ -1,4 +1,4 @@
-// The questions claude-gauge setup and configure ask when run with no bar
+// The questions claude-gauge setup and configure ask when run with no line
 // switches: take the defaults in one answer, or walk through the status
 // line's rows and parts, its bar style, bar size, theme and labels, and the
 // token line and its parts, with a preview of the status line redrawn after
@@ -54,7 +54,7 @@ import {
 import { PARTS as TOKEN_PARTS, parseArgs as parseTokenArgs, readSwitches as readTokenSwitches, summarize } from './tokenline';
 import type { StatusData, Part, TranscriptActivity, Ledger, Setup, Bar, PerBar as BarValues } from './statusline';
 import type { Part as TokenPart, TranscriptRecord as TokenRecord } from './tokenline';
-import type { PerBar, InstalledSwitches } from './settings';
+import type { PerLine, InstalledSwitches } from './settings';
 import { colorEnabled } from './wordmark';
 import { styles } from './styles';
 import type { Styles } from './styles';
@@ -208,16 +208,16 @@ interface WizardOptions {
   // The token line when run with these switches, else the sample run's,
   // with the part at `mark` marked.
   tokenPreview?: (tokenLineSwitches: readonly string[], mark?: number) => string;
-  // The bars configure found. The wizard starts from them, and from the
-  // factory defaults when neither bar is set up.
+  // The lines configure found. The wizard starts from them, and from the
+  // factory defaults when neither line is set up.
   installed?: InstalledSwitches;
 }
 
-// The switches for each bar, as words: the words to run it with, null to
+// The switches for each line, as words: the words to run it with, null to
 // leave it out, undefined to leave it as it is, which a yes to keeping the
-// bars gives. Only the token line can be left out, so only it takes null:
-// that is PerBar's second parameter.
-type WizardChoices = PerBar<string[], string[] | null>;
+// lines gives. Only the token line can be left out, so only it takes null:
+// that is PerLine's second parameter.
+type WizardChoices = PerLine<string[], string[] | null>;
 
 // The input ended before the last question: nothing is written.
 class EndOfAnswers extends Error {
@@ -369,7 +369,7 @@ function statusChoicesOf(switches: readonly string[]): StatusChoices {
 const isSetUp = (installed: InstalledSwitches | undefined): installed is InstalledSwitches =>
   installed?.statusLine !== undefined || installed?.tokenLine !== undefined;
 
-// The start from the bars set up, else from the factory defaults.
+// The start from the lines set up, else from the factory defaults.
 function startFrom(installed: InstalledSwitches | undefined): WizardStart {
   if (!isSetUp(installed)) return { status: DEFAULT_CHOICES, tokenLine: true, tokenSwitches: [] };
   return {
@@ -560,7 +560,7 @@ const STATUS_STEPS = /^(rows|parts|row \d+|rows order|bar style|cells|theme|labe
 // The preview's heading for the factory defaults.
 const WITH_DEFAULTS = 'Status line, with the defaults';
 
-// The questions, then the switches for each bar. A front end with choices
+// The questions, then the switches for each line. A front end with choices
 // shows no preview once they end, so a question after them, such as the star
 // offer, comes without one.
 async function runWizard(userIo: WizardIo, options: WizardOptions): Promise<WizardChoices | null> {
