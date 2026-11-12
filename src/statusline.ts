@@ -3405,15 +3405,30 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   }
   const folder = subagentsFolder(file);
   if (subagents && linkSubagentTranscripts(io, folder, state)) changed = true;
+  // A running subagent's own transcript names the model it runs on, version
+  // and all, so it wins over the alias the Agent call may give. The saved
+  // entry keeps that model, so a subagent whose result or notification names
+  // none still shows it once finished, when its transcript is no longer read
+  // (issue #133). Its last change time, with the background flag, lets the
+  // part mark it as stale.
+  const activeAt = new Map<AgentEntry, number>();
+  for (const agent of state.agents) {
+    if (!subagents || agent.endedAt !== undefined || !agent.agentId) continue;
+    const seen = readSubagentTranscript(io, path.join(folder, `agent-${agent.agentId}.jsonl`), stateDir);
+    if (seen.model && seen.model !== agent.model) {
+      agent.model = seen.model;
+      changed = true;
+    }
+    if (seen.activeAt !== undefined) activeAt.set(agent, seen.activeAt);
+  }
   if (changed) saveTranscriptState(io, stateFile, state);
   else touchQuietly(io, stateFile);
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
-  // A running subagent's own transcript names the model it runs on, version
-  // and all, so it wins over the alias the Agent call may give. Its last
-  // change time, with the background flag, lets the part mark it as stale.
-  const agents = state.agents.map(({ id, agentId, ...agent }) =>
-    subagents && agent.endedAt === undefined && agentId ? { ...agent, ...readSubagentTranscript(io, path.join(folder, `agent-${agentId}.jsonl`), stateDir) } : agent,
-  );
+  const agents = state.agents.map((entry) => {
+    const { id, agentId, ...agent } = entry;
+    const at = activeAt.get(entry);
+    return at !== undefined ? { ...agent, activeAt: at } : agent;
+  });
   const todos = state.todos.map(({ id, ...todo }) => todo);
   const mcp = state.mcp.map((server) => ({ ...server }));
   const lastReplyAt = state.response?.endedAt;
