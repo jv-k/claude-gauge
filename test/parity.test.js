@@ -26,11 +26,11 @@ for (const name of Object.keys(process.env)) {
   if (/^CLAUDE_CODE_USE_|^ANTHROPIC_BASE_URL$/.test(name)) delete process.env[name];
 }
 
-const { plain, tempDir } = require('./helpers');
+const { plain, configFolder } = require('./helpers');
 
 // A config folder of its own, so a terminal render here never saves usage
 // into the real one.
-const tmp = tempDir('claude-gauge-');
+const tmp = configFolder();
 // No COLUMNS of the caller's: an example that needs a width names its own.
 const env = { ...process.env, CLAUDE_CONFIG_DIR: tmp };
 delete env.COLUMNS;

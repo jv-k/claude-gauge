@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { render, parseArgs } = require('../dist/statusline.js');
-const { plain, tempDir } = require('./helpers');
+const { plain, tempDir, configFolder } = require('./helpers');
 
 // The model part names the API provider from the environment, so the suite
 // runs without the caller's provider variables.
@@ -1470,7 +1470,7 @@ test('--latest shows the per-model windows a terminal render saved, less those t
   const { execFileSync } = require('node:child_process');
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: tempDir('claude-gauge-') };
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: configFolder() };
   delete env.CLAUDE_CODE_SESSION_ID;
   const now = Math.floor(Date.now() / 1000);
   const statusLine = (args, input = '') => plain(execFileSync(process.execPath, [script, ...args], { env, input, encoding: 'utf8' }));
@@ -1489,7 +1489,7 @@ test('--latest prints plain text, with no links, where the terminal render links
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
   const cwd = tempDir('claude-gauge-folder-');
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: tempDir('claude-gauge-') };
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: configFolder() };
   delete env.CLAUDE_CODE_SESSION_ID;
   const statusLine = (args, input = '') => execFileSync(process.execPath, [script, '--show', 'dir', ...args], { cwd, env, input, encoding: 'utf8' });
   assert.match(statusLine([], JSON.stringify({ workspace: { current_dir: cwd } })), /\x1b\]8;;file:/);
@@ -1500,7 +1500,7 @@ test('the status line program takes the terminal width from COLUMNS', () => {
   const { execFileSync } = require('node:child_process');
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: tempDir('claude-gauge-') };
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: configFolder() };
   delete env.COLUMNS;
   const statusLine = (columns) =>
     plain(
@@ -1519,7 +1519,7 @@ test('the status line program narrows a --right row by the statusLine.padding in
   const fs = require('node:fs');
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const config = tempDir('claude-gauge-');
+  const config = configFolder();
   const env = { ...process.env, CLAUDE_CONFIG_DIR: config, COLUMNS: '100' };
   const project = tempDir('claude-gauge-project-');
   const statusLine = () =>
@@ -1572,7 +1572,7 @@ test('each terminal render saves the context window size for its session, and wr
   const fs = require('node:fs');
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const config = tempDir('claude-gauge-');
+  const config = configFolder();
   const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
   const dir = path.join(config, 'claude-gauge', '.state', 'windows');
   const saved = (id) => path.join(dir, `${createHash('sha1').update(id).digest('hex')}.json`);
@@ -1607,7 +1607,7 @@ test('each terminal render saves its payload to the state folder, overwriting th
   const fs = require('node:fs');
   const path = require('node:path');
   const script = path.join(__dirname, '..', 'dist', 'statusline.js');
-  const config = tempDir('claude-gauge-');
+  const config = configFolder();
   const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
   const saved = path.join(config, 'claude-gauge', '.state', 'last-payload.json');
   const statusLine = (data) =>
