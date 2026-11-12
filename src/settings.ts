@@ -33,18 +33,18 @@ interface StatusLineSetting {
 // that the setup names when it offers to replace one.
 type Owner = 'none' | 'claude-gauge' | 'claude-hud' | 'other';
 
-// One value per bar: `statusLine` for the status line, `tokenLine` for the
-// token line. Every type that pairs the two bars is built from this one, so
-// a bar added later changes this one type; the code that names each bar by
+// One value per line: `statusLine` for the status line, `tokenLine` for the
+// token line. Every type that pairs the two lines is built from this one, so
+// a line added later changes this one type; the code that names each line by
 // hand, such as installedSwitches() and the CLI's apply(), still changes
 // too. The token line's type defaults to the status line's; the wizard
 // gives it a second one.
-type PerBar<T, U = T> = { statusLine?: T; tokenLine?: U };
+type PerLine<T, U = T> = { statusLine?: T; tokenLine?: U };
 
 // The command to run as the status line, and the token line's Stop hook
 // command. For each, null takes claude-gauge's out (and, for the status line,
-// puts back `previous`); undefined leaves the bar as it is.
-interface Choices extends PerBar<string | null> {
+// puts back `previous`); undefined leaves the line as it is.
+interface Choices extends PerLine<string | null> {
   // Consent to replace a status line that is not claude-gauge's.
   replace?: boolean;
   // Take out everything of claude-gauge's: the status line, and its hooks
@@ -215,7 +215,7 @@ function plan(current: Json, choices: Choices): Plan {
 // claude-gauge's commands in the settings: the status line, the token
 // line's Stop hook, and whether any hook in any event runs one of its
 // scripts. Hooks it cannot read stop it, as they stop plan().
-function installed(settings: Json): PerBar<string> & { any: boolean } {
+function installed(settings: Json): PerLine<string> & { any: boolean } {
   const statusLine = ownerOf(settings.statusLine) === 'claude-gauge' ? (settings.statusLine as StatusLineSetting).command : undefined;
   const hooks = readHooks(settings) ?? {};
   const commandsIn = (entries: HookEntry[]) => entries.flatMap((e) => e.hooks ?? []);
@@ -224,9 +224,9 @@ function installed(settings: Json): PerBar<string> & { any: boolean } {
   return { statusLine, tokenLine, any: statusLine !== undefined || anyHook };
 }
 
-// The switches of each claude-gauge bar in the settings, as words:
-// undefined for a bar that is not set up.
-type InstalledSwitches = PerBar<string[]>;
+// The switches of each claude-gauge line in the settings, as words:
+// undefined for a line that is not set up.
+type InstalledSwitches = PerLine<string[]>;
 
 function installedSwitches(settings: Json): InstalledSwitches {
   const { statusLine, tokenLine } = installed(settings);
@@ -301,4 +301,4 @@ function switchesOf(command: string): string[] {
 
 export { plan, commandFor, switchesOf, installed, installedSwitches, ownerOf, scriptOf, isForeign };
 
-export type { PerBar, Choices, Plan, Owner, StatusLineSetting, InstalledSwitches };
+export type { PerLine, Choices, Plan, Owner, StatusLineSetting, InstalledSwitches };

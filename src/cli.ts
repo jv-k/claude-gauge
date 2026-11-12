@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// The claude-gauge command: sets the bars up in Claude Code's settings,
+// The claude-gauge command: sets the lines up in Claude Code's settings,
 // changes their switches, takes them out again, and updates the copy of the
 // scripts that the settings run.
 //
@@ -12,7 +12,7 @@
 //   claude-gauge update
 //   claude-gauge update --dry-run
 //
-// setup and configure with no bar switches ask the questions themselves,
+// setup and configure with no line switches ask the questions themselves,
 // with a preview of the status line after each answer (wizard.ts). With
 // switches they ask nothing: the form the plugin's slash commands run once
 // Claude has asked the questions.
@@ -27,7 +27,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { plan, commandFor, installed, installedSwitches, ownerOf, isForeign } from './settings';
-import type { PerBar, Choices, StatusLineSetting } from './settings';
+import type { PerLine, Choices, StatusLineSetting } from './settings';
 import { readSettings, writeSettings, writeAtomic } from './settings-file';
 import { runWizard, offerStar, confirm, loadPayload, previewer, openIo, Interrupted, DEFAULT_SWITCHES } from './wizard';
 import { payloadFile } from './statusline';
@@ -148,14 +148,14 @@ class MissingTool extends GaugeError {}
 const COMMANDS = ['setup', 'configure', 'uninstall', 'update'] as const;
 type Command = (typeof COMMANDS)[number];
 
-// The switches chosen for each bar: its words, from the command line or the
+// The switches chosen for each line: its words, from the command line or the
 // wizard, null to take it out, undefined to leave it as it is.
 type Switches = readonly string[] | null | undefined;
 
-// The bars' switches, from the command line or the wizard.
-type Bars = PerBar<Switches>;
+// The lines' switches, from the command line or the wizard.
+type Lines = PerLine<Switches>;
 
-interface Args extends Bars {
+interface Args extends Lines {
   command?: Command;
   help: boolean;
   version: boolean;
@@ -164,7 +164,7 @@ interface Args extends Bars {
   dryRun: boolean;
 }
 
-// The words of a bar switch's value, `--show ctx,5h,7d --segments 10`, split
+// The words of a line switch's value, `--show ctx,5h,7d --segments 10`, split
 // at runs of white space with empty words dropped, so that "" is no switches.
 const words = (value: string) => value.split(/\s+/).filter(Boolean);
 
@@ -182,7 +182,7 @@ const SWITCHES: { names: string[]; commands: Command[]; apply: (args: Args, valu
   { names: ['--version', '-v'], commands: [...COMMANDS], apply: (args) => { args.version = true; } },
 ];
 
-// Unlike the two bars, which ignore what they do not know so that a typo
+// Unlike the two lines, which ignore what they do not know so that a typo
 // never blanks the status line, the command refuses an unknown word: it
 // writes the user's settings, and a typo there should stop it.
 function parseArgs(argv: string[]): Args {
@@ -333,10 +333,10 @@ function savedStatusLine(): StatusLineSetting | null | undefined {
 // Writes the pieces to stdout, each a styled line or a pill.
 const say = (...pieces: string[]) => process.stdout.write(pieces.join(''));
 
-// setup and configure: turns the bars' switches into commands, plans the
+// setup and configure: turns the lines' switches into commands, plans the
 // settings, and writes them, under a pill that names the step: SETUP or
 // CONFIGURE when run with switches, DONE after the wizard.
-function apply({ statusLine, tokenLine }: Bars, replace: boolean, heading: string): void {
+function apply({ statusLine, tokenLine }: Lines, replace: boolean, heading: string): void {
   const file = settingsFile();
   const { settings, text } = readSettings(file);
   const where = scripts();
@@ -376,11 +376,11 @@ function apply({ statusLine, tokenLine }: Bars, replace: boolean, heading: strin
     return;
   }
   const ours = installed(next.settings);
-  const bar = (name: string, command: string | undefined) => (command ? s.ok(`${name}: ${s.value(command)}`) : s.info(`${name}: not set up`));
+  const line = (name: string, command: string | undefined) => (command ? s.ok(`${name}: ${s.value(command)}`) : s.info(`${name}: not set up`));
   say(
     s.pill(heading),
-    bar('Status line', ours.statusLine),
-    bar('Token line', ours.tokenLine),
+    line('Status line', ours.statusLine),
+    line('Token line', ours.tokenLine),
     ...(settingsBackup ? [s.info(`Backup of the previous settings: ${s.value(settingsBackup)}`)] : []),
     s.info('Start a new Claude Code session to pick up the changes.'),
   );
@@ -390,7 +390,7 @@ function apply({ statusLine, tokenLine }: Bars, replace: boolean, heading: strin
 const hasGh = () => spawnSync('gh', ['--version'], { stdio: 'ignore' }).status === 0;
 const starWithGh = () => spawnSync('gh', ['api', '--method', 'PUT', 'user/starred/jv-k/claude-gauge'], { stdio: ['ignore', 'ignore', 'inherit'] }).status === 0;
 
-// setup or configure with no bar switches: asks before it replaces another
+// setup or configure with no line switches: asks before it replaces another
 // status line, then asks for the lines, and writes them. With claude-gauge
 // set up already, setup and configure both offer to keep the lines, change
 // them, or start over from the defaults. setup ends with the star offer. On a terminal the questions are Ink's choices where Ink
