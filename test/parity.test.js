@@ -30,9 +30,9 @@ const { plain, configFolder } = require('./helpers');
 
 // A config folder of its own, so a terminal render here never saves usage
 // into the real one.
-const tmp = configFolder();
+const config = configFolder();
 // No COLUMNS of the caller's: an example that needs a width names its own.
-const env = { ...process.env, CLAUDE_CONFIG_DIR: tmp };
+const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
 delete env.COLUMNS;
 
 const envFor = (columns) => (columns ? { ...env, COLUMNS: String(columns) } : env);
@@ -43,7 +43,7 @@ const bun = (script, args, input, columns) =>
 
 // The README's status line payload, in a folder outside any git repository,
 // so the branch part drops out and repo falls back to the folder name.
-const project = path.join(tmp, 'project');
+const project = path.join(config, 'project');
 fs.mkdirSync(project);
 const now = Math.floor(Date.now() / 1000);
 const payload = JSON.stringify({
@@ -102,7 +102,7 @@ const records = [
   { type: 'user', message: { content: [{ type: 'tool_result' }] } },
   { type: 'assistant', message: { id: 'm2', usage: usage(500, 1000, 104000) } },
 ];
-const transcript = path.join(tmp, 'transcript.jsonl');
+const transcript = path.join(config, 'transcript.jsonl');
 fs.writeFileSync(transcript, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
 const hook = JSON.stringify({ transcript_path: transcript });
 
@@ -143,7 +143,7 @@ test('bun runs the token line from source with the same bytes as the build', { s
 // runner, which has no --test switch, so these two checks run under Node.
 const underBun = Boolean(process.versions.bun) && "the child run needs Node's test runner";
 const runBunCasesWithoutBun = (extra) => {
-  const empty = fs.mkdtempSync(path.join(tmp, 'path-'));
+  const empty = fs.mkdtempSync(path.join(config, 'path-'));
   const childEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(PATH|REQUIRE_BUN|NODE_TEST_CONTEXT)$/i.test(name)));
   return spawnSync(
     process.execPath,
