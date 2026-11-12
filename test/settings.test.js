@@ -195,6 +195,22 @@ test('refuses hooks it cannot read rather than overwrite them', () => {
   assert.throws(() => plan({ statusLine: 'node x.js' }, { statusLine: SL }), /statusLine/);
 });
 
+// Each refusal is a GaugeError, so the CLI prints its values green (#143),
+// and its plain message is the text it has always been.
+test('each refusal is a GaugeError with the same plain message', () => {
+  const { GaugeError } = require('../dist/errors.js');
+  const { installed } = require('../dist/settings.js');
+  const refusals = [
+    [() => plan({ hooks: [] }, { tokenLine: TL }), 'settings.json: hooks is not an object, so claude-gauge leaves it alone. Fix it by hand.'],
+    [() => plan({ hooks: { Stop: { hooks: [] } } }, { tokenLine: TL }), 'settings.json: hooks.Stop is not a list of hook entries, so claude-gauge leaves it alone. Fix it by hand.'],
+    [() => installed({ hooks: { PreToolUse: 'x' } }), 'settings.json: hooks.PreToolUse is not a list of hook entries, so claude-gauge leaves it alone. Fix it by hand.'],
+    [() => plan({ statusLine: 'node x.js' }, { statusLine: SL }), 'settings.json: statusLine is not an object, so claude-gauge leaves it alone. Fix it by hand.'],
+  ];
+  for (const [refuse, text] of refusals) {
+    assert.throws(refuse, (err) => err instanceof GaugeError && err.message === text);
+  }
+});
+
 test("installed() names claude-gauge's commands, and an --instruct hook is not the token line", () => {
   const { installed } = require('../dist/settings.js');
   assert.deepEqual(installed({}), { statusLine: undefined, tokenLine: undefined, any: false });
