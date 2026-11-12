@@ -376,11 +376,11 @@ function apply({ statusLine, tokenLine }: Lines, replace: boolean, heading: stri
     return;
   }
   const ours = installed(next.settings);
-  const line = (name: string, command: string | undefined) => (command ? s.ok(`${name}: ${s.value(command)}`) : s.info(`${name}: not set up`));
+  const lineState = (name: string, command: string | undefined) => (command ? s.ok(`${name}: ${s.value(command)}`) : s.info(`${name}: not set up`));
   say(
     s.pill(heading),
-    line('Status line', ours.statusLine),
-    line('Token line', ours.tokenLine),
+    lineState('Status line', ours.statusLine),
+    lineState('Token line', ours.tokenLine),
     ...(settingsBackup ? [s.info(`Backup of the previous settings: ${s.value(settingsBackup)}`)] : []),
     s.info('Start a new Claude Code session to pick up the changes.'),
   );
