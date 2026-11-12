@@ -321,6 +321,58 @@ test("the reader stops reading a subagent's transcript once it has finished", ()
   assert.equal(io.bytes, Buffer.byteLength(result));
 });
 
+// Issue #133: a subagent that ends with no model named, as one in the
+// foreground that a prompt stops or one in the background whose launch and
+// notification name none, keeps the model its own transcript last named,
+// without the reader opening that transcript again.
+test('a finished subagent keeps the model its transcript named when its end names none, and its transcript is not read again', () => {
+  const renderFrom = (file, stateDir, io) =>
+    plain(
+      render(
+        { workspace: { current_dir: '/home/me/project' }, transcript_path: file },
+        { config: parseArgs(['--show', 'agents']), nowMs: NOW, transcript: (f) => readTranscriptActivity(f, { stateDir, fs: io }) },
+      ),
+    );
+  const finishWith = (records, end, expected) => {
+    const { file, transcript, stateDir } = sessionWithSubagent(records, { subagent: [subagentReply('claude-haiku-4-5-20251001', at(70))] });
+    readTranscriptActivity(file, { stateDir });
+    const ended = jsonl(end);
+    fs.appendFileSync(file, ended);
+    fs.appendFileSync(transcript, jsonl([subagentReply('claude-sonnet-4-5', at(19))]));
+    const io = countingFs();
+    const [done] = readTranscriptActivity(file, { stateDir, fs: io }).agents;
+    // Only the session transcript's new lines are read.
+    assert.equal(io.bytes, Buffer.byteLength(ended));
+    const rendered = countingFs();
+    assert.equal(renderFrom(file, stateDir, rendered), expected);
+    assert.equal(rendered.bytes, 0);
+    return done;
+  };
+
+  const foreground = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  assert.deepEqual(finishWith([foreground], [prompt('stop that', at(20))], '✗ Explore (Haiku 4.5) Map the reader 52s'), {
+    type: 'Explore',
+    description: 'Map the reader',
+    startedAt: at(72),
+    model: 'Haiku 4.5',
+    endedAt: at(20),
+    failed: true,
+  });
+  const interrupted = agentResult('t1', at(20), { status: 'interrupted' });
+  assert.equal(finishWith([foreground], [interrupted], '✗ Explore (Haiku 4.5) Map the reader 52s').model, 'Haiku 4.5');
+
+  const background = agentCall('t1', { subagent_type: 'Plan', description: 'Plan it', run_in_background: true }, at(72));
+  const launched = agentResult('t1', at(71), { isAsync: true, status: 'async_launched', agentId: 'a1b2c3' });
+  assert.deepEqual(finishWith([background, launched], [notification('t1', 'completed', at(20))], '✓ Plan (Haiku 4.5) Plan it 52s'), {
+    type: 'Plan',
+    description: 'Plan it',
+    startedAt: at(72),
+    background: true,
+    model: 'Haiku 4.5',
+    endedAt: at(20),
+  });
+});
+
 test('a background subagent is found by the agent id its launch result names', () => {
   const call = agentCall('t1', { subagent_type: 'Plan', description: 'Plan it', run_in_background: true }, at(90));
   const launched = agentResult('t1', at(89), { isAsync: true, status: 'async_launched', agentId: 'a1b2c3' });
