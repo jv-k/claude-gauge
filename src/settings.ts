@@ -8,6 +8,11 @@
 // and the `--instruct` entries in `hooks.SessionStart`. plan() changes only
 // those, and keeps every other key, including the status line's
 // `refreshInterval`.
+//
+// A shape plan() does not know stops it with a GaugeError, whose values the
+// CLI prints green.
+
+import { GaugeError, message } from './errors';
 
 type Json = Record<string, unknown>;
 
@@ -103,11 +108,11 @@ const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null 
 function readHooks(settings: Json): Record<string, HookEntry[]> | undefined {
   const hooks = settings.hooks;
   if (hooks === undefined) return undefined;
-  if (!isObject(hooks)) throw new Error('settings.json: hooks is not an object, so claude-gauge leaves it alone. Fix it by hand.');
+  if (!isObject(hooks)) throw new GaugeError(message`${'settings.json'}: ${'hooks'} is not an object, so claude-gauge leaves it alone. Fix it by hand.`);
   for (const [event, entries] of Object.entries(hooks)) {
     const readable = (e: unknown) => isObject(e) && (e.hooks === undefined || (Array.isArray(e.hooks) && e.hooks.every(isObject)));
     if (!Array.isArray(entries) || !entries.every(readable)) {
-      throw new Error(`settings.json: hooks.${event} is not a list of hook entries, so claude-gauge leaves it alone. Fix it by hand.`);
+      throw new GaugeError(message`${'settings.json'}: ${`hooks.${event}`} is not a list of hook entries, so claude-gauge leaves it alone. Fix it by hand.`);
     }
   }
   return hooks as Record<string, HookEntry[]>;
@@ -167,7 +172,7 @@ function plan(current: Json, choices: Choices): Plan {
   const found = ownerOf(settings.statusLine);
   if (settings.statusLine === null) delete settings.statusLine;
   if (settings.statusLine !== undefined && !isObject(settings.statusLine)) {
-    throw new Error('settings.json: statusLine is not an object, so claude-gauge leaves it alone. Fix it by hand.');
+    throw new GaugeError(message`${'settings.json'}: ${'statusLine'} is not an object, so claude-gauge leaves it alone. Fix it by hand.`);
   }
   const hooks = readHooks(settings);
 
