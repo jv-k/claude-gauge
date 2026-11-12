@@ -8,11 +8,8 @@
 // and the `--instruct` entries in `hooks.SessionStart`. plan() changes only
 // those, and keeps every other key, including the status line's
 // `refreshInterval`.
-//
-// A shape plan() does not know stops it with a GaugeError, whose values the
-// CLI prints green.
 
-import { GaugeError, message } from './errors';
+import { GaugeError, message, plain } from './errors';
 
 type Json = Record<string, unknown>;
 
@@ -102,17 +99,23 @@ function ownerOf(statusLine: unknown): Owner {
 
 const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+// The error that stops plan() and installed() at a `key` of settings.json
+// that is not `what` they read: a GaugeError, whose values, the file name and
+// the key, the CLI prints green. `what` is part of the text.
+const unreadable = (key: string, what: string): GaugeError =>
+  new GaugeError(message`${'settings.json'}: ${key} is not ${plain(what)}, so claude-gauge leaves it alone. Fix it by hand.`);
+
 // The settings' hooks, checked as far as plan() reads them. A shape it does
 // not know stops the plan, because writing over it would lose the user's
 // hooks.
 function readHooks(settings: Json): Record<string, HookEntry[]> | undefined {
   const hooks = settings.hooks;
   if (hooks === undefined) return undefined;
-  if (!isObject(hooks)) throw new GaugeError(message`${'settings.json'}: ${'hooks'} is not an object, so claude-gauge leaves it alone. Fix it by hand.`);
+  if (!isObject(hooks)) throw unreadable('hooks', 'an object');
   for (const [event, entries] of Object.entries(hooks)) {
     const readable = (e: unknown) => isObject(e) && (e.hooks === undefined || (Array.isArray(e.hooks) && e.hooks.every(isObject)));
     if (!Array.isArray(entries) || !entries.every(readable)) {
-      throw new GaugeError(message`${'settings.json'}: ${`hooks.${event}`} is not a list of hook entries, so claude-gauge leaves it alone. Fix it by hand.`);
+      throw unreadable(`hooks.${event}`, 'a list of hook entries');
     }
   }
   return hooks as Record<string, HookEntry[]>;
@@ -172,7 +175,7 @@ function plan(current: Json, choices: Choices): Plan {
   const found = ownerOf(settings.statusLine);
   if (settings.statusLine === null) delete settings.statusLine;
   if (settings.statusLine !== undefined && !isObject(settings.statusLine)) {
-    throw new GaugeError(message`${'settings.json'}: ${'statusLine'} is not an object, so claude-gauge leaves it alone. Fix it by hand.`);
+    throw unreadable('statusLine', 'an object');
   }
   const hooks = readHooks(settings);
 
