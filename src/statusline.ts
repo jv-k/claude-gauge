@@ -3411,7 +3411,7 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
   // none still shows it once finished, when its transcript is no longer read
   // (issue #133). Its last change time, with the background flag, lets the
   // part mark it as stale.
-  const activeAt = new Map<AgentEntry, number>();
+  const transcriptChangedAt = new Map<AgentEntry, number>();
   for (const agent of state.agents) {
     if (!subagents || agent.endedAt !== undefined || !agent.agentId) continue;
     const seen = readSubagentTranscript(io, path.join(folder, `agent-${agent.agentId}.jsonl`), stateDir);
@@ -3419,15 +3419,15 @@ function readTranscriptActivity(file: string, { stateDir = transcriptStateDir(),
       agent.model = seen.model;
       changed = true;
     }
-    if (seen.activeAt !== undefined) activeAt.set(agent, seen.activeAt);
+    if (seen.activeAt !== undefined) transcriptChangedAt.set(agent, seen.activeAt);
   }
   if (changed) saveTranscriptState(io, stateFile, state);
   else touchQuietly(io, stateFile);
   const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
   const agents = state.agents.map((entry) => {
     const { id, agentId, ...agent } = entry;
-    const at = activeAt.get(entry);
-    return at !== undefined ? { ...agent, activeAt: at } : agent;
+    const activeAt = transcriptChangedAt.get(entry);
+    return activeAt !== undefined ? { ...agent, activeAt } : agent;
   });
   const todos = state.todos.map(({ id, ...todo }) => todo);
   const mcp = state.mcp.map((server) => ({ ...server }));

@@ -333,7 +333,7 @@ test('a finished subagent keeps the model its transcript named when its end name
         { config: parseArgs(['--show', 'agents']), nowMs: NOW, transcript: (f) => readTranscriptActivity(f, { stateDir, fs: io }) },
       ),
     );
-  const endsWith = (records, end, render) => {
+  const finishWith = (records, end, expected) => {
     const { file, transcript, stateDir } = sessionWithSubagent(records, { subagent: [subagentReply('claude-haiku-4-5-20251001', at(70))] });
     readTranscriptActivity(file, { stateDir });
     const ended = jsonl(end);
@@ -343,12 +343,14 @@ test('a finished subagent keeps the model its transcript named when its end name
     const [done] = readTranscriptActivity(file, { stateDir, fs: io }).agents;
     // Only the session transcript's new lines are read.
     assert.equal(io.bytes, Buffer.byteLength(ended));
-    assert.equal(renderFrom(file, stateDir, countingFs()), render);
+    const rendered = countingFs();
+    assert.equal(renderFrom(file, stateDir, rendered), expected);
+    assert.equal(rendered.bytes, 0);
     return done;
   };
 
   const foreground = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
-  assert.deepEqual(endsWith([foreground], [prompt('stop that', at(20))], '✗ Explore (Haiku 4.5) Map the reader 52s'), {
+  assert.deepEqual(finishWith([foreground], [prompt('stop that', at(20))], '✗ Explore (Haiku 4.5) Map the reader 52s'), {
     type: 'Explore',
     description: 'Map the reader',
     startedAt: at(72),
@@ -357,11 +359,11 @@ test('a finished subagent keeps the model its transcript named when its end name
     failed: true,
   });
   const interrupted = agentResult('t1', at(20), { status: 'interrupted' });
-  assert.equal(endsWith([foreground], [interrupted], '✗ Explore (Haiku 4.5) Map the reader 52s').model, 'Haiku 4.5');
+  assert.equal(finishWith([foreground], [interrupted], '✗ Explore (Haiku 4.5) Map the reader 52s').model, 'Haiku 4.5');
 
   const background = agentCall('t1', { subagent_type: 'Plan', description: 'Plan it', run_in_background: true }, at(72));
   const launched = agentResult('t1', at(71), { isAsync: true, status: 'async_launched', agentId: 'a1b2c3' });
-  assert.deepEqual(endsWith([background, launched], [notification('t1', 'completed', at(20))], '✓ Plan (Haiku 4.5) Plan it 52s'), {
+  assert.deepEqual(finishWith([background, launched], [notification('t1', 'completed', at(20))], '✓ Plan (Haiku 4.5) Plan it 52s'), {
     type: 'Plan',
     description: 'Plan it',
     startedAt: at(72),
