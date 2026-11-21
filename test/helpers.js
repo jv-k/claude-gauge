@@ -38,6 +38,26 @@ function countingFs() {
   return io;
 }
 
+// Transcript records as the lines of a transcript file.
+const jsonl = (records) => records.map((r) => `${JSON.stringify(r)}\n`).join('');
+
+// A session folder as Claude Code writes one for a subagent: beside the
+// session transcript, a folder of the same name holds subagents/, with the
+// subagent's own transcript, agent-<id>.jsonl, and agent-<id>.meta.json,
+// which names the Agent call that started it.
+function sessionWithSubagent(records, { agentId = 'a1b2c3', toolUseId = 't1', subagent } = {}) {
+  const dir = tempDir();
+  const file = path.join(dir, 'session.jsonl');
+  fs.writeFileSync(file, jsonl(records));
+  const folder = path.join(dir, 'session', 'subagents');
+  fs.mkdirSync(folder, { recursive: true });
+  const meta = path.join(folder, `agent-${agentId}.meta.json`);
+  fs.writeFileSync(meta, JSON.stringify({ agentType: 'Explore', description: 'Map the reader', toolUseId }));
+  const transcript = path.join(folder, `agent-${agentId}.jsonl`);
+  if (subagent) fs.writeFileSync(transcript, jsonl(subagent));
+  return { dir, file, transcript, stateDir: path.join(dir, 'state') };
+}
+
 // A Claude config folder of its own, with settings.json holding `settings`
 // when given.
 function configFolder(settings) {
@@ -112,4 +132,4 @@ function fakeTool(name, { status = 0, body = '' } = {}) {
   return { bin, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []) };
 }
 
-module.exports = { root, dist, plain, tempDir, countingFs, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, cliSource, switchesIn, switchAt, usageSwitches, packageAt, fakeTool };
+module.exports = { root, dist, plain, tempDir, countingFs, jsonl, sessionWithSubagent, configFolder, runCli, ok, runtimeOf, settingsOf, cmd, entry, cliSource, switchesIn, switchAt, usageSwitches, packageAt, fakeTool };

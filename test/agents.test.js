@@ -10,7 +10,7 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { render, parseArgs, readTranscriptActivity } = require('../dist/statusline.js');
 
-const { plain, tempDir, countingFs } = require('./helpers');
+const { plain, tempDir, countingFs, jsonl, sessionWithSubagent } = require('./helpers');
 
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const at = (secondsAgo) => NOW - secondsAgo * 1000;
@@ -128,7 +128,6 @@ const notification = (id, status, endedAt) => ({
   },
 });
 const prompt = (text, when) => ({ type: 'user', timestamp: iso(when), message: { role: 'user', content: text } });
-const jsonl = (records) => records.map((r) => `${JSON.stringify(r)}\n`).join('');
 
 // What the reader finds in a transcript of these records, with its state in
 // a folder of its own.
@@ -234,22 +233,6 @@ test('a prompt the user types that starts like a task notification is still a pr
   assert.deepEqual(agentsIn([call, typed]), [{ type: 'Explore', description: 'Map it', startedAt: at(90), endedAt: at(50), failed: true }]);
 });
 
-// A session folder as Claude Code writes one for a subagent: beside the
-// session transcript, a folder of the same name holds subagents/, with the
-// subagent's own transcript, agent-<id>.jsonl, and agent-<id>.meta.json,
-// which names the Agent call that started it.
-function sessionWithSubagent(records, { agentId = 'a1b2c3', toolUseId = 't1', subagent } = {}) {
-  const dir = tempDir();
-  const file = path.join(dir, 'session.jsonl');
-  fs.writeFileSync(file, jsonl(records));
-  const folder = path.join(dir, 'session', 'subagents');
-  fs.mkdirSync(folder, { recursive: true });
-  const meta = path.join(folder, `agent-${agentId}.meta.json`);
-  fs.writeFileSync(meta, JSON.stringify({ agentType: 'Explore', description: 'Map the reader', toolUseId }));
-  const transcript = path.join(folder, `agent-${agentId}.jsonl`);
-  if (subagent) fs.writeFileSync(transcript, jsonl(subagent));
-  return { dir, file, transcript, stateDir: path.join(dir, 'state') };
-}
 const subagentReply = (model, when) => ({
   type: 'assistant',
   isSidechain: true,
@@ -284,12 +267,13 @@ test("the reader reads only the bytes a running subagent's transcript gained, an
   assert.equal(running.activeAt, fs.statSync(transcript).mtimeMs);
 
   // Nothing new in either transcript: nothing read again, and the reader's
-  // state keeps its place at the end of the subagent's transcript.
+  // state keeps its place at the end of the subagent's transcript, with the
+  // subagent in the session's state file.
   const second = countingFs();
   assert.equal(readTranscriptActivity(file, { stateDir, fs: second }).agents[0].model, 'Haiku 4.5');
   assert.equal(second.bytes, 0);
-  const stateFile = path.join(stateDir, `${createHash('sha1').update(transcript).digest('hex')}.json`);
-  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).offset, fs.statSync(transcript).size);
+  const stateFile = path.join(stateDir, `${createHash('sha1').update(file).digest('hex')}.json`);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).agents[0].transcript.offset, fs.statSync(transcript).size);
 
   // A new response on another model: only its bytes are read.
   const appended = jsonl([subagentReply('claude-sonnet-4-5', at(10))]);
@@ -311,35 +295,43 @@ test('a subagent with no transcript of its own, one that names no model, or a me
   assert.deepEqual(readTranscriptActivity(other.file, { stateDir: other.stateDir }).agents, before);
 });
 
-test("the reader stops reading a subagent's transcript once it has finished", () => {
+test("the reader reads a subagent's transcript one last time once it has finished, and then no more", () => {
   const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
   const { file, transcript, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5', at(70))] });
   readTranscriptActivity(file, { stateDir });
   const result = jsonl([agentResult('t1', at(20), { status: 'completed', resolvedModel: 'claude-haiku-4-5' })]);
   fs.appendFileSync(file, result);
-  fs.appendFileSync(transcript, jsonl([subagentReply('claude-sonnet-4-5', at(19))]));
+  const last = jsonl([subagentReply('claude-haiku-4-5', at(21))]);
+  fs.appendFileSync(transcript, last);
   const io = countingFs();
   const [done] = readTranscriptActivity(file, { stateDir, fs: io }).agents;
   assert.deepEqual(done, { type: 'Explore', description: 'Map the reader', startedAt: at(72), model: 'Haiku 4.5', endedAt: at(20) });
-  // Only the session transcript's new result is read.
-  assert.equal(io.bytes, Buffer.byteLength(result));
+  // The session transcript's new result, and what the subagent wrote since
+  // the last render (ADR 0005).
+  assert.equal(io.bytes, Buffer.byteLength(result) + Buffer.byteLength(last));
+  // What its transcript gains after that is not read.
+  fs.appendFileSync(transcript, jsonl([subagentReply('claude-sonnet-4-5', at(19))]));
+  const later = countingFs();
+  assert.equal(readTranscriptActivity(file, { stateDir, fs: later }).agents[0].model, 'Haiku 4.5');
+  assert.equal(later.bytes, 0);
 });
 
 // Issue #133: a subagent that ends with no model named, as one in the
 // foreground that a prompt stops or one in the background whose launch and
-// notification name none, keeps the model its own transcript last named,
-// without the reader opening that transcript again.
+// notification name none, keeps the model its own transcript last named.
+// The reader reads that transcript one last time at the end, and not again.
 test('a finished subagent keeps the model its transcript named when its end names none, and its transcript is not read again', () => {
   const finishWith = (records, end, expected) => {
     const { file, transcript, stateDir } = sessionWithSubagent(records, { subagent: [subagentReply('claude-haiku-4-5-20251001', at(70))] });
     readTranscriptActivity(file, { stateDir });
     const ended = jsonl(end);
     fs.appendFileSync(file, ended);
-    fs.appendFileSync(transcript, jsonl([subagentReply('claude-sonnet-4-5', at(19))]));
     const io = countingFs();
     const [done] = readTranscriptActivity(file, { stateDir, fs: io }).agents;
-    // Only the session transcript's new lines are read.
+    // Only the session transcript's new lines are read: the subagent wrote
+    // nothing since the last render.
     assert.equal(io.bytes, Buffer.byteLength(ended));
+    fs.appendFileSync(transcript, jsonl([subagentReply('claude-sonnet-4-5', at(19))]));
     const rendered = countingFs();
     assert.equal(renderThroughReader({ file, stateDir }, rendered), expected);
     assert.equal(rendered.bytes, 0);

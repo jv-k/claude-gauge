@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { render, parseArgs, readTranscriptActivity } = require('../dist/statusline.js');
 
-const { plain, tempDir } = require('./helpers');
+const { plain, tempDir, jsonl, sessionWithSubagent } = require('./helpers');
 
 // Renders the todos part over the activity a reader returns.
 const renderTodos = (todos, args = ['--show', 'todos']) =>
@@ -79,7 +79,6 @@ const done = (name, input, toolUseResult = {}, extra = {}) => {
   const c = call(name, input, extra);
   return [c.record, result(c.id, toolUseResult)];
 };
-const jsonl = (records) => records.map((r) => `${JSON.stringify(r)}\n`).join('');
 
 // What the reader finds in a transcript of these records, with its state in
 // a folder of its own.
@@ -274,6 +273,141 @@ test("a subagent's records leave the other transcript parts as they were", () =>
   const after = readTranscriptActivity(file, { stateDir: path.join(dir, 'after') });
   assert.deepEqual({ ...after, todos: before.todos }, before);
   assert.deepEqual(after.todos, [{ content: 'Read the reader', status: 'in_progress' }]);
+});
+
+// Issue #148: Claude Code writes a subagent's records to the subagent's own
+// transcript, so the reader takes its TaskCreate and TaskUpdate from there.
+const NOW = Date.parse('2026-11-21T12:00:00Z');
+const ago = (seconds) => NOW - seconds * 1000;
+// Records as written `seconds` ago.
+const stamped = (records, seconds) => records.map((r) => ({ ...r, timestamp: new Date(ago(seconds)).toISOString() }));
+// The call that starts the subagent whose transcript sessionWithSubagent
+// writes, and the result that ends it.
+const agentStart = (seconds) => stamped([{ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Agent', input: { subagent_type: 'Explore', description: 'Map the reader', prompt: 'Do it.' } }] } }], seconds);
+const agentEnd = (seconds) => stamped([result('t1', { status: 'completed' })], seconds);
+const todosOf = ({ file, stateDir }, options = {}) => readTranscriptActivity(file, { stateDir, ...options }).todos;
+
+test("a subagent's TaskUpdate and TaskCreate in its own transcript change the count on the next render, with no TaskList", () => {
+  const session = sessionWithSubagent([...stamped(taskCreate('1', { subject: 'Read the reader' }), 90), ...agentStart(80)], { subagent: [] });
+  assert.equal(renderTodos(todosOf(session)), 'todos 0/1');
+  fs.appendFileSync(session.transcript, jsonl(inSubagent(stamped(taskUpdate('1', { status: 'completed' }), 60))));
+  assert.equal(renderTodos(todosOf(session)), '✓ todos 1/1');
+  fs.appendFileSync(session.transcript, jsonl(inSubagent(stamped(taskCreate('2', { subject: 'Found by the subagent' }), 50))));
+  assert.deepEqual(todosOf(session), [
+    { content: 'Read the reader', status: 'completed' },
+    { content: 'Found by the subagent', status: 'pending' },
+  ]);
+  // Nothing new: the list stays, and no task is added twice.
+  assert.equal(renderTodos(todosOf(session)), 'todos 1/2');
+});
+
+test("a subagent's other todo tools, and a call of its own with no result, change nothing", () => {
+  const waiting = call('TaskUpdate', { taskId: '1', status: 'completed' }, { isSidechain: true });
+  const subagent = inSubagent(stamped([...taskList([]), ...todoWrite([{ content: 'Its own todo', status: 'pending' }]), waiting.record], 60));
+  const session = sessionWithSubagent([...stamped(taskCreate('1', { subject: 'Read the reader' }), 90), ...agentStart(80)], { subagent });
+  assert.deepEqual(todosOf(session), [{ content: 'Read the reader', status: 'pending' }]);
+  // The result comes in a later render, and the call counts then.
+  fs.appendFileSync(session.transcript, jsonl(inSubagent(stamped([result(waiting.id, { success: true })], 50))));
+  assert.deepEqual(todosOf(session), [{ content: 'Read the reader', status: 'completed' }]);
+});
+
+test('when the session and a subagent change the same task, the later change wins, whichever is read first', () => {
+  const start = [...stamped(taskCreate('1', { subject: 'Read the reader' }), 90), ...agentStart(80)];
+  const bySession = (seconds) => stamped(taskUpdate('1', { status: 'in_progress' }), seconds);
+  const bySubagent = (seconds) => inSubagent(stamped(taskUpdate('1', { status: 'completed' }), seconds));
+  const status = (session) => todosOf(session)[0].status;
+
+  // Both in one render: the subagent's change is the later one, then the
+  // session's.
+  assert.equal(status(sessionWithSubagent([...start, ...bySession(60)], { subagent: bySubagent(40) })), 'completed');
+  assert.equal(status(sessionWithSubagent([...start, ...bySession(40)], { subagent: bySubagent(60) })), 'in_progress');
+
+  // The session's change is read in one render and the subagent's in the
+  // next: an older change from the subagent does not win, and a later one
+  // does.
+  for (const [subagentAt, expected] of [[60, 'in_progress'], [20, 'completed']]) {
+    const session = sessionWithSubagent([...start, ...bySession(40)], { subagent: [] });
+    assert.equal(status(session), 'in_progress');
+    fs.appendFileSync(session.transcript, jsonl(bySubagent(subagentAt)));
+    assert.equal(status(session), expected);
+  }
+
+  // The subagent's change is read first, then the session's.
+  for (const [sessionAt, expected] of [[60, 'completed'], [20, 'in_progress']]) {
+    const session = sessionWithSubagent(start, { subagent: bySubagent(40) });
+    assert.equal(status(session), 'completed');
+    fs.appendFileSync(session.file, jsonl(bySession(sessionAt)));
+    assert.equal(status(session), expected);
+  }
+});
+
+test("the session's update to a task a subagent made in the same render applies after the task is made", () => {
+  const made = inSubagent(stamped(taskCreate('5', { subject: 'Found by the subagent' }), 60));
+  const session = sessionWithSubagent([...agentStart(80), ...stamped(taskUpdate('5', { status: 'in_progress' }), 50)], { subagent: made });
+  assert.deepEqual(todosOf(session), [{ content: 'Found by the subagent', status: 'in_progress' }]);
+});
+
+test('the last records of a subagent that finishes between two renders still count, and later ones do not', () => {
+  const session = sessionWithSubagent([...stamped(taskCreate('1', { subject: 'Read the reader' }), 90), ...agentStart(80)], { subagent: [] });
+  assert.equal(renderTodos(todosOf(session)), 'todos 0/1');
+  fs.appendFileSync(session.transcript, jsonl(inSubagent(stamped(taskUpdate('1', { status: 'completed' }), 40))));
+  fs.appendFileSync(session.file, jsonl(agentEnd(30)));
+  assert.equal(renderTodos(todosOf(session)), '✓ todos 1/1');
+  // The subagent has ended and its last records are read: no more are.
+  fs.appendFileSync(session.transcript, jsonl(inSubagent(stamped(taskUpdate('1', { status: 'in_progress' }), 20))));
+  assert.equal(renderTodos(todosOf(session)), '✓ todos 1/1');
+});
+
+test("one read of a subagent's transcript in a render gives the agents part and the todos part what they show", () => {
+  const reply = { type: 'assistant', isSidechain: true, timestamp: new Date(ago(70)).toISOString(), message: { role: 'assistant', model: 'claude-haiku-4-5', id: 'm1', content: [] } };
+  const subagent = [reply, ...inSubagent(stamped(taskUpdate('1', { status: 'completed' }), 60))];
+  const session = sessionWithSubagent([...stamped(taskCreate('1', { subject: 'Read the reader' }), 90), ...agentStart(80)], { subagent });
+  const opened = [];
+  const io = { ...fs, openSync: (file, ...rest) => (opened.push(file), fs.openSync(file, ...rest)) };
+  const activity = readTranscriptActivity(session.file, { stateDir: session.stateDir, fs: io });
+  assert.equal(activity.agents[0].model, 'Haiku 4.5');
+  assert.deepEqual(activity.todos, [{ content: 'Read the reader', status: 'completed' }]);
+  assert.equal(opened.filter((file) => file === session.transcript).length, 1);
+  // One offset for both parts: a render with nothing new opens it no more.
+  readTranscriptActivity(session.file, { stateDir: session.stateDir, fs: io });
+  assert.equal(opened.filter((file) => file === session.transcript).length, 1);
+});
+
+test("a subagent's task changes are read again with the session when the session's state is lost", () => {
+  const session = sessionWithSubagent([...stamped(taskCreate('1', { subject: 'Read the reader' }), 90), ...agentStart(80)], {
+    subagent: inSubagent(stamped(taskUpdate('1', { status: 'completed' }), 60)),
+  });
+  assert.equal(renderTodos(todosOf(session)), '✓ todos 1/1');
+  // The place in the subagent's transcript is saved with the list, so a
+  // render with no saved state reads both transcripts from the start.
+  fs.rmSync(session.stateDir, { recursive: true });
+  assert.equal(renderTodos(todosOf(session)), '✓ todos 1/1');
+});
+
+test('the last read of an ended subagent is tried again when its transcript could not be read', () => {
+  const session = sessionWithSubagent([...stamped(taskCreate('1', { subject: 'Read the reader' }), 90), ...agentStart(80)], { subagent: [] });
+  todosOf(session);
+  fs.appendFileSync(session.transcript, jsonl(inSubagent(stamped(taskUpdate('1', { status: 'completed' }), 40))));
+  fs.appendFileSync(session.file, jsonl(agentEnd(30)));
+  const broken = { ...fs, openSync: (file, ...rest) => (file === session.transcript ? fs.readFileSync('/no/such/file') : fs.openSync(file, ...rest)) };
+  assert.equal(renderTodos(todosOf(session, { fs: broken })), 'todos 0/1');
+  assert.equal(renderTodos(todosOf(session)), '✓ todos 1/1');
+});
+
+test("the session's TaskCreate adds a task whose id the list holds, and a subagent's does not", () => {
+  const twice = [...taskCreate('1', { subject: 'Read the reader' }), ...taskCreate('1', { subject: 'Read it again' })];
+  assert.equal(todosIn(twice).length, 2);
+  assert.equal(todosIn([...taskCreate('1', { subject: 'Read the reader' }), ...inSubagent(taskCreate('1', { subject: 'Read the reader' }))]).length, 1);
+});
+
+test('a row that shows todos asks the reader for the subagent transcripts', () => {
+  let asked;
+  const transcript = (_file, options) => {
+    asked = options;
+    return { tools: { running: [], completed: {} }, agents: [], todos: [] };
+  };
+  render({ workspace: { current_dir: '/home/me/project' }, transcript_path: '/t.jsonl' }, { config: parseArgs(['--show', 'todos']), transcript });
+  assert.deepEqual(asked, { subagents: true });
 });
 
 test('the program shows the todo in progress from a transcript', () => {
