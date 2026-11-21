@@ -2251,8 +2251,12 @@ function agentResult(agent, block, record, at) {
     if (model)
         agent.model = model;
     const agentId = stringAt(result, 'agentId');
-    if (agentId)
+    if (agentId && agentId !== agent.agentId) {
         agent.agentId = agentId;
+        // A result that comes after a prompt ended the subagent names the
+        // transcript the reader did not find then, so it is read after all.
+        delete agent.drained;
+    }
     if (result.isAsync === true || result.status === 'async_launched') {
         agent.background = true;
         return;
@@ -2660,12 +2664,13 @@ function saveTranscriptState(io, stateFile, state) {
 }
 const subagentsFolder = (file) => path.join(file.replace(/\.jsonl$/, ''), 'subagents');
 const stateFileOf = (stateDir, file) => path.join(stateDir, `${(0, node_crypto_1.createHash)('sha1').update(file).digest('hex')}.json`);
-// Links each running subagent that has no agent id yet to its own
-// transcript, by the toolUseId in the meta files of the subagents folder.
+// Links each subagent that has no agent id yet to its own transcript, by the
+// toolUseId in the meta files of the subagents folder: one that runs, and one
+// that has ended and still waits for its last read (issue #171).
 // Each meta file is read once: the toolUseId it names is kept in the state.
 // True when the state changed.
 function linkSubagentTranscripts(io, folder, state) {
-    const wanted = state.agents.filter((a) => a.endedAt === undefined && !a.agentId);
+    const wanted = state.agents.filter((a) => !a.agentId && !a.drained);
     if (!wanted.length)
         return false;
     let names;
@@ -2802,12 +2807,22 @@ function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io 
     // with the background flag, lets the part mark it as stale. The same read
     // gives the subagent's task calls. A subagent that has ended is read one
     // last time, for the records it wrote since the last render, and then no
-    // more (ADR 0005).
+    // more (ADR 0005). That read is the first for a subagent that ended before
+    // any render, and gives it its model (issue #171).
     const transcriptChangedAt = new Map();
     const subagentTodoChanges = [];
     for (const agent of state.agents) {
-        if (!subagents || !agent.agentId || agent.drained)
+        if (!subagents || agent.drained)
             continue;
+        if (!agent.agentId) {
+            // No transcript of its own was found. For one that has ended, the
+            // link was tried once more above, and is not tried again.
+            if (agent.endedAt !== undefined) {
+                agent.drained = true;
+                changed = true;
+            }
+            continue;
+        }
         const seen = readSubagentTranscript(io, path.join(folder, `agent-${agent.agentId}.jsonl`), agent.transcript);
         if (seen.cursor && seen.cursor.offset !== agent.transcript?.offset) {
             agent.transcript = seen.cursor;
