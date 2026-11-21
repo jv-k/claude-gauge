@@ -403,15 +403,10 @@ test("a subagent transcript that cannot be read after its stat shows as before, 
 test('with no agents part to show, the reader leaves the subagents folder and transcripts unread', () => {
   const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
   const { file, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5', at(70))] });
-  const io = countingFs();
   // The reader catches a listing error, so the test counts the listings.
-  let listings = 0;
-  io.readdirSync = (...args) => {
-    listings += 1;
-    return fs.readdirSync(...args);
-  };
+  const io = countingFs();
   const [agent] = readTranscriptActivity(file, { stateDir, fs: io, subagents: false }).agents;
-  assert.equal(listings, 0, 'the subagents folder was listed');
+  assert.equal(io.listings, 0, 'the subagents folder was listed');
   assert.deepEqual(agent, { type: 'Explore', description: 'Map the reader', startedAt: at(72) });
   assert.equal(io.bytes, fs.statSync(file).size);
 
@@ -428,6 +423,54 @@ test('with no agents part to show, the reader leaves the subagents folder and tr
     },
   );
   assert.deepEqual(asked, { subagents: false });
+});
+
+// Issue #171: a subagent can end before any render reads its transcript, as
+// a short one does, or before its transcript is linked. The reader links it
+// and reads its transcript one time after the end.
+test('a subagent that starts and ends before the first render shows the model its transcript named', () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const reply = [subagentReply('claude-haiku-4-5-20251001', at(70))];
+  const stopped = sessionWithSubagent([call, prompt('stop that', at(20))], { subagent: reply });
+  assert.equal(renderThroughReader(stopped), '✗ Explore (Haiku 4.5) Map the reader 52s');
+  const done = sessionWithSubagent([call, agentResult('t1', at(20), { status: 'completed' })], { subagent: reply });
+  assert.equal(renderThroughReader(done), '✓ Explore (Haiku 4.5) Map the reader 52s');
+});
+
+test('a subagent whose transcript is linked only after it ends shows its model, and the link is tried once', () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const session = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5', at(70))] });
+  const meta = path.join(path.dirname(session.transcript), 'agent-a1b2c3.meta.json');
+  const written = fs.readFileSync(meta);
+  // No meta file while it runs: the subagent has no transcript to read.
+  fs.rmSync(meta);
+  assert.equal(renderThroughReader(session), '◐ Explore Map the reader 1m');
+  fs.writeFileSync(meta, written);
+  fs.appendFileSync(session.file, jsonl([agentResult('t1', at(20), { status: 'completed' })]));
+  const atEnd = countingFs();
+  assert.equal(renderThroughReader(session, atEnd), '✓ Explore (Haiku 4.5) Map the reader 52s');
+  assert.equal(atEnd.listings, 1);
+  const later = countingFs();
+  assert.equal(renderThroughReader(session, later), '✓ Explore (Haiku 4.5) Map the reader 52s');
+  assert.equal(later.listings, 0);
+
+  // One with no transcript at all: the link is tried once after the end.
+  const none = sessionWithSubagent([call, agentResult('t1', at(20), { status: 'completed' })], { toolUseId: 't9' });
+  const first = countingFs();
+  assert.equal(renderThroughReader(none, first), '✓ Explore Map the reader 52s');
+  assert.equal(first.listings, 1);
+  const second = countingFs();
+  renderThroughReader(none, second);
+  assert.equal(second.listings, 0);
+});
+
+test('a result that comes after a prompt ended the subagent names its transcript, which is then read', () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  // The meta file names another call, so only the result links the transcript.
+  const session = sessionWithSubagent([call, prompt('carry on', at(40))], { toolUseId: 't9', subagent: [subagentReply('claude-haiku-4-5', at(70))] });
+  assert.equal(renderThroughReader(session), '✗ Explore Map the reader 32s');
+  fs.appendFileSync(session.file, jsonl([agentResult('t1', at(20), { status: 'completed', agentId: 'a1b2c3' })]));
+  assert.equal(renderThroughReader(session), '✓ Explore (Haiku 4.5) Map the reader 52s');
 });
 
 // Issue #60 through the reader: the background flag and the transcript's last

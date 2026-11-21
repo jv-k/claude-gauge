@@ -27,9 +27,14 @@ function tempDir(prefix = 'claude-gauge-') {
   return dir;
 }
 
-// The real fs, counting the transcript bytes it reads.
+// The real fs, counting the transcript bytes it reads and the folders it
+// lists.
 function countingFs() {
-  const io = { ...fs, bytes: 0 };
+  const io = { ...fs, bytes: 0, listings: 0 };
+  io.readdirSync = (...args) => {
+    io.listings += 1;
+    return fs.readdirSync(...args);
+  };
   io.readSync = (...args) => {
     const n = fs.readSync(...args);
     io.bytes += n;
