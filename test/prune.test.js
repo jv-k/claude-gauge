@@ -125,15 +125,19 @@ function sessionWithSubagent() {
 test('a render that uses a state file updates its last change time, even when its transcript gained nothing', () => {
   const { file, transcript, stateDir } = sessionWithSubagent();
   assert.equal(readTranscriptActivity(file, { stateDir }).agents[0].model, 'Haiku 4.5');
-  const states = [file, transcript].map((t) => path.join(stateDir, stateName(t)));
-  for (const state of states) fs.utimesSync(state, (NOW - 31 * DAY) / 1000, (NOW - 31 * DAY) / 1000);
+  // The session's state file holds the place in the subagent's transcript
+  // too: the subagent has no state file of its own.
+  const state = path.join(stateDir, stateName(file));
+  assert.deepEqual(fs.readdirSync(stateDir), [path.basename(state)]);
+  assert.equal(fs.existsSync(path.join(stateDir, stateName(transcript))), false);
+  fs.utimesSync(state, (NOW - 31 * DAY) / 1000, (NOW - 31 * DAY) / 1000);
 
   const before = Date.now();
   readTranscriptActivity(file, { stateDir });
-  for (const state of states) assert.ok(fs.statSync(state).mtimeMs >= before - 1000, `${path.basename(state)} was not touched`);
-  // So a live session's state files outlast the prune.
+  assert.ok(fs.statSync(state).mtimeMs >= before - 1000, `${path.basename(state)} was not touched`);
+  // So a live session's state file outlasts the prune.
   pruneTranscriptStates(stateDir, Date.now());
-  for (const state of states) assert.equal(fs.existsSync(state), true);
+  assert.equal(fs.existsSync(state), true);
 });
 
 test('a render prunes the state folder under the Claude config folder, after it prints, in the terminal and with --latest', () => {
