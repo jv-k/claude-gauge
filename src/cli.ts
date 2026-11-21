@@ -202,7 +202,7 @@ function parseArgs(argv: string[]): Args {
     // A value is the next word whatever it holds, since switches start with --.
     known.apply(args, () => {
       const v = inline ?? argv[++i];
-      if (v === undefined) throw new UsageError(message`${name} needs a value: the switches for that bar, or "" for none.`);
+      if (v === undefined) throw new UsageError(message`${name} needs a value: the switches for that line, or "" for none.`);
       return v;
     });
     seen.push(known);

@@ -841,6 +841,13 @@ test('an error in colour prints its values green: the folder update cannot find,
   const off = runCli(dir, ['setup', '--yes'], { env: { NO_COLOR: '1' } });
   assert.ok(off.stderr.startsWith(`\nERROR\n✖ ${file} is not valid JSON (`), off.stderr);
   assert.ok(!/\x1b/.test(off.stderr), JSON.stringify(off.stderr));
+
+  // A line switch with no value names the line, not a bar (issue #169).
+  for (const name of ['--status-line', '--token-line']) {
+    const offBare = runCli(empty, ['setup', name], { env: { NO_COLOR: '1' } });
+    assert.equal(offBare.status, 2);
+    assert.ok(offBare.stderr.startsWith(`\nERROR\n✖ ${name} needs a value: the switches for that line, or "" for none.\n`), offBare.stderr);
+  }
 });
 
 // The settings a plan cannot read name the file and the key green too (#143).
