@@ -2039,9 +2039,9 @@ function readSetup(
 
   // statusLine.padding, from the last settings file that sets one, as
   // Claude Code applies a later file over an earlier one. A later statusLine
-  // that sets no padding leaves the earlier padding in place: were Claude
-  // Code to drop it instead, the row would only end short of the edge, where
-  // the other way round it would be cut. Only a whole number above 0 counts.
+  // that sets no padding leaves the earlier padding in place, and a later
+  // padding of 0 takes it away: Claude Code 2.1.330 does both, as measured
+  // for issue #138. Only a whole number above 0 counts.
   const padding = settings
     .map((s) => objectAt(s, 'statusLine'))
     .filter((line) => 'padding' in line)
