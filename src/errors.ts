@@ -1,9 +1,10 @@
-// The errors that the claude-gauge command and its settings file reader
-// throw on purpose. Each keeps its values (a path, a command or a switch)
-// apart from its text, because a throw site does not know the stream the
-// message goes to: the CLI's top-level handler renders it through the styles
-// of stderr, so the values are green on a colour terminal, as they are in the
-// rest of the output. `message` stays the plain text, for logs and tests.
+// The errors that the claude-gauge command, its settings planner and its
+// settings file reader throw on purpose. Each keeps its values (a path, a
+// command, a switch or a settings key) apart from its text, because a throw
+// site does not know the stream the message goes to: the CLI's top-level
+// handler renders it through the styles of stderr, so the values are green on
+// a colour terminal, as they are in the rest of the output. `message` stays
+// the plain text, for logs and tests.
 //
 //   throw new GaugeError(message`${file} is not valid JSON (${plain(err.message)}).`);
 //

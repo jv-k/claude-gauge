@@ -843,6 +843,30 @@ test('an error in colour prints its values green: the folder update cannot find,
   assert.ok(!/\x1b/.test(off.stderr), JSON.stringify(off.stderr));
 });
 
+// The settings a plan cannot read name the file and the key green too (#143).
+test('an error in colour prints the file and the key of settings it cannot read green', () => {
+  const env = { FORCE_COLOR: '1' };
+  const badHooks = configFolder({ statusLine: cmd('node ~/.claude/claude-gauge/dist/statusline.js'), hooks: { Stop: { hooks: [] } } });
+  const refused = runCli(badHooks, ['configure', '--token-line', ''], { env });
+  assert.equal(refused.status, 1);
+  assert.ok(
+    refused.stderr.startsWith(
+      `\n${pill('ERROR', SGR.errorPill)}\n${ERROR}${green('settings.json')}: ${green('hooks.Stop')} is not a list of hook entries, so claude-gauge leaves it alone. Fix it by hand.\n`,
+    ),
+    JSON.stringify(refused.stderr),
+  );
+
+  const badStatusLine = configFolder({ statusLine: 'node x.js' });
+  const notObject = runCli(badStatusLine, ['setup', '--yes'], { env });
+  assert.equal(notObject.status, 1);
+  assert.ok(notObject.stderr.includes(`${ERROR}${green('settings.json')}: ${green('statusLine')} is not an object, so`), JSON.stringify(notObject.stderr));
+
+  // With colour off it is the plain text it always was.
+  const off = runCli(badHooks, ['configure', '--token-line', ''], { env: { NO_COLOR: '1' } });
+  assert.ok(off.stderr.startsWith('\nERROR\n✖ settings.json: hooks.Stop is not a list of hook entries, so'), off.stderr);
+  assert.ok(!/\x1b/.test(off.stderr), JSON.stringify(off.stderr));
+});
+
 test('with NO_COLOR, or piped with no force variable, the output has no escape codes, and each pill reads as plain text', () => {
   for (const env of [{}, { NO_COLOR: '1', FORCE_COLOR: '1' }]) {
     const dir = configFolder();
