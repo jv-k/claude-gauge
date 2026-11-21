@@ -1,3 +1,22 @@
+## 1.9.0 (2026-11-21)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.8.0 -> 1.9.0
+- Merge branch 'feat/setup-back-and-order'
+- chore(dist): build dist from c20873b [auto]
+- Merge pull request #173 from jv-k/fix/keep-subagent-model-133
+- Merge pull request #174 from jv-k/feat/make-the-hand-made-152
+- Merge pull request #175 from jv-k/feat/show-the-values-inside-143
+- Merge pull request #170 from jv-k/refactor/rename-bar-to-line-165
+- refactor(settings): build the three settings.json refusals in one place
+- feat(cli): show the file and the key in green when settings.json has a shape claude-gauge cannot read
+- test: name the config folder check and its parity folder for what they hold
+- test: make each Claude config folder in the suites with configFolder()
+- refactor(agents): name the subagent change times and check the render reads nothing
+- fix(agents): keep a finished subagent's model when its end names none
+- refactor(cli): name the setup report's helper lineState
+- refactor: call a whole line a line in the code, not a bar
+- chore(dist): build dist from 23a8787 [auto]
+- Merge pull request #168 from jv-k/feat/setup-back-and-order
+
 ## 1.8.0 (2026-11-03)
 - chore: updated package.json, updated CHANGELOG.md, bumped 1.7.0 -> 1.8.0
 - docs(media): draw the README's pictures in dots and the neon theme
