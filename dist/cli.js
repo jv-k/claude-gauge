@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 "use strict";
-// The claude-gauge command: sets the bars up in Claude Code's settings,
+// The claude-gauge command: sets the lines up in Claude Code's settings,
 // changes their switches, takes them out again, and updates the copy of the
 // scripts that the settings run.
 //
@@ -12,7 +12,7 @@
 //   claude-gauge update
 //   claude-gauge update --dry-run
 //
-// setup and configure with no bar switches ask the questions themselves,
+// setup and configure with no line switches ask the questions themselves,
 // with a preview of the status line after each answer (wizard.ts). With
 // switches they ask nothing: the form the plugin's slash commands run once
 // Claude has asked the questions.
@@ -140,7 +140,7 @@ class UsageError extends errors_1.GaugeError {
 class MissingTool extends errors_1.GaugeError {
 }
 const COMMANDS = ['setup', 'configure', 'uninstall', 'update'];
-// The words of a bar switch's value, `--show ctx,5h,7d --segments 10`, split
+// The words of a line switch's value, `--show ctx,5h,7d --segments 10`, split
 // at runs of white space with empty words dropped, so that "" is no switches.
 const words = (value) => value.split(/\s+/).filter(Boolean);
 // Every switch: its names, the commands that take it, and what it sets.
@@ -156,7 +156,7 @@ const SWITCHES = [
     { names: ['--help', '-h'], commands: [...COMMANDS], apply: (args) => { args.help = true; } },
     { names: ['--version', '-v'], commands: [...COMMANDS], apply: (args) => { args.version = true; } },
 ];
-// Unlike the two bars, which ignore what they do not know so that a typo
+// Unlike the two lines, which ignore what they do not know so that a typo
 // never blanks the status line, the command refuses an unknown word: it
 // writes the user's settings, and a typo there should stop it.
 function parseArgs(argv) {
@@ -301,7 +301,7 @@ function savedStatusLine() {
 }
 // Writes the pieces to stdout, each a styled line or a pill.
 const say = (...pieces) => process.stdout.write(pieces.join(''));
-// setup and configure: turns the bars' switches into commands, plans the
+// setup and configure: turns the lines' switches into commands, plans the
 // settings, and writes them, under a pill that names the step: SETUP or
 // CONFIGURE when run with switches, DONE after the wizard.
 function apply({ statusLine, tokenLine }, replace, heading) {
@@ -343,13 +343,13 @@ function apply({ statusLine, tokenLine }, replace, heading) {
         return;
     }
     const ours = (0, settings_1.installed)(next.settings);
-    const bar = (name, command) => (command ? s.ok(`${name}: ${s.value(command)}`) : s.info(`${name}: not set up`));
-    say(s.pill(heading), bar('Status line', ours.statusLine), bar('Token line', ours.tokenLine), ...(settingsBackup ? [s.info(`Backup of the previous settings: ${s.value(settingsBackup)}`)] : []), s.info('Start a new Claude Code session to pick up the changes.'));
+    const lineState = (name, command) => (command ? s.ok(`${name}: ${s.value(command)}`) : s.info(`${name}: not set up`));
+    say(s.pill(heading), lineState('Status line', ours.statusLine), lineState('Token line', ours.tokenLine), ...(settingsBackup ? [s.info(`Backup of the previous settings: ${s.value(settingsBackup)}`)] : []), s.info('Start a new Claude Code session to pick up the changes.'));
 }
 // Whether gh runs here, and the call that stars the repo with it.
 const hasGh = () => (0, node_child_process_1.spawnSync)('gh', ['--version'], { stdio: 'ignore' }).status === 0;
 const starWithGh = () => (0, node_child_process_1.spawnSync)('gh', ['api', '--method', 'PUT', 'user/starred/jv-k/claude-gauge'], { stdio: ['ignore', 'ignore', 'inherit'] }).status === 0;
-// setup or configure with no bar switches: asks before it replaces another
+// setup or configure with no line switches: asks before it replaces another
 // status line, then asks for the lines, and writes them. With claude-gauge
 // set up already, setup and configure both offer to keep the lines, change
 // them, or start over from the defaults. setup ends with the star offer. On a terminal the questions are Ink's choices where Ink
