@@ -1852,7 +1852,7 @@ function render(data, { config: overrides = {}, nowMs = Date.now(), statusOf = g
         if (typeof file !== 'string' || !file)
             return emptyActivity();
         try {
-            return sanitiseActivity(transcript(file, { subagents: config.rows.some((row) => row.includes('agents')) }));
+            return sanitiseActivity(transcript(file, { subagents: config.rows.some((row) => row.includes('agents') || row.includes('todos')) }));
         }
         catch {
             return emptyActivity();
@@ -2176,7 +2176,7 @@ function sanitiseActivity({ tools, agents = [], todos = [], skills = [], mcp = [
 }
 // What the reader keeps between renders. version changes when the shape
 // does, so a state from an older claude-gauge is rebuilt, not misread.
-const TRANSCRIPT_STATE_VERSION = 6;
+const TRANSCRIPT_STATE_VERSION = 7;
 // Whether a saved cursor still points into this file: the same file, not
 // replaced, and no shorter than the cursor's offset.
 const cursorHolds = (saved, file, stat) => !!saved && saved.file === file && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
@@ -2323,17 +2323,22 @@ function readTask(state, task) {
 // TaskUpdate changes one, or drops it when it is deleted. A TaskList result
 // replaces the list with the shared task list it names, and a TaskGet result
 // changes or adds the one task it names, or drops it when it names none.
-function applyTodoCall(state, todoCall, block, record) {
+// Each task keeps the time of the result that changed it last, so a
+// TaskUpdate older than that changes nothing: the session's transcript and a
+// subagent's are read apart, and the later change wins whichever is read
+// first. A subagent's TaskCreate for a task the list holds adds nothing.
+function applyTodoCall(state, { call: todoCall, block, record, at }) {
     if (resultFailed(block, record))
         return;
     const input = isObject(todoCall.input) ? todoCall.input : {};
     const data = isObject(record.toolUseResult) ? record.toolUseResult : {};
+    const stamped = (task) => (task && at !== undefined ? { ...task, changedAt: at } : task);
     if (todoCall.name === 'TodoWrite') {
         state.todos = writtenTodos(input);
     }
     else if (todoCall.name === 'TaskList') {
         if (Array.isArray(data.tasks))
-            state.todos = data.tasks.flatMap((task) => readTask(state, task) ?? []);
+            state.todos = data.tasks.flatMap((task) => stamped(readTask(state, task)) ?? []);
     }
     else if (todoCall.name === 'TaskGet') {
         // A null task is one the shared list no longer holds.
@@ -2342,26 +2347,30 @@ function applyTodoCall(state, todoCall, block, record) {
             state.todos = state.todos.filter((t) => t.id !== id);
             return;
         }
-        const task = readTask(state, data.task);
+        const task = stamped(readTask(state, data.task));
         if (!task)
             return;
-        const at = state.todos.findIndex((t) => t.id === task.id);
-        state.todos = at < 0 ? [...state.todos, task] : state.todos.map((t, i) => (i === at ? task : t));
+        const index = state.todos.findIndex((t) => t.id === task.id);
+        state.todos = index < 0 ? [...state.todos, task] : state.todos.map((t, i) => (i === index ? task : t));
     }
     else if (todoCall.name === 'TaskCreate') {
-        const task = todoOf(textAt(input, 'subject'), textAt(input, 'activeForm'), 'pending', createdTaskId(block, record));
-        if (task)
+        const task = stamped(todoOf(textAt(input, 'subject'), textAt(input, 'activeForm'), 'pending', createdTaskId(block, record)));
+        // A subagent's call can be in the session transcript and in its own.
+        const counted = record.isSidechain === true && task?.id !== undefined && state.todos.some((t) => t.id === task.id);
+        if (task && !counted)
             state.todos = [...state.todos, task];
     }
     else if (todoCall.name === 'TaskUpdate') {
         const id = idAt(input, 'taskId');
         const task = id === undefined ? undefined : state.todos.find((t) => t.id === id);
-        if (!task)
+        if (!task || (at !== undefined && task.changedAt !== undefined && at < task.changedAt))
             return;
         if (input.status === 'deleted') {
             state.todos = state.todos.filter((t) => t !== task);
             return;
         }
+        if (at !== undefined)
+            task.changedAt = at;
         const status = todoStatus(input.status);
         if (status)
             task.status = status;
@@ -2372,6 +2381,21 @@ function applyTodoCall(state, todoCall, block, record) {
         if (activeForm)
             task.activeForm = activeForm;
     }
+}
+// The changes in the order of their times, and applied. A change with no
+// time takes the time of the one before it in its own list, so each list
+// keeps its order, and at the same time the session's change goes first.
+function applyTodoChanges(state, session, subagents) {
+    const ordered = [session, ...subagents].flatMap((changes, list) => {
+        let time = Number.NEGATIVE_INFINITY;
+        return changes.map((change, place) => {
+            time = change.at ?? time;
+            return { change, time, list, place };
+        });
+    });
+    ordered.sort((a, b) => a.time - b.time || a.list - b.list || a.place - b.place);
+    for (const { change } of ordered)
+        applyTodoCall(state, change);
 }
 // The MCP server a tool belongs to, from the name Claude Code gives an MCP
 // server's tools: mcp__github__search_issues is github's.
@@ -2428,19 +2452,20 @@ function speedOf(response) {
     const seconds = response ? (response.endedAt - response.askedAt) / 1000 : 0;
     return response && response.tokens > 0 && seconds > 0 ? response.tokens / seconds : undefined;
 }
-// A todo tool's call kept until its result comes, or its result applied to
-// the list, for the tools counted.
-function trackTodoBlock(state, record, block, counted) {
+// A todo tool's call kept in `waiting` until its result comes, or the call
+// and its result added to `changes`, for the tools counted.
+function trackTodoBlock(waiting, record, block, counted, changes) {
     if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
         if (counted.includes(block.name))
-            state.todoCalls = [...state.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
+            waiting.todoCalls = [...waiting.todoCalls, { id: block.id, name: block.name, input: block.input }].slice(-ENDED_KEPT);
     }
     else if (record.type === 'user' && block.type === 'tool_result') {
-        const todoCall = state.todoCalls.find((c) => c.id === block.tool_use_id);
-        if (!todoCall)
+        const call = waiting.todoCalls.find((c) => c.id === block.tool_use_id);
+        if (!call)
             return;
-        state.todoCalls = state.todoCalls.filter((c) => c !== todoCall);
-        applyTodoCall(state, todoCall, block, record);
+        waiting.todoCalls = waiting.todoCalls.filter((c) => c !== call);
+        const at = timeOf(record);
+        changes.push({ call, block, record, ...(at !== undefined ? { at } : {}) });
     }
 }
 // The blocks of a record's message that are objects.
@@ -2448,7 +2473,8 @@ const blocksOf = (record) => {
     const content = record.message?.content;
     return Array.isArray(content) ? content.filter((b) => b && typeof b === 'object') : [];
 };
-// One transcript record applied to the state. Subagent records are left out,
+// One transcript record applied to the state, with the todo tools' calls that
+// got a result added to `todoChanges`. Subagent records are left out,
 // as they are for --latest, but for a subagent's calls to TaskCreate and
 // TaskUpdate: the task list they change is the session's too. A prompt from
 // the user ends the turn, so a call still running then was interrupted: it
@@ -2456,12 +2482,12 @@ const blocksOf = (record) => {
 // stopped. One in the background runs on until its task notification. A
 // prompt that runs a command names a skill when the next record is the
 // skill's text.
-function applyRecord(state, record) {
+function applyRecord(state, record, todoChanges) {
     if (!record || typeof record !== 'object')
         return;
     if (record.isSidechain) {
         for (const block of blocksOf(record))
-            trackTodoBlock(state, record, block, SUBAGENT_TODO_TOOLS);
+            trackTodoBlock(state, record, block, SUBAGENT_TODO_TOOLS, todoChanges);
         return;
     }
     const at = timeOf(record);
@@ -2504,7 +2530,7 @@ function applyRecord(state, record) {
         return;
     }
     for (const block of blocks) {
-        trackTodoBlock(state, record, block, TODO_TOOLS);
+        trackTodoBlock(state, record, block, TODO_TOOLS, todoChanges);
         if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
             const target = toolTarget(block.input);
             const skill = block.name === 'Skill' ? skillName(stringAt(block.input, 'skill')) : undefined;
@@ -2632,16 +2658,6 @@ function touchQuietly(io, file) {
 function saveTranscriptState(io, stateFile, state) {
     replaceQuietly(io, stateFile, JSON.stringify(state));
 }
-// A subagent's own transcript. Claude Code writes it beside the session
-// transcript <session>.jsonl, as <session>/subagents/agent-<agentId>.jsonl,
-// with agent-<agentId>.meta.json, whose toolUseId is the id of the Agent call
-// in the session transcript that started it. The launch result of a subagent
-// in the background names its agentId as well. A skill that runs in a fork
-// writes a transcript there too, with no toolUseId, and no Agent call names
-// it. The reader keeps a byte offset per subagent transcript, as it does for
-// the session's, in a state file beside the session's, and reads one only
-// while its subagent runs.
-const SUBAGENT_STATE_VERSION = 1;
 const subagentsFolder = (file) => path.join(file.replace(/\.jsonl$/, ''), 'subagents');
 const stateFileOf = (stateDir, file) => path.join(stateDir, `${(0, node_crypto_1.createHash)('sha1').update(file).digest('hex')}.json`);
 // Links each running subagent that has no agent id yet to its own
@@ -2683,42 +2699,38 @@ function linkSubagentTranscripts(io, folder, state) {
     }
     return changed;
 }
-function loadSubagentState(io, stateFile) {
-    try {
-        const state = JSON.parse(String(io.readFileSync(stateFile, 'utf8')));
-        return state?.version === SUBAGENT_STATE_VERSION && Number.isInteger(state.offset) ? state : undefined;
-    }
-    catch {
-        return undefined;
-    }
-}
 // What a subagent's own transcript shows: the model of its latest response,
-// and when the file last changed. Reads only the bytes it gained since the
-// last call. A transcript that does not exist shows nothing.
-function readSubagentTranscript(io, file, stateDir) {
+// when the file last changed, and its calls to TaskCreate and TaskUpdate that
+// got a result, which change the session's task list too (issue #148). Reads
+// only the bytes it gained since `saved`, once, for all three. A transcript
+// that does not exist shows nothing.
+function readSubagentTranscript(io, file, saved) {
     let stat;
     try {
         stat = io.statSync(file);
     }
     catch {
-        return {};
+        return { todoChanges: [] };
     }
-    const stateFile = stateFileOf(stateDir, file);
-    const saved = loadSubagentState(io, stateFile);
-    const unchanged = cursorHolds(saved, file, stat);
-    const state = unchanged ? saved : { version: SUBAGENT_STATE_VERSION, file, dev: stat.dev, ino: stat.ino, offset: 0 };
-    if (stat.size > state.offset || !unchanged) {
+    const holds = saved !== undefined && saved.dev === stat.dev && saved.ino === stat.ino && saved.offset <= stat.size;
+    const cursor = holds ? { ...saved } : { dev: stat.dev, ino: stat.ino, offset: 0, todoCalls: [] };
+    const todoChanges = [];
+    if (stat.size > cursor.offset) {
         // A transcript that goes away or cannot be read after the stat shows
         // nothing, rather than taking the session's activity down with it.
         try {
-            state.offset = readLines(io, file, state.offset, stat.size, (line) => {
-                if (!line.includes('"assistant"'))
+            cursor.offset = readLines(io, file, cursor.offset, stat.size, (line) => {
+                if (!['"tool_', '"assistant"'].some((key) => line.includes(key)))
                     return;
                 try {
                     const record = JSON.parse(line);
-                    const model = record?.type === 'assistant' ? record.message?.model : undefined;
+                    if (!record || typeof record !== 'object')
+                        return;
+                    const model = record.type === 'assistant' ? record.message?.model : undefined;
                     if (typeof model === 'string' && model.trim() && model !== SYNTHETIC_MODEL)
-                        state.model = model;
+                        cursor.model = model;
+                    for (const block of blocksOf(record))
+                        trackTodoBlock(cursor, record, block, SUBAGENT_TODO_TOOLS, todoChanges);
                 }
                 catch {
                     /* not a record: skip it */
@@ -2726,15 +2738,11 @@ function readSubagentTranscript(io, file, stateDir) {
             });
         }
         catch {
-            return {};
+            return { todoChanges: [], failed: true };
         }
-        replaceQuietly(io, stateFile, JSON.stringify(state));
     }
-    else {
-        touchQuietly(io, stateFile);
-    }
-    const model = agentModel(state.model);
-    return { ...(model ? { model } : {}), activeAt: stat.mtimeMs };
+    const model = agentModel(cursor.model);
+    return { cursor, ...(model ? { model } : {}), activeAt: stat.mtimeMs, todoChanges };
 }
 // What the transcript shows, reading only what it gained since the last
 // call. A transcript that does not exist shows nothing. A running subagent
@@ -2768,6 +2776,7 @@ function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io 
             compactions: 0,
         };
     let changed = false;
+    const todoChanges = [];
     if (stat.size > state.offset || !unchanged) {
         changed = true;
         state.offset = readLines(io, file, state.offset, stat.size, (line) => {
@@ -2776,7 +2785,7 @@ function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io 
             if (!['"tool_', '"user"', '"assistant"', '"compact_boundary"'].some((key) => line.includes(key)))
                 return;
             try {
-                applyRecord(state, JSON.parse(line));
+                applyRecord(state, JSON.parse(line), todoChanges);
             }
             catch {
                 /* not a record: skip it */
@@ -2789,20 +2798,41 @@ function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io 
     // A running subagent's own transcript names the model it runs on, version
     // and all, so it wins over the alias the Agent call may give. The saved
     // entry keeps that model, so a subagent whose result or notification names
-    // none still shows it once finished, when its transcript is no longer read
-    // (issue #133). Its last change time, with the background flag, lets the
-    // part mark it as stale.
+    // none still shows it once finished (issue #133). Its last change time,
+    // with the background flag, lets the part mark it as stale. The same read
+    // gives the subagent's task calls. A subagent that has ended is read one
+    // last time, for the records it wrote since the last render, and then no
+    // more (ADR 0005).
     const transcriptChangedAt = new Map();
+    const subagentTodoChanges = [];
     for (const agent of state.agents) {
-        if (!subagents || agent.endedAt !== undefined || !agent.agentId)
+        if (!subagents || !agent.agentId || agent.drained)
             continue;
-        const seen = readSubagentTranscript(io, path.join(folder, `agent-${agent.agentId}.jsonl`), stateDir);
+        const seen = readSubagentTranscript(io, path.join(folder, `agent-${agent.agentId}.jsonl`), agent.transcript);
+        if (seen.cursor && seen.cursor.offset !== agent.transcript?.offset) {
+            agent.transcript = seen.cursor;
+            changed = true;
+        }
         if (seen.model && seen.model !== agent.model) {
             agent.model = seen.model;
             changed = true;
         }
-        if (seen.activeAt !== undefined)
-            transcriptChangedAt.set(agent, seen.activeAt);
+        if (seen.todoChanges.length)
+            subagentTodoChanges.push(seen.todoChanges);
+        if (agent.endedAt === undefined) {
+            if (seen.activeAt !== undefined)
+                transcriptChangedAt.set(agent, seen.activeAt);
+        }
+        else if (!seen.failed) {
+            // The last read is done, so its place in the transcript can go.
+            agent.drained = true;
+            delete agent.transcript;
+            changed = true;
+        }
+    }
+    if (todoChanges.length || subagentTodoChanges.length) {
+        applyTodoChanges(state, todoChanges, subagentTodoChanges);
+        changed = true;
     }
     if (changed)
         saveTranscriptState(io, stateFile, state);
@@ -2810,11 +2840,11 @@ function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io 
         touchQuietly(io, stateFile);
     const running = state.pending.filter((p) => !p.ended).map(({ name, target }) => ({ name, ...(target ? { target } : {}) }));
     const agents = state.agents.map((entry) => {
-        const { id, agentId, ...agent } = entry;
+        const { id, agentId, transcript, drained, ...agent } = entry;
         const activeAt = transcriptChangedAt.get(entry);
         return activeAt !== undefined ? { ...agent, activeAt } : agent;
     });
-    const todos = state.todos.map(({ id, ...todo }) => todo);
+    const todos = state.todos.map(({ id, changedAt, ...todo }) => todo);
     const mcp = state.mcp.map((server) => ({ ...server }));
     const lastReplyAt = state.response?.endedAt;
     const speed = speedOf(state.response);
@@ -2830,8 +2860,8 @@ function readTranscriptActivity(file, { stateDir = transcriptStateDir(), fs: io 
     };
 }
 // The prune of the reader's state files (issue #51, ADR 0004). The reader
-// writes one per transcript, session and subagent alike, and a render touches
-// each one it uses, so a file no render has touched for STATE_KEEP_MS belongs
+// writes one per session transcript, which holds its place in the subagents'
+// transcripts too, and a render touches each one it uses, so a file no render has touched for STATE_KEEP_MS belongs
 // to a transcript nobody looks at any more. The same prune keeps the saved
 // window sizes, in a folder of their own (ADR 0006). Those are not touched:
 // one the prune removes from a session still shown is saved again at the
