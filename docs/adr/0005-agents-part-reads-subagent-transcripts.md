@@ -1,4 +1,4 @@
-# The agents part reads the transcript of each running subagent
+# The agents part reads the transcript of each subagent
 
 The agents part used to read only the session transcript. That transcript names no model for a subagent in the foreground until its result arrives, and it says nothing while the subagent works. So the agents part now also reads the transcript of each subagent that is still running. Claude Code writes it in `<session>/subagents/agent-<agentId>.jsonl`, and the `toolUseId` in `agent-<agentId>.meta.json` names the Agent call that started it. That transcript gives the subagent's model while it runs, and its last change time is a liveness signal for #60. The reader keeps a byte offset for each subagent transcript, as it does for the session transcript. It reads a subagent transcript while the subagent runs, and one last time in the first render after the subagent has finished. So each render reads only the new bytes of the subagents that are running or that have just finished.
 
@@ -9,6 +9,8 @@ Claude Code writes a subagent's TaskCreate and TaskUpdate to the subagent's tran
 The session's task calls and the subagents' apply in the order of the times of their results. Each task also keeps the time of the result that changed it last, and an older TaskUpdate does not change it. So the later change wins, also when the two transcripts are read in different renders.
 
 A subagent can write records between the last render and its end, and its last task calls are among them. This is why the reader reads a subagent transcript one more time after the subagent has finished. At first the reader stopped at the end of the subagent, and that lost those records.
+
+The last read is also the first read for a subagent that ends before any render, such as a short one, and for one whose meta file appears only after its end (issue #171). So the reader looks for the transcript of a finished subagent one time, and that read gives the agents part its model. This occurs in the first render after its end that shows `agents` or `todos`, because other renders do not read subagent transcripts. A subagent with no transcript then is not looked for again, unless a later result of its call names the transcript.
 
 The byte offset of each subagent transcript is kept with the subagent in the state file of the session, not in a state file of its own as at first. The task list and the offsets that it was read up to are then saved in one write. With two files, a render that stopped between the two writes, or two renders at the same time, could move an offset past task calls that the saved list did not have, and no later render read them again. When the reader reads a session from the start, it reads the subagent transcripts from the start too.
 
