@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { root, tempDir } = require('./helpers');
+const { root, tempDir, configFolder } = require('./helpers');
 const { summarize, parseArgs, parseSize, contextWindow } = require('../dist/tokenline.js');
 
 const NOW = new Date(2026, 9, 7, 12, 5);
@@ -221,7 +221,8 @@ const latestRun = (runtime, { config, home }) => {
 const LINE = '1 req │ ctx 53% ▓▓▓░░ 106k\n';
 
 test('--latest reads the transcript under CLAUDE_CONFIG_DIR when it is set', () => {
-  const [home, config] = [tempDir('claude-gauge-'), tempDir('claude-gauge-')];
+  const home = tempDir('claude-gauge-');
+  const config = configFolder();
   writeTranscript(config);
   assert.equal(latestRun('node', { config, home }), LINE);
 });
@@ -232,7 +233,7 @@ test('--latest reads ~/.claude/projects when CLAUDE_CONFIG_DIR is unset or empty
   assert.equal(latestRun('node', { config: undefined, home }), LINE);
   assert.equal(latestRun('node', { config: '', home }), LINE);
   // A config folder without the transcript: the one in the home folder is not read.
-  assert.equal(latestRun('node', { config: tempDir('claude-gauge-'), home }), '');
+  assert.equal(latestRun('node', { config: configFolder(), home }), '');
 });
 
 // The token line runs under Bun too, from its source. The check skips where
@@ -241,7 +242,8 @@ const hasBun = spawnSync('bun', ['--version'], { encoding: 'utf8' }).status === 
 const withoutBun = !hasBun && 'bun is not installed';
 
 test('bun runs --latest from source and finds the same transcripts', { skip: withoutBun }, () => {
-  const [home, config] = [tempDir('claude-gauge-'), tempDir('claude-gauge-')];
+  const home = tempDir('claude-gauge-');
+  const config = configFolder();
   writeTranscript(config);
   assert.equal(latestRun('bun', { config, home }), LINE);
   const otherHome = tempDir('claude-gauge-');
@@ -273,7 +275,7 @@ const stopHook = (config, input, args = []) => {
 const transcriptOf = (config) => path.join(config, 'projects', '-some-project', `${SESSION}.jsonl`);
 
 test('the Stop hook takes the window size the status line saved for its session over the guess', () => {
-  const config = tempDir('claude-gauge-');
+  const config = configFolder();
   writeTranscript(config);
   const input = { session_id: SESSION, transcript_path: transcriptOf(config) };
   assert.equal(stopHook(config, input), '1 req │ ctx 53% ▓▓▓░░ 106k', 'no saved size: the guess');
@@ -288,14 +290,15 @@ test('the Stop hook takes the window size the status line saved for its session 
 });
 
 test('--latest takes the window size saved for the session it finds', () => {
-  const [home, config] = [tempDir('claude-gauge-'), tempDir('claude-gauge-')];
+  const home = tempDir('claude-gauge-');
+  const config = configFolder();
   writeTranscript(config);
   renderStatusLine(config, { session_id: SESSION, context_window: { context_window_size: 1000000 } });
   assert.equal(latestRun('node', { config, home }), '1 req │ ctx 11% ▓░░░░ 106k\n');
 });
 
 test('a saved window file that cannot be read keeps the guess, and prints nothing else', () => {
-  const config = tempDir('claude-gauge-');
+  const config = configFolder();
   writeTranscript(config);
   renderStatusLine(config, { session_id: SESSION, context_window: { context_window_size: 1000000 } });
   const dir = path.join(config, 'claude-gauge', '.state', 'windows');
