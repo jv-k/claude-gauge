@@ -258,16 +258,20 @@ const subagentReply = (model, when) => ({
   message: { role: 'assistant', model, id: `m-${when}`, content: [{ type: 'text', text: 'Looking.' }] },
 });
 
-test('a running subagent shows the model its own transcript names, before its result comes', () => {
-  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
-  const { file, stateDir } = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5-20251001', at(70))] });
-  const shown = plain(
+// Renders the agents part of a session through the transcript reader, which
+// reads with `io` when one is given.
+const renderThroughReader = ({ file, stateDir }, io) =>
+  plain(
     render(
       { workspace: { current_dir: '/home/me/project' }, transcript_path: file },
-      { config: parseArgs(['--show', 'agents']), nowMs: NOW, transcript: (f) => readTranscriptActivity(f, { stateDir }) },
+      { config: parseArgs(['--show', 'agents']), nowMs: NOW, transcript: (f) => readTranscriptActivity(f, { stateDir, fs: io }) },
     ),
   );
-  assert.equal(shown, '◐ Explore (Haiku 4.5) Map the reader 1m');
+
+test('a running subagent shows the model its own transcript names, before its result comes', () => {
+  const call = agentCall('t1', { subagent_type: 'Explore', description: 'Map the reader' }, at(72));
+  const session = sessionWithSubagent([call], { subagent: [subagentReply('claude-haiku-4-5-20251001', at(70))] });
+  assert.equal(renderThroughReader(session), '◐ Explore (Haiku 4.5) Map the reader 1m');
 });
 
 test("the reader reads only the bytes a running subagent's transcript gained, and gives its last change time", () => {
@@ -326,13 +330,6 @@ test("the reader stops reading a subagent's transcript once it has finished", ()
 // notification name none, keeps the model its own transcript last named,
 // without the reader opening that transcript again.
 test('a finished subagent keeps the model its transcript named when its end names none, and its transcript is not read again', () => {
-  const renderFrom = (file, stateDir, io) =>
-    plain(
-      render(
-        { workspace: { current_dir: '/home/me/project' }, transcript_path: file },
-        { config: parseArgs(['--show', 'agents']), nowMs: NOW, transcript: (f) => readTranscriptActivity(f, { stateDir, fs: io }) },
-      ),
-    );
   const finishWith = (records, end, expected) => {
     const { file, transcript, stateDir } = sessionWithSubagent(records, { subagent: [subagentReply('claude-haiku-4-5-20251001', at(70))] });
     readTranscriptActivity(file, { stateDir });
@@ -344,7 +341,7 @@ test('a finished subagent keeps the model its transcript named when its end name
     // Only the session transcript's new lines are read.
     assert.equal(io.bytes, Buffer.byteLength(ended));
     const rendered = countingFs();
-    assert.equal(renderFrom(file, stateDir, rendered), expected);
+    assert.equal(renderThroughReader({ file, stateDir }, rendered), expected);
     assert.equal(rendered.bytes, 0);
     return done;
   };
@@ -444,13 +441,6 @@ test('with no agents part to show, the reader leaves the subagents folder and tr
 // Issue #60 through the reader: the background flag and the transcript's last
 // change time reach the part, which reads the render clock.
 test('through the reader, a background subagent whose transcript changed 11 minutes ago shows a dim ?, and a foreground one still runs', () => {
-  const renderFrom = ({ file, stateDir }) =>
-    plain(
-      render(
-        { workspace: { current_dir: '/home/me/project' }, transcript_path: file },
-        { config: parseArgs(['--show', 'agents']), nowMs: NOW, transcript: (f) => readTranscriptActivity(f, { stateDir }) },
-      ),
-    );
   const unchangedFor = (session, seconds) => {
     fs.utimesSync(session.transcript, at(seconds) / 1000, at(seconds) / 1000);
     return session;
@@ -462,12 +452,12 @@ test('through the reader, a background subagent whose transcript changed 11 minu
   const stale = unchangedFor(background(), 660);
   const [agent] = readTranscriptActivity(stale.file, { stateDir: stale.stateDir }).agents;
   assert.equal(agent.background, true);
-  assert.equal(renderFrom(stale), '? Plan (Sonnet 4.5) Plan it 20m');
-  assert.equal(renderFrom(unchangedFor(background(), 540)), '◐ Plan (Sonnet 4.5) Plan it 20m');
+  assert.equal(renderThroughReader(stale), '? Plan (Sonnet 4.5) Plan it 20m');
+  assert.equal(renderThroughReader(unchangedFor(background(), 540)), '◐ Plan (Sonnet 4.5) Plan it 20m');
 
   const unseen = sessionWithSubagent([call, launched]);
-  assert.equal(renderFrom(unseen), '◐ Plan Plan it 20m');
+  assert.equal(renderThroughReader(unseen), '◐ Plan Plan it 20m');
 
   const foreground = agentCall('t1', { subagent_type: 'Explore', description: 'Map it' }, at(1200));
-  assert.equal(renderFrom(unchangedFor(sessionWithSubagent([foreground], { subagent: [subagentReply('claude-haiku-4-5', at(1190))] }), 660)), '◐ Explore (Haiku 4.5) Map it 20m');
+  assert.equal(renderThroughReader(unchangedFor(sessionWithSubagent([foreground], { subagent: [subagentReply('claude-haiku-4-5', at(1190))] }), 660)), '◐ Explore (Haiku 4.5) Map it 20m');
 });
