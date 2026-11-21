@@ -1,3 +1,23 @@
+## 1.10.0 (2026-11-21)
+- chore: updated package.json, updated CHANGELOG.md, bumped 1.9.0 -> 1.10.0
+- chore(dist): build dist from d76bbd8 [auto]
+- Merge pull request #182 from jv-k/feat/ended-subagent-model-171
+- feat(agents): show the model of a subagent that ends before any render
+- chore(dist): build dist from 1c0ce26 [auto]
+- Merge pull request #181 from jv-k/feat/subagent-todos-148
+- chore(dist): build dist from 7db75a4 [auto]
+- Merge pull request #180 from jv-k/docs/padding-merge-138
+- feat(todos): count a subagent's task changes from its own transcript
+- docs(statusline): record how Claude Code merges statusLine.padding
+- chore(dist): build dist from 8651371 [auto]
+- Merge pull request #179 from jv-k/refactor/split-wizard-io-140
+- refactor(wizard): split WizardIo into a typed io and a choosing io
+- chore(dist): build dist from 0e665af [auto]
+- Merge pull request #178 from jv-k/test/agents-render-helper-172
+- Merge pull request #177 from jv-k/fix/line-not-bar-169
+- test(agents): share one reader render helper
+- fix(cli): say "that line" in the error for a line switch with no value
+
 ## 1.9.0 (2026-11-21)
 - chore: updated package.json, updated CHANGELOG.md, bumped 1.8.0 -> 1.9.0
 - Merge branch 'feat/setup-back-and-order'
