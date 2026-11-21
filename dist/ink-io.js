@@ -550,8 +550,6 @@ function inkIoWith({ ink, React, mount, ready, animate = false }, output, color)
         choices,
         animated: animate,
         clock: timeNow,
-        // Not asked: the wizard asks through `choices`.
-        ask: async () => undefined,
         write: (text) => {
             output.write(text);
         },
