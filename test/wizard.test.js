@@ -227,7 +227,7 @@ function choosing(answers) {
     if (!left.length) throw new EndOfAnswers();
     return left.shift()(question);
   };
-  return { questions, ask: async () => undefined, write: () => {}, choices: { one: next, many: next, each: next, preview: () => {} } };
+  return { questions, write: () => {}, choices: { one: next, many: next, each: next, preview: () => {} } };
 }
 
 // Enter at a choice: the option it starts on, or the parts ticked first.

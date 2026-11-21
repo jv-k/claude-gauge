@@ -33,7 +33,7 @@
 
 import type { ReactElement } from 'react';
 import { GoBack, Interrupted } from './wizard';
-import type { ChoiceIo, Input, Output, OpenIo, PickEdit, PickRows } from './wizard';
+import type { ChoiceIo, ChoosingIo, Input, Output, Open, PickEdit, PickRows } from './wizard';
 import { styles } from './styles';
 
 type InkModule = typeof import('ink', { with: { 'resolution-mode': 'import' } });
@@ -111,7 +111,7 @@ interface View {
 
 // The questions as Ink choices on `deps`, with the text the wizard writes
 // between them going to `output`, in colour when `color` is set.
-function inkIoWith({ ink, React, mount, ready, animate = false }: InkDeps, output: Pick<Output, 'write' | 'columns'>, color: boolean): OpenIo {
+function inkIoWith({ ink, React, mount, ready, animate = false }: InkDeps, output: Pick<Output, 'write' | 'columns'>, color: boolean): Open<ChoosingIo> {
   const s = styles(color);
   const h = React.createElement;
   let preview: string | (() => string) = '';
@@ -596,8 +596,6 @@ function inkIoWith({ ink, React, mount, ready, animate = false }: InkDeps, outpu
     choices,
     animated: animate,
     clock: timeNow,
-    // Not asked: the wizard asks through `choices`.
-    ask: async () => undefined,
     write: (text) => {
       output.write(text);
     },
@@ -631,7 +629,7 @@ function synchronized<S extends Pick<Output, 'write'>>(stream: S): S {
   });
 }
 
-async function loadInkIo(input: Input, output: Output, color: boolean): Promise<OpenIo> {
+async function loadInkIo(input: Input, output: Output, color: boolean): Promise<Open<ChoosingIo>> {
   const [ink, react] = await Promise.all([import('ink'), import('react')]);
   const React = (react as ReactModule & { default?: ReactModule }).default ?? react;
   const frames = synchronized(output);
